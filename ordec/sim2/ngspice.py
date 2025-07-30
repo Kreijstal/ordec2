@@ -1,15 +1,22 @@
 # SPDX-FileCopyrightText: 2025 ORDeC contributors
 # SPDX-License-Identifier: Apache-2.0
 
-from subprocess import Popen, PIPE, STDOUT
-from typing import Iterator
-from contextlib import contextmanager
-import numpy as np
-from collections import namedtuple
-from pathlib import Path
-import tempfile
-import signal
+import ctypes
+import os
 import re
+import signal
+import sys
+import tempfile
+import warnings
+from collections import namedtuple
+from contextlib import contextmanager
+from enum import Enum
+from pathlib import Path
+from subprocess import Popen, PIPE, STDOUT
+from typing import Iterator, List, Optional
+
+import numpy as np
+
 from ..core import *
 
 NgspiceVector = namedtuple('NgspiceVector', ['name', 'quantity', 'dtype', 'rest'])
@@ -21,13 +28,64 @@ class NgspiceError(Exception):
 class NgspiceFatalError(NgspiceError):
     pass
 
-def check_errors(ngspice_out):
-    """Helper function to raise NgspiceError in Python from "Error: ..."
-    messages in Ngspice's output."""
-    for line in ngspice_out.split('\n'):
-        m = re.match(r"Error:\s*(.*)", line)
-        if m:
-            raise NgspiceError(m.group(1))
+
+class NgSpiceConfigError(NgspiceError):
+    """Raised when backend configuration fails."""
+    pass
+
+class NgSpiceBackend(Enum):
+    """Available NgSpice backend types."""
+    SUBPROCESS = "subprocess"
+    FFI = "ffi"
+    AUTO = "auto"
+
+
+def get_default_backend() -> NgSpiceBackend:
+    backend_str = os.environ.get('NGSPICE_BACKEND', 'auto').lower()
+    try:
+        return NgSpiceBackend(backend_str)
+    except ValueError:
+        warnings.warn(f"Invalid NGSPICE_BACKEND '{backend_str}', falling back to auto.")
+        return NgSpiceBackend.AUTO
+
+
+def _detect_ffi_availability() -> bool:
+    try:
+        _FFIBackend.find_library()
+        return True
+    except NgSpiceConfigError:
+        return False
+
+
+def _detect_subprocess_availability() -> bool:
+    # We assume 'ngspice' is in the PATH. A more thorough check could be added.
+    return True
+
+
+def select_backend(preferred: NgSpiceBackend) -> NgSpiceBackend:
+    """Selects the best available backend."""
+    is_ffi_available = _detect_ffi_availability()
+    is_subprocess_available = _detect_subprocess_availability()
+
+    if preferred == NgSpiceBackend.AUTO:
+        if is_subprocess_available:
+            return NgSpiceBackend.SUBPROCESS
+        if is_ffi_available:
+            return NgSpiceBackend.FFI
+        raise NgSpiceConfigError("No suitable NgSpice backend found. Please install NgSpice.")
+    elif preferred == NgSpiceBackend.FFI:
+        if is_ffi_available:
+            return NgSpiceBackend.FFI
+        raise NgSpiceConfigError("NgSpice FFI backend selected but the shared library could not be found.")
+    elif preferred == NgSpiceBackend.SUBPROCESS:
+        if is_subprocess_available:
+            return NgSpiceBackend.SUBPROCESS
+        raise NgSpiceConfigError("NgSpice subprocess backend selected but the executable is not available.")
+    raise NgSpiceConfigError(f"Unknown backend '{preferred}' requested.")
+
+
+# --- Data Structures ---
+
 class NgspiceTable:
     def __init__(self, name):
         self.name = name
@@ -38,10 +96,10 @@ class NgspiceTransientResult:
     def __init__(self):
         self.time = []
         self.signals = {}
-        self.tables = []  # Keep original tables for backward compatibility
-        self.voltages = {}  # Node voltages
-        self.currents = {}  # Device currents
-        self.branches = {}  # Branch currents
+        self.tables = []
+        self.voltages = {}
+        self.currents = {}
+        self.branches = {}
 
     def add_table(self, table):
         """Add a table and extract signals into the signals dictionary."""
@@ -102,87 +160,298 @@ class NgspiceTransientResult:
             self.voltages[signal_name] = signal_data
 
     def __getitem__(self, key):
-        """Allow backward compatibility with table indexing or signal access."""
+        """Allow table indexing or signal access."""
         if isinstance(key, int):
             return self.tables[key]
         else:
             return self.get_signal(key)
 
     def __len__(self):
-        """Return number of tables for backward compatibility."""
         return len(self.tables)
 
     def __iter__(self):
-        """Allow iteration over tables for backward compatibility."""
         return iter(self.tables)
 
     def get_signal(self, signal_name):
-        """Get signal data by name."""
         return self.signals.get(signal_name, [])
 
     def get_voltage(self, node_name):
-        """Get voltage data for a node."""
         return self.voltages.get(node_name, [])
 
     def get_current(self, device_name, current_type='id'):
-        """Get current data for a device (id, ig, is, ib)."""
         device_currents = self.currents.get(device_name, {})
         return device_currents.get(current_type, [])
 
     def get_branch_current(self, branch_name):
-        """Get branch current data."""
         return self.branches.get(branch_name, [])
 
     def list_signals(self):
-        """List all available signal names."""
         return list(self.signals.keys())
 
     def list_voltages(self):
-        """List all available voltage node names."""
         return list(self.voltages.keys())
 
     def list_currents(self):
-        """List all available device names with currents."""
         return list(self.currents.keys())
 
     def list_branches(self):
-        """List all available branch current names."""
         return list(self.branches.keys())
 
     def plot_signals(self, *signal_names):
-        """Helper method to get time and signal data for plotting."""
         result = {'time': self.time}
         for name in signal_names:
             result[name] = self.get_signal(name)
         return result
 
-class Ngspice:
+
+# --- FFI Backend Implementation ---
+
+class _FFIBackend:
+    # --- C-compatible Data Types and Structures ---
+    class NgComplex(ctypes.Structure):
+        _fields_ = [("cx_real", ctypes.c_double), ("cx_imag", ctypes.c_double)]
+
+    class VectorInfo(ctypes.Structure):
+        pass
+    PVectorInfo = ctypes.POINTER(VectorInfo)
+    VectorInfo._fields_ = [
+        ("v_name", ctypes.c_char_p), ("v_type", ctypes.c_int),
+        ("v_flags", ctypes.c_short), ("v_realdata", ctypes.POINTER(ctypes.c_double)),
+        ("v_compdata", ctypes.POINTER(NgComplex)), ("v_length", ctypes.c_int),
+    ]
+
+    def _send_char_handler(self, output, id):
+        output_str = ctypes.string_at(output).decode('utf-8')
+        if self.debug:
+            print(f"[ngspice-ffi-out] {output_str}")
+        if "Error: unknown subckt:" in output_str:
+            raise NgspiceError(output_str.strip())
+        self._output_lines.append(output_str)
+
+    def __init__(self, debug: bool = False):
+        self.debug = debug
+        self.lib = self.find_library()
+        self._setup_library_functions()
+        self._output_lines = []
+
+        # Keep references to callbacks
+        self._send_char_cb = self._SendChar(self._send_char_handler)
+        self._send_stat_cb = self._SendStat(self._send_stat_handler)
+        self._exit_cb = self._ControlledExit(self._exit_handler)
+
+        init_result = self.lib.ngSpice_Init(self._send_char_cb, self._send_stat_cb, self._exit_cb, None, None, None, None)
+        if init_result != 0:
+            raise NgSpiceConfigError(f"Failed to initialize NgSpice FFI library (error code: {init_result}).")
+
+    @staticmethod
+    @contextmanager
+    def launch(debug=False):
+        backend = None
+        try:
+            backend = _FFIBackend(debug=debug)
+            yield backend
+        except NgspiceError as e:
+            raise e
+        finally:
+            if backend:
+                try:
+                    backend.cleanup()
+                except:
+                    pass  # Ignore cleanup errors to prevent segfaults
+
+    def cleanup(self):
+        try:
+            if hasattr(self, 'lib') and self.lib:
+                self.lib.ngSpice_Command(b"quit")
+        except:
+            pass  # Ignore cleanup errors to prevent segfaults
+
+    def _send_char_handler(self, message: bytes, ident: int, user_data) -> int:
+        if message:
+            msg_str = message.decode('utf-8', errors='ignore').strip()
+            self._output_lines.append(msg_str)
+            if self.debug:
+                print(f"[ngspice-ffi-out] {msg_str}")
+        return 0
+
+    def _send_stat_handler(self, status: bytes, ident: int, user_data) -> int:
+        if self.debug and status:
+            print(f"[ngspice-ffi-stat] {status.decode('utf-8', errors='ignore').strip()}")
+        return 0
+
+    def _exit_handler(self, status: int, unload: bool, quit_upon_exit: bool, ident: int, user_data) -> int:
+        if status != 0 and self.debug:
+            print(f"[ngspice-ffi-exit] code {status}")
+        return status
+
+    def command(self, command: str) -> str:
+        self._output_lines.clear()
+        ret = self.lib.ngSpice_Command(command.encode('utf-8'))
+        output = "\n".join(self._output_lines)
+        check_errors(output)
+        return output
+
+    def load_netlist(self, netlist: str, no_auto_gnd: bool = True):
+        # FFI backend loads circuit from an array of strings
+        if no_auto_gnd:
+            self.command("set no_auto_gnd")
+
+        circuit_lines = [line.encode('utf-8') for line in netlist.split('\n') if line.strip()]
+        c_circuit = (ctypes.c_char_p * len(circuit_lines))()
+        c_circuit[:] = circuit_lines
+
+        circ_result = self.lib.ngSpice_Circ(c_circuit)
+        if circ_result != 0:
+            # Check the output for a more descriptive error message
+            output = "\n".join(self._output_lines)
+            check_errors(output)
+            raise NgspiceFatalError(f"Failed to load circuit into FFI backend. Full output:\n{output}")
+
+    def op(self) -> Iterator[NgspiceValue]:
+        self.command("op")
+        all_vectors = self._get_all_vectors()
+
+        for vec_name in all_vectors:
+            vec_info = self._get_vector_info(vec_name)
+            if not vec_info or vec_info.v_length == 0:
+                continue
+
+            value = vec_info.v_realdata[0]
+
+            # Match naming conventions from subprocess backend
+            if vec_name.startswith('@') and '[' in vec_name:
+                match = re.match(r"@([a-zA-Z]\.)?([0-9a-zA-Z_.#]+)\[([0-9a-zA-Z_]+)\]", vec_name)
+                if match:
+                    yield NgspiceValue('current', match.group(2), match.group(3), value)
+            elif vec_name.endswith('#branch'):
+                yield NgspiceValue('current', vec_name.replace('#branch', ''), 'branch', value)
+            else:
+                yield NgspiceValue('voltage', vec_name, None, value)
+
+    def tran(self, *args) -> NgspiceTransientResult:
+        self.command(f"tran {' '.join(args)}")
+        result = NgspiceTransientResult()
+        table = NgspiceTable("transient_analysis")
+
+        all_vectors = self._get_all_vectors()
+        table.headers = all_vectors
+
+        num_points = 0
+
+        # Get all vector data and structure it by column
+        vector_data_map = {}
+        for vec_name in all_vectors:
+            vec_info = self._get_vector_info(vec_name)
+            if vec_info:
+                num_points = max(num_points, vec_info.v_length)
+                data_list = [vec_info.v_realdata[i] for i in range(vec_info.v_length)]
+                vector_data_map[vec_name] = data_list
+
+        # Transpose columns into rows
+        for i in range(num_points):
+            row = [vector_data_map.get(h, [None])[i] for h in table.headers]
+            table.data.append(row)
+
+        result.add_table(table)
+        return result
+
+    def _get_all_vectors(self) -> List[str]:
+        plot_name = self.lib.ngSpice_CurPlot()
+        if not plot_name:
+            return []
+
+        vecs_ptr = self.lib.ngSpice_AllVecs(plot_name)
+        vectors = []
+        i = 0
+        while vecs_ptr and vecs_ptr[i]:
+            vectors.append(vecs_ptr[i].decode('utf-8'))
+            i += 1
+        return vectors
+
+    def _get_vector_info(self, vector_name: str) -> Optional[VectorInfo]:
+        vec_info_ptr = self.lib.ngGet_Vec_Info(vector_name.encode('utf-8'))
+        return vec_info_ptr.contents if vec_info_ptr else None
+
+    @staticmethod
+    def find_library() -> ctypes.CDLL:
+        lib_names = {
+            'win32': ['ngspice.dll', 'libngspice-0.dll'],
+            'darwin': ['libngspice.dylib', 'libngspice.0.dylib'],
+        }.get(sys.platform, ['libngspice.so', 'libngspice.so.0'])
+
+        # Check standard system paths first
+        for lib_name in lib_names:
+            try:
+                return ctypes.CDLL(lib_name)
+            except OSError:
+                continue
+
+        raise NgSpiceConfigError(
+            "Could not find the ngspice shared library. Please ensure ngspice is installed "
+            "and the library is in the system's search path."
+        )
+
+    def _setup_library_functions(self):
+        # Define callback function prototypes
+        self._SendChar = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p)
+        self._SendStat = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p)
+        self._ControlledExit = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_int, ctypes.c_bool, ctypes.c_bool, ctypes.c_int, ctypes.c_void_p)
+
+        # Core functions
+        self.lib.ngSpice_Init.restype = ctypes.c_int
+        self.lib.ngSpice_Init.argtypes = [self._SendChar, self._SendStat, self._ControlledExit, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+
+        self.lib.ngSpice_Command.restype = ctypes.c_int
+        self.lib.ngSpice_Command.argtypes = [ctypes.c_char_p]
+
+        self.lib.ngSpice_Circ.restype = ctypes.c_int
+        self.lib.ngSpice_Circ.argtypes = [ctypes.POINTER(ctypes.c_char_p)]
+
+        self.lib.ngGet_Vec_Info.restype = self.PVectorInfo
+        self.lib.ngGet_Vec_Info.argtypes = [ctypes.c_char_p]
+
+        self.lib.ngSpice_CurPlot.restype = ctypes.c_char_p
+        self.lib.ngSpice_AllVecs.restype = ctypes.POINTER(ctypes.c_char_p)
+        self.lib.ngSpice_AllVecs.argtypes = [ctypes.c_char_p]
+
+
+# --- Subprocess Backend Implementation ---
+
+class _SubprocessBackend:
     @staticmethod
     @contextmanager
     def launch(debug=False):
         with tempfile.TemporaryDirectory() as cwd_str:
             p = Popen(['ngspice', '-p'], stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=cwd_str)
             try:
-                yield Ngspice(p, debug=debug, cwd=Path(cwd_str))
+                yield _SubprocessBackend(p, debug=debug, cwd=Path(cwd_str))
             finally:
-                # SIGTERM was not needed for ngspice-39, but then needed for ngspice-44.
-                # Possibly, this is due to different libedit/libreadline configurations, not due to the Ngspice version.
-                p.send_signal(signal.SIGTERM)
-                p.stdin.close()
-                p.stdout.read()
-                p.wait()
+                try:
+                    p.send_signal(signal.SIGTERM)
+                    if p.stdin:
+                        p.stdin.close()
+                    if p.stdout:
+                        p.stdout.read()
+                    p.wait(timeout=1.0)
+                except (ProcessLookupError, BrokenPipeError, TimeoutError):
+                    pass  # Process may have already terminated
 
-    def __init__(self, p, debug: bool, cwd: Path):
+    def __init__(self, p: Popen, debug: bool, cwd: Path):
         self.p = p
         self.debug = debug
         self.cwd = cwd
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
+        if self.p.poll() is not None:
+            raise NgspiceFatalError("ngspice process has terminated unexpectedly.")
         if self.debug:
             print(f"[debug] sending command to ngspice ({self.p.pid}): {command}")
-        self.p.stdin.write(f"{command}; echo FINISHED\n".encode("ascii"))
-        self.p.stdin.flush()
+
+        if self.p.stdin:
+            self.p.stdin.write(f"{command}; echo FINISHED\n".encode("ascii"))
+            self.p.stdin.flush()
+
         out = []
         while True:
             l=self.p.stdout.readline()
@@ -206,17 +475,11 @@ class Ngspice:
         out_flat = "".join(out)
         if self.debug:
             print(f"[debug] received result from ngspice ({self.p.pid}): {repr(out_flat)}")
+
+        check_errors(out_flat)
         return out_flat
 
-    def vector_info(self) -> Iterator[NgspiceVector]:
-        """Wrapper for ngspice's "display" command."""
-        for line in self.command("display").split("\n\n")[2].split('\n'):
-            if len(line) == 0:
-                continue
-            res = re.match(r"\s*([0-9a-zA-Z_.#]*)\s*:\s*([a-zA-Z]+),\s*([a-zA-Z]+),\s*(.*)", line)
-            yield NgspiceVector(*res.groups())
-
-    def load_netlist(self, netlist: str, no_auto_gnd:bool=True):
+    def load_netlist(self, netlist: str, no_auto_gnd: bool = True):
         netlist_fn = self.cwd / 'netlist.sp'
         netlist_fn.write_text(netlist)
         if self.debug:
@@ -272,6 +535,7 @@ class Ngspice:
             res = re.match(r"@([a-zA-Z]\.)?([0-9a-zA-Z_.#]+)\[([0-9a-zA-Z_]+)\]\s*=\s*([0-9.\-+e]+)\s*", line)
             if res:
                 yield NgspiceValue(type='current', name=res.group(2), subname=res.group(3), value=float(res.group(4)))
+
     def tran(self, *args) -> NgspiceTransientResult:
         self.command(f"tran {' '.join(args)}")
         print_all_res = self.command("print all")
@@ -287,13 +551,7 @@ class Ngspice:
                 i += 1
                 continue
 
-            # Look for NGspice table pattern:
-            # Line i: Table title (non-empty, not dashes)
-            # Line i+1: Optional description line
-            # Line i+2: Separator (all dashes)
-            # Line i+3: Headers
-            # Line i+4: Separator (all dashes)
-            # Line i+5+: Data rows until separator or end
+            # Look for NGspice table pattern: (only tested with a single version of ngspice!)
 
             # Check if this could be start of a table
             if (not re.match(r"^-+$", line.strip()) and  # Not a separator line
@@ -351,6 +609,75 @@ class Ngspice:
             i += 1
 
         return result
+
+
+def check_errors(ngspice_out):
+    """Helper function to raise NgspiceError in Python from "Error: ..."
+    messages in Ngspice's output."""
+    for line in ngspice_out.split('\n'):
+        m = re.match(r"Error:\s*(.*)", line)
+        if m:
+            raise NgspiceError(m.group(1))
+
+
+class Ngspice:
+    @staticmethod
+    @contextmanager
+    def launch(debug=False, backend=None):
+        """
+        Launch NgSpice using the best available or specified backend.
+
+        Args:
+            debug: Enable detailed logging from the backend.
+            backend: "ffi", "subprocess", or "auto". If None, defaults to "auto".
+        """
+        if backend is None:
+            backend_type = get_default_backend()
+        elif isinstance(backend, str):
+            backend_type = NgSpiceBackend(backend.lower())
+        else:
+            backend_type = backend
+
+        chosen_backend = select_backend(backend_type)
+
+        if debug:
+            print(f"[Ngspice] Using backend: {chosen_backend.value}")
+
+        backend_class = {
+            NgSpiceBackend.FFI: _FFIBackend,
+            NgSpiceBackend.SUBPROCESS: _SubprocessBackend,
+        }[chosen_backend]
+
+        with backend_class.launch(debug=debug) as backend_instance:
+            yield Ngspice(backend_instance, debug=debug)
+
+    def __init__(self, backend_impl, debug: bool = False):
+        self._backend_impl = backend_impl
+        self.debug = debug
+
+    def command(self, command: str) -> str:
+        """Executes ngspice command and returns string output from ngspice process."""
+        return self._backend_impl.command(command)
+
+    def vector_info(self) -> Iterator[NgspiceVector]:
+        """Wrapper for ngspice's "display" command."""
+        for line in self.command("display").split("\n\n")[2].split('\n'):
+            if len(line) == 0:
+                continue
+            res = re.match(r"\s*([0-9a-zA-Z_.#]*)\s*:\s*([a-zA-Z]+),\s*([a-zA-Z]+),\s*(.*)", line)
+            if res:
+                yield NgspiceVector(*res.groups())
+
+    def load_netlist(self, netlist: str, no_auto_gnd: bool = True):
+        return self._backend_impl.load_netlist(netlist, no_auto_gnd=no_auto_gnd)
+
+
+
+    def op(self) -> Iterator[NgspiceValue]:
+        return self._backend_impl.op()
+
+    def tran(self, *args) -> NgspiceTransientResult:
+        return self._backend_impl.tran(*args)
 
 
 RawVariable = namedtuple('RawVariable', ['name', 'unit'])
