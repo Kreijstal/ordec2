@@ -1,12 +1,16 @@
-
 # SPDX-FileCopyrightText: 2025 ORDeC contributors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import re
 import pytest
 from ordec.sim2.ngspice import Ngspice, NgspiceError, NgspiceFatalError, Netlister
 from ordec import Rational as R
 from ordec.lib import test as lib_test
+
+# Set environment variable to force FFI backend for all tests in this file
+# This makes HighlevelSim.op() use FFI backend instead of default subprocess backend
+os.environ['NGSPICE_BACKEND'] = 'ffi'
 
 def test_ngspice_illegal_netlist_1():
     with Ngspice.launch(backend="ffi", debug=True) as sim:
@@ -47,6 +51,8 @@ def test_ngspice_op_no_auto_gnd():
 
     # Default behavior: net 'gnd' is automatically ground.
     with Ngspice.launch(backend="ffi", debug=True) as sim:
+        # Reset no_auto_gnd to ensure clean state
+        sim.command("unset no_auto_gnd")
         sim.load_netlist(netlist_voltage_divider, no_auto_gnd=False)
         op = voltages(sim.op())
     assert op['a'] == 1.5
@@ -60,13 +66,15 @@ def test_ngspice_op_no_auto_gnd():
 
 def test_sim_dc_flat():
     h = lib_test.ResdivFlatTb().sim_dc
-    assert h.a.dc_voltage == 0.3333333
-    assert h.b.dc_voltage == 0.6666667
+    # FFI backend golden values
+    assert h.a.dc_voltage == 0.33333333333333337
+    assert h.b.dc_voltage == 0.6666666666666667
 
 def test_sim_dc_hier():
     h = lib_test.ResdivHierTb().sim_dc
-    assert h.r.dc_voltage == 0.3589744
-    assert h.I0.I1.m.dc_voltage == 0.5897436
+    # FFI backend golden values
+    assert h.r.dc_voltage == 0.3589743589743596
+    assert h.I0.I1.m.dc_voltage == 0.5897435897435901
 
 def test_generic_mos_netlister():
     nl = Netlister()
@@ -77,15 +85,18 @@ def test_generic_mos_netlister():
     assert netlist.count('.model pmosgeneric PMOS level=1') == 1
 
 def test_generic_mos_nmos_sourcefollower():
-    assert lib_test.NmosSourceFollowerTb(vin=R(2)).sim_dc.o.dc_voltage == 0.6837722
-    assert lib_test.NmosSourceFollowerTb(vin=R(3)).sim_dc.o.dc_voltage == 1.683772
+    # FFI backend golden values
+    assert lib_test.NmosSourceFollowerTb(vin=R(2)).sim_dc.o.dc_voltage == 0.6837722116612965
+    assert lib_test.NmosSourceFollowerTb(vin=R(3)).sim_dc.o.dc_voltage == 1.6837721784225057
 
 def test_generic_mos_inv():
-    assert lib_test.InvTb(vin=R(0)).sim_dc.o.dc_voltage  == 5.0
-    assert lib_test.InvTb(vin=R('2.5')).sim_dc.o.dc_voltage == 2.5
-    assert lib_test.InvTb(vin=R(5)).sim_dc.o.dc_voltage == 3.13125e-08
+    # FFI backend golden values
+    assert lib_test.InvTb(vin=R(0)).sim_dc.o.dc_voltage == 4.9999999698343345
+    assert lib_test.InvTb(vin=R('2.5')).sim_dc.o.dc_voltage == 2.500000017115547
+    assert lib_test.InvTb(vin=R(5)).sim_dc.o.dc_voltage == 3.131249965532494e-08
 
 def test_sky_mos_inv():
-    assert lib_test.InvSkyTb(vin=R(0)).sim_dc.o.dc_voltage  == 5.0
-    assert lib_test.InvSkyTb(vin=R('2.5')).sim_dc.o.dc_voltage == 1.980606
-    assert lib_test.InvSkyTb(vin=R(5)).sim_dc.o.dc_voltage ==  0.00012159
+    # FFI backend golden values
+    assert lib_test.InvSkyTb(vin=R(0)).sim_dc.o.dc_voltage == 4.999999973187308
+    assert lib_test.InvSkyTb(vin=R('2.5')).sim_dc.o.dc_voltage == 1.9806063550640076
+    assert lib_test.InvSkyTb(vin=R(5)).sim_dc.o.dc_voltage == 0.00012158997833462999
