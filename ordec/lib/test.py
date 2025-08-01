@@ -673,49 +673,21 @@ class InvTb(Cell):
         sim = HighlevelSim(self.schematic, node)
         sim.op()
 
-    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1):
-        """Run async transient simulation."""
+    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1, enable_savecurrents=True):
+        """Run async transient simulation.
+
+        Args:
+            tstep: Time step for the simulation
+            tstop: Stop time for the simulation
+            backend: Simulation backend ('ffi' or 'subprocess')
+            callback: Optional callback function for data updates
+            throttle_interval: Minimum time between callbacks (seconds)
+            enable_savecurrents: If True (default), enables .option savecurrents
+        """
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
         node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node)
-
-        # Create result wrapper class
-        class TranResult:
-            def __init__(self, data_dict, sim_hierarchy, netlister, progress):
-                self._data = data_dict
-                self._node = sim_hierarchy
-                self._netlister = netlister
-                self.time = data_dict.get('time', 0.0)
-                self.progress = progress
-
-                # Create hierarchical access
-                for net in sim_hierarchy.all(SimNet):
-                    net_name = netlister.name_hier_simobj(net)
-                    if net_name in data_dict:
-                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
-
-                for inst in sim_hierarchy.all(SimInstance):
-                    inst_name = netlister.name_hier_simobj(inst)
-                    if inst_name in data_dict:
-                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
-
-
-        # Run simulation
-        with Ngspice.launch(backend=backend) as sim:
-            sim.load_netlist(highlevel_sim.netlister.out())
-
-            for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
-                data = data_point.get('data', {})
-                progress = data_point.get('progress', 0.0)
-                yield TranResult(data, node, highlevel_sim.netlister, progress)
-
-    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1):
-        """Run async transient simulation."""
-        # Create hierarchical simulation
-        from ..sim2.sim_hierarchy import SimHierarchy
-        node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node)
+        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents)
 
         # Create result wrapper class
         class TranResult:
@@ -781,49 +753,21 @@ class InvSkyTb(Cell):
         sim = HighlevelSim(self.schematic, node)
         sim.op()
 
-    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1):
-        """Run async transient simulation."""
+    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1, enable_savecurrents=False):
+        """Run async transient simulation.
+
+        Args:
+            tstep: Time step for the simulation
+            tstop: Stop time for the simulation
+            backend: Simulation backend ('ffi' or 'subprocess')
+            callback: Optional callback function for data updates
+            throttle_interval: Minimum time between callbacks (seconds)
+            enable_savecurrents: If False (default), disables .option savecurrents for Sky130 compatibility
+        """
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
         node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node)
-
-        # Create result wrapper class
-        class TranResult:
-            def __init__(self, data_dict, sim_hierarchy, netlister, progress):
-                self._data = data_dict
-                self._node = sim_hierarchy
-                self._netlister = netlister
-                self.time = data_dict.get('time', 0.0)
-                self.progress = progress
-
-                # Create hierarchical access
-                for net in sim_hierarchy.all(SimNet):
-                    net_name = netlister.name_hier_simobj(net)
-                    if net_name in data_dict:
-                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
-
-                for inst in sim_hierarchy.all(SimInstance):
-                    inst_name = netlister.name_hier_simobj(inst)
-                    if inst_name in data_dict:
-                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
-
-
-        # Run simulation
-        with Ngspice.launch(backend=backend) as sim:
-            sim.load_netlist(highlevel_sim.netlister.out())
-
-            for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
-                data = data_point.get('data', {})
-                progress = data_point.get('progress', 0.0)
-                yield TranResult(data, node, highlevel_sim.netlister, progress)
-
-    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1):
-        """Run async transient simulation."""
-        # Create hierarchical simulation
-        from ..sim2.sim_hierarchy import SimHierarchy
-        node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node)
+        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents)
 
         # Create result wrapper class
         class TranResult:
@@ -848,82 +792,6 @@ class InvSkyTb(Cell):
         # Run simulation
         with Ngspice.launch(backend=backend) as sim:
             sim.load_netlist(highlevel_sim.netlister.out())
-
-            for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
-                data = data_point.get('data', {})
-                # Add progress information
-                data['progress'] = data_point.get('progress', 0.0)
-                yield TranResult(data, node, highlevel_sim.netlister)
-
-    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1):
-        """Run async transient simulation."""
-        # Create hierarchical simulation
-        from ..sim2.sim_hierarchy import SimHierarchy
-        node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node)
-
-        # Create result wrapper class
-        class TranResult:
-            def __init__(self, data_dict, sim_hierarchy, netlister):
-                self._data = data_dict
-                self._node = sim_hierarchy
-                self._netlister = netlister
-                self.time = data_dict.get('time', 0.0)
-                self.progress = data_point.get('progress', 0.0)
-
-                # Create hierarchical access
-                for net in sim_hierarchy.all(SimNet):
-                    net_name = netlister.name_hier_simobj(net)
-                    if net_name in data_dict:
-                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
-
-                for inst in sim_hierarchy.all(SimInstance):
-                    inst_name = netlister.name_hier_simobj(inst)
-                    if inst_name in data_dict:
-                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
-
-        # Run simulation
-        with Ngspice.launch(backend=backend) as sim:
-            sim.load_netlist(highlevel_sim.netlister.out())
-
-            for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
-                data = data_point.get('data', {})
-                # Add progress information
-                data['progress'] = data_point.get('progress', 0.0)
-                yield TranResult(data, node, highlevel_sim.netlister)
-
-    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1):
-        """Run async transient simulation."""
-        # Create hierarchical simulation
-        from ..sim2.sim_hierarchy import SimHierarchy
-        node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node)
-
-        # Create result wrapper class
-        class TranResult:
-            def __init__(self, data_dict, sim_hierarchy, netlister, progress):
-                self._data = data_dict
-                self._node = sim_hierarchy
-                self._netlister = netlister
-                self.time = data_dict.get('time', 0.0)
-                self.progress = progress
-
-                # Create hierarchical access
-                for net in sim_hierarchy.all(SimNet):
-                    net_name = netlister.name_hier_simobj(net)
-                    if net_name in data_dict:
-                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
-
-                for inst in sim_hierarchy.all(SimInstance):
-                    inst_name = netlister.name_hier_simobj(inst)
-                    if inst_name in data_dict:
-                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
-
-        # Run simulation
-        with Ngspice.launch(backend=backend) as sim:
-            netlist = highlevel_sim.netlister.out()
-            print(f"Netlist for {self.__class__.__name__}:\n{netlist}")
-            sim.load_netlist(netlist)
 
             for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
                 data = data_point.get('data', {})

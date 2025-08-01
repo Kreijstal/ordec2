@@ -1197,13 +1197,14 @@ def basename_escape(obj):
     return re.sub(r'[^a-zA-Z0-9]', '_', basename).lower()
 
 class Netlister:
-    def __init__(self):
+    def __init__(self, enable_savecurrents: bool = True):
         self.obj_of_name = {}
         self.name_of_obj = {}
         self.spice_cards = []
         self.cur_line = 0
         self.indent = 0
         self.setup_funcs = set()
+        self.enable_savecurrents = enable_savecurrents
 
     def require_setup(self, setup_func):
         self.setup_funcs.add(setup_func)
@@ -1277,7 +1278,8 @@ class Netlister:
     def netlist_hier(self, top: Schematic):
         self.add('.title', self.name_obj(top.cell))
         #self.add('.probe', 'alli') # This seems to be needed to see currents of subcircuits
-        self.add('.option', 'savecurrents') # This seems to be needed to see currents of devices (R, M)
+        if self.enable_savecurrents:
+            self.add('.option', 'savecurrents') # This seems to be needed to see currents of devices (R, M)
 
         subckt_dep = self.netlist_schematic(top)
         subckt_done = set()
