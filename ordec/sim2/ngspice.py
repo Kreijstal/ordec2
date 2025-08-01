@@ -351,6 +351,8 @@ class _FFIBackend:
         try:
             current_time = time.time()
 
+
+
             # Throttle callbacks to prevent overwhelming Python
             if current_time - self._last_callback_time < self._async_throttle_interval:
                 return 0
@@ -541,22 +543,25 @@ class _FFIBackend:
         table = NgspiceTable("transient_analysis")
 
         all_vectors = self._get_all_vectors()
-        table.headers = all_vectors
 
         num_points = 0
 
-        # Get all vector data and structure it by column
+        # Get all vector data and structure it by column, filtering out zero-length vectors
         vector_data_map = {}
+        valid_headers = []
         for vec_name in all_vectors:
             vec_info = self._get_vector_info(vec_name)
-            if vec_info:
+            if vec_info and vec_info.v_length > 0:
                 num_points = max(num_points, vec_info.v_length)
                 data_list = [vec_info.v_realdata[i] for i in range(vec_info.v_length)]
                 vector_data_map[vec_name] = data_list
+                valid_headers.append(vec_name)
+
+        table.headers = valid_headers
 
         # Transpose columns into rows
         for i in range(num_points):
-            row = [vector_data_map.get(h, [None])[i] for h in table.headers]
+            row = [vector_data_map[h][i] for h in table.headers]
             table.data.append(row)
 
         result.add_table(table)
@@ -589,9 +594,8 @@ class _FFIBackend:
             except queue.Empty:
                 break
 
-        # Start background simulation - set up analysis first, then run
-        self.command(f"tran {' '.join(args)}")
-        self.command("bg_run")
+        # Start background simulation using bg_tran
+        self.command(f"bg_tran {' '.join(args)}")
 
         # Wait for simulation to start
         timeout = time.time() + 5.0  # 5 second timeout
@@ -601,12 +605,19 @@ class _FFIBackend:
         if not self._is_running:
             raise NgspiceError("Background simulation failed to start")
 
+        # Try streaming first - if no data comes within reasonable time, fall back to polling
+        streaming_timeout = time.time() + 0.5  # 500ms to wait for streaming data
+        got_streaming_data = False
+
         # Stream data as it becomes available
         while self._is_running:
+
+
             try:
                 # Check for data with short timeout
                 data_point = self._async_data_queue.get(timeout=0.01)
 
+                got_streaming_data = True
                 if callback:
                     callback(data_point)
 
@@ -615,9 +626,47 @@ class _FFIBackend:
             except queue.Empty:
                 # Check if simulation is still running
                 if hasattr(self.lib, 'ngSpice_running'):
-                    if not self.lib.ngSpice_running():
+                    is_ngspice_running = self.lib.ngSpice_running()
+                    if not is_ngspice_running:
                         self._is_running = False
-                        break
+                        # Don't break yet - handle polling fallback below
+
+                # If no streaming data after timeout OR simulation completed, fall back to polling
+                if not got_streaming_data and (time.time() > streaming_timeout or not self._is_running):
+
+                    # Get final results from completed simulation
+                    try:
+                        # Build result from current simulation vectors
+                        all_vectors = self._get_all_vectors()
+
+                        final_data = {}
+
+                        for vec_name in all_vectors:
+                            vec_info = self._get_vector_info(vec_name)
+                            if vec_info and vec_info.v_length > 0:
+                                # Get last value from vector
+                                final_data[vec_name] = vec_info.v_realdata[vec_info.v_length - 1]
+
+
+
+                        if final_data:
+                            final_data_point = {
+                                'timestamp': time.time(),
+                                'data': final_data,
+                                'progress': 1.0
+                            }
+
+                            if callback:
+                                callback(final_data_point)
+                            yield final_data_point
+                    except Exception as e:
+                        if self.debug:
+                            print(f"[ngspice-ffi] Error in polling fallback: {e}")
+
+                    break
+
+                if not self._is_running:
+                    break
 
                 # Small sleep to prevent busy waiting
                 time.sleep(0.001)
