@@ -8,6 +8,7 @@ import signal
 import sys
 import tempfile
 import warnings
+import shutil
 from collections import namedtuple
 from contextlib import contextmanager
 from enum import Enum
@@ -828,11 +829,31 @@ class _SubprocessBackend:
     @staticmethod
     @contextmanager
     def launch(debug=False):
+        # Choose the correct ngspice executable for the platform
+        if sys.platform == 'win32':
+            # On Windows, prefer ngspice_con if available, fall back to ngspice
+            ngspice_exe = 'ngspice_con' if shutil.which('ngspice_con') else 'ngspice'
+        else:
+            ngspice_exe = 'ngspice'
+            
+        if debug:
+            print(f"[debug] Using ngspice executable: {ngspice_exe}")
+            print(f"[debug] Platform: {sys.platform}")
+        
         with tempfile.TemporaryDirectory() as cwd_str:
-            p = Popen(['ngspice', '-p'], stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=cwd_str)
+            if debug:
+                print(f"[debug] Starting ngspice with command: {[ngspice_exe, '-p']}")
+                print(f"[debug] Working directory: {cwd_str}")
+                
+            p = Popen([ngspice_exe, '-p'], stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=cwd_str)
+            if debug:
+                print(f"[debug] Process started with PID: {p.pid}")
+            
             try:
                 yield _SubprocessBackend(p, debug=debug, cwd=Path(cwd_str))
             finally:
+                if debug:
+                    print(f"[debug] Cleaning up process {p.pid}")
                 try:
                     p.send_signal(signal.SIGTERM)
                     if p.stdin:
@@ -856,29 +877,56 @@ class _SubprocessBackend:
             print(f"[debug] sending command to ngspice ({self.p.pid}): {command}")
 
         if self.p.stdin:
-            self.p.stdin.write(f"{command}; echo FINISHED\n".encode("ascii"))
+            # Send the command followed by echo marker on separate lines
+            full_input = f"{command}\necho FINISHED\n"
+            if self.debug:
+                print(f"[debug] Writing to stdin: {repr(full_input)}")
+            self.p.stdin.write(full_input.encode("ascii"))
             self.p.stdin.flush()
+            if self.debug:
+                print(f"[debug] Stdin flushed")
 
         out = []
+        line_count = 0
         while True:
-            l=self.p.stdout.readline()
-            #print(f"[debug] received line from ngspice: {l}")
+            if self.debug:
+                print(f"[debug] Waiting for line {line_count}...")
+            l = self.p.stdout.readline()
+            line_count += 1
+            if self.debug:
+                print(f"[debug] received line {line_count} from ngspice: {repr(l)}")
 
-            # Ignore echo in case of ngspice build with libreadline:
-            if re.match(rb"ngspice [0-9]+ -> .*; echo FINISHED\n", l):
-                continue
-
-            # Strip "ngspice 123 -> " from line in case of ngspice build with neither libreadline nor libedit:
-            m = re.match(rb"ngspice [0-9]+ -> (.*\n)", l)
-            if m:
-                l = m.group(1)
-
-            if l == b'FINISHED\n':
-                break
-            elif l == b'': # readline() returns the empty byte string only on EOF.
+            # Check for EOF first
+            if l == b'': # readline() returns the empty byte string only on EOF.
                 out_flat = "".join(out)
+                if self.debug:
+                    print(f"[debug] EOF detected, ngspice terminated")
                 raise NgspiceFatalError(f"ngspice terminated abnormally:\n{out_flat}")
+            
+            # On Windows, strip ALL occurrences of "ngspice 123 -> " from the line
+            if sys.platform == 'win32':
+                while True:
+                    m = re.match(rb"ngspice [0-9]+ -> (.*)", l)
+                    if not m:
+                        break
+                    if self.debug:
+                        print(f"[debug] Stripping prompt from line: {repr(l)} -> {repr(m.group(1))}")
+                    l = m.group(1)
+            
+            # Check for our finish marker
+            if l.rstrip() == b'FINISHED':
+                if self.debug:
+                    print(f"[debug] Found FINISHED marker, breaking")
+                break
+                
+            # Skip empty lines that are just prompts
+            if l.strip() == b'':
+                continue
+                
             out.append(l.decode('ascii'))
+            if self.debug:
+                print(f"[debug] Added to output: {repr(l.decode('ascii'))}")
+        
         out_flat = "".join(out)
         if self.debug:
             print(f"[debug] received result from ngspice ({self.p.pid}): {repr(out_flat)}")
@@ -923,25 +971,25 @@ class _SubprocessBackend:
 
     def op(self) -> Iterator[NgspiceValue]:
         self.command("op")
-
-        for line in self.print_all():
-            if len(line) == 0:
+        # Explicitly print all node voltages
+        output = self.command("print all")
+        
+        # Parse the output to extract node voltages
+        for line in output.splitlines():
+            line = line.strip()
+            if not line:
                 continue
-
-            # Voltage result - updated regex to handle device names with special chars:
-            res = re.match(r"([0-9a-zA-Z_.#]+)\s*=\s*([0-9.\-+e]+)\s*", line)
-            if res:
-                yield NgspiceValue(type='voltage', name=res.group(1), subname=None, value=float(res.group(2)))
-
-            # Current result like "vgnd#branch":
-            res = re.match(r"([0-9a-zA-Z_.#]+)#branch\s*=\s*([0-9.\-+e]+)\s*", line)
-            if res:
-                yield NgspiceValue(type='current', name=res.group(1), subname='branch', value=float(res.group(2)))
-
-            # Current result like "@m.xdut.mm2[is]" from savecurrents:
-            res = re.match(r"@([a-zA-Z]\.)?([0-9a-zA-Z_.#]+)\[([0-9a-zA-Z_]+)\]\s*=\s*([0-9.\-+e]+)\s*", line)
-            if res:
-                yield NgspiceValue(type='current', name=res.group(2), subname=res.group(3), value=float(res.group(4)))
+                
+            # Match node voltages including hierarchical names with dots
+            # Examples: "a = 1.5", "xi0.xi1.m = 0.5897436"
+            match = re.match(r"([a-zA-Z0-9_.]+)\s*=\s*([0-9.+\-eE]+)", line)
+            if match:
+                node = match.group(1)
+                try:
+                    voltage = float(match.group(2))
+                    yield NgspiceValue('voltage', node, None, voltage)
+                except ValueError:
+                    continue
 
     def tran(self, *args) -> NgspiceTransientResult:
         self.command(f"tran {' '.join(args)}")
