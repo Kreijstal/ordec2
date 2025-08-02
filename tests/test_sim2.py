@@ -1,11 +1,27 @@
 # SPDX-FileCopyrightText: 2025 ORDeC contributors
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import re
 import pytest
 from ordec.sim2.ngspice import Ngspice, NgspiceError, NgspiceFatalError, Netlister
 from ordec import Rational as R
 from ordec.lib import test as lib_test
+
+@pytest.fixture(autouse=True)
+def set_subprocess_backend(monkeypatch):
+    """Set environment variable to force subprocess backend for all tests in this file.
+    This ensures proper isolation from FFI backend tests.
+    """
+    # Clear cell caches to prevent cross-contamination between backend tests
+    from ordec.lib import test as lib_test
+    # Clear caches from all Cell classes that might have cached simulation results
+    for cell_cls in [lib_test.InvSkyTb, lib_test.InvTb, lib_test.NmosSourceFollowerTb,
+                     lib_test.ResdivFlatTb, lib_test.ResdivHierTb]:
+        for cell_instance in cell_cls.instances.values():
+            cell_instance.cached_subgraphs.clear()
+
+    monkeypatch.setenv('NGSPICE_BACKEND', 'subprocess')
 
 def test_ngspice_illegal_netlist_1():
     with Ngspice.launch(debug=True) as sim:

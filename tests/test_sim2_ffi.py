@@ -8,9 +8,20 @@ from ordec.sim2.ngspice import Ngspice, NgspiceError, NgspiceFatalError, Netlist
 from ordec import Rational as R
 from ordec.lib import test as lib_test
 
-# Set environment variable to force FFI backend for all tests in this file
-# This makes HighlevelSim.op() use FFI backend instead of default subprocess backend
-os.environ['NGSPICE_BACKEND'] = 'ffi'
+@pytest.fixture(autouse=True)
+def set_ffi_backend(monkeypatch):
+    """Set environment variable to force FFI backend for all tests in this file.
+    This ensures proper isolation from subprocess backend tests.
+    """
+    # Clear cell caches to prevent cross-contamination between backend tests
+    from ordec.lib import test as lib_test
+    # Clear caches from all Cell classes that might have cached simulation results
+    for cell_cls in [lib_test.InvSkyTb, lib_test.InvTb, lib_test.NmosSourceFollowerTb,
+                     lib_test.ResdivFlatTb, lib_test.ResdivHierTb]:
+        for cell_instance in cell_cls.instances.values():
+            cell_instance.cached_subgraphs.clear()
+
+    monkeypatch.setenv('NGSPICE_BACKEND', 'ffi')
 
 def test_ngspice_illegal_netlist_1():
     with Ngspice.launch(backend="ffi", debug=True) as sim:
