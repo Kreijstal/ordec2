@@ -835,20 +835,20 @@ class _SubprocessBackend:
             ngspice_exe = 'ngspice_con' if shutil.which('ngspice_con') else 'ngspice'
         else:
             ngspice_exe = 'ngspice'
-            
+
         if debug:
             print(f"[debug] Using ngspice executable: {ngspice_exe}")
             print(f"[debug] Platform: {sys.platform}")
-        
+
         with tempfile.TemporaryDirectory() as cwd_str:
             if debug:
                 print(f"[debug] Starting ngspice with command: {[ngspice_exe, '-p']}")
                 print(f"[debug] Working directory: {cwd_str}")
-                
+
             p = Popen([ngspice_exe, '-p'], stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=cwd_str)
             if debug:
                 print(f"[debug] Process started with PID: {p.pid}")
-            
+
             try:
                 yield _SubprocessBackend(p, debug=debug, cwd=Path(cwd_str))
             finally:
@@ -902,31 +902,36 @@ class _SubprocessBackend:
                 if self.debug:
                     print(f"[debug] EOF detected, ngspice terminated")
                 raise NgspiceFatalError(f"ngspice terminated abnormally:\n{out_flat}")
-            
-            # On Windows, strip ALL occurrences of "ngspice 123 -> " from the line
-            if sys.platform == 'win32':
-                while True:
-                    m = re.match(rb"ngspice [0-9]+ -> (.*)", l)
-                    if not m:
-                        break
-                    if self.debug:
-                        print(f"[debug] Stripping prompt from line: {repr(l)} -> {repr(m.group(1))}")
-                    l = m.group(1)
-            
+
+            # Strip ALL occurrences of "ngspice 123 -> " from the line on all platforms
+            # Preserve newlines when stripping prompts
+            while True:
+                m = re.match(rb"ngspice [0-9]+ -> (.*)", l)
+                if not m:
+                    break
+                if self.debug:
+                    print(f"[debug] Stripping prompt from line: {repr(l)} -> {repr(m.group(1))}")
+                stripped_content = m.group(1)
+                # Preserve the newline if the original line had one
+                if l.endswith(b'\n') and not stripped_content.endswith(b'\n'):
+                    l = stripped_content + b'\n'
+                else:
+                    l = stripped_content
+
             # Check for our finish marker
             if l.rstrip() == b'FINISHED':
                 if self.debug:
                     print(f"[debug] Found FINISHED marker, breaking")
                 break
-                
+
             # Skip empty lines that are just prompts
             if l.strip() == b'':
                 continue
-                
+
             out.append(l.decode('ascii'))
             if self.debug:
                 print(f"[debug] Added to output: {repr(l.decode('ascii'))}")
-        
+
         out_flat = "".join(out)
         if self.debug:
             print(f"[debug] received result from ngspice ({self.p.pid}): {repr(out_flat)}")
@@ -971,25 +976,25 @@ class _SubprocessBackend:
 
     def op(self) -> Iterator[NgspiceValue]:
         self.command("op")
-        # Explicitly print all node voltages
-        output = self.command("print all")
-        
-        # Parse the output to extract node voltages
-        for line in output.splitlines():
-            line = line.strip()
-            if not line:
+
+        for line in self.print_all():
+            if len(line) == 0:
                 continue
-                
-            # Match node voltages including hierarchical names with dots
-            # Examples: "a = 1.5", "xi0.xi1.m = 0.5897436"
-            match = re.match(r"([a-zA-Z0-9_.]+)\s*=\s*([0-9.+\-eE]+)", line)
-            if match:
-                node = match.group(1)
-                try:
-                    voltage = float(match.group(2))
-                    yield NgspiceValue('voltage', node, None, voltage)
-                except ValueError:
-                    continue
+
+            # Voltage result - updated regex to handle device names with special chars:
+            res = re.match(r"([0-9a-zA-Z_.#]+)\s*=\s*([0-9.\-+e]+)\s*", line)
+            if res:
+                yield NgspiceValue(type='voltage', name=res.group(1), subname=None, value=float(res.group(2)))
+
+            # Current result like "vgnd#branch":
+            res = re.match(r"([0-9a-zA-Z_.#]+)#branch\s*=\s*([0-9.\-+e]+)\s*", line)
+            if res:
+                yield NgspiceValue(type='current', name=res.group(1), subname='branch', value=float(res.group(2)))
+
+            # Current result like "@m.xdut.mm2[is]" from savecurrents:
+            res = re.match(r"@([a-zA-Z]\.)?([0-9a-zA-Z_.#]+)\[([0-9a-zA-Z_]+)\]\s*=\s*([0-9.\-+e]+)\s*", line)
+            if res:
+                yield NgspiceValue(type='current', name=res.group(2), subname=res.group(3), value=float(res.group(4)))
 
     def tran(self, *args) -> NgspiceTransientResult:
         self.command(f"tran {' '.join(args)}")
