@@ -28,10 +28,10 @@ def build_hier_schematic(simhier, schematic):
             build_hier_schematic(subnode, subschematic)
 
 class HighlevelSim:
-    def __init__(self, top: Schematic, simhier: SimHierarchy):
+    def __init__(self, top: Schematic, simhier: SimHierarchy, enable_savecurrents: bool = True):
         self.top = top
 
-        self.netlister = Netlister()
+        self.netlister = Netlister(enable_savecurrents=enable_savecurrents)
         self.netlister.netlist_hier(self.top)
 
         self.simhier = simhier

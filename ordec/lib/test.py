@@ -4,6 +4,7 @@
 from .. import helpers
 from ..core import *
 from ..sim2.sim_hierarchy import HighlevelSim
+from ..sim2.ngspice import Ngspice
 
 from .generic_mos import Or2, Nmos, Pmos, Ringosc, Inv
 from .base import Gnd, NoConn, Res, Vdc, Idc
@@ -24,7 +25,7 @@ class RotateTest(Cell):
         s.MY90 = SchemInstance(c.portmap(), pos=Vec2R(12, 12), orientation=Orientation.MY90)
         s.MX   = SchemInstance(c.portmap(), pos=Vec2R(13, 12), orientation=Orientation.MX)
         s.MX90 = SchemInstance(c.portmap(), pos=Vec2R(19, 7), orientation=Orientation.MX90)
-        
+
         s.outline = Rect4R(lx=0, ly=0, ux=25, uy=13)
         return s
 
@@ -184,9 +185,23 @@ class TestNmosInv(Cell):
     """
     For testing schem_check.
     """
+<<<<<<< HEAD
     @generate
     def symbol(self):
         s = Symbol(cell=self)
+=======
+    @generate(Symbol)
+    def symbol(self, node):
+        node.vdd = Pin(pintype=PinType.Inout, align=Orientation.North)
+        node.vss = Pin(pintype=PinType.Inout, align=Orientation.South)
+        node.a = Pin(pintype=PinType.In, align=Orientation.West)
+        node.y = Pin(pintype=PinType.Out, align=Orientation.East)
+        helpers.symbol_place_pins(node)
+
+    @generate(Schematic)
+    def schematic(self, node):
+        node.symbol = self.symbol
+>>>>>>> ngspicewindows
 
         s.vdd = Pin(pintype=PinType.Inout, align=Orientation.North)
         s.vss = Pin(pintype=PinType.Inout, align=Orientation.South)
@@ -195,7 +210,7 @@ class TestNmosInv(Cell):
         helpers.symbol_place_pins(s)
 
         return s
-        
+
     @generate
     def schematic(self):
         s = Schematic(cell=self, symbol=self.symbol)
@@ -229,8 +244,13 @@ class TestNmosInv(Cell):
         if self.params.variant == 'incorrect_port_conn':
             s.vss % SchemPort(pos=Vec2R(9, 7), align=Orientation.West)
         else:
+<<<<<<< HEAD
             s.y % SchemPort(pos=Vec2R(9, 7), align=Orientation.West)
-        
+
+=======
+            node.y % SchemPort(pos=Vec2R(x=9, y=7), align=Orientation.West)
+
+>>>>>>> ngspicewindows
         if self.params.variant == "no_wiring":
             s.default_supply = s.vdd
             s.default_ground = s.vss
@@ -267,10 +287,17 @@ class TestNmosInv(Cell):
             if self.params.variant == 'poly_short':
                 s.vdd % SchemWire(vertices=[Vec2R(2, 10), Vec2R(2, 4),])
 
+<<<<<<< HEAD
             s.a % SchemWire(vertices=[Vec2R(1, 4), Vec2R(2, 4), Vec2R(3, 4)])
             s.y % SchemWire(vertices=[Vec2R(5, 6), Vec2R(5, 7), Vec2R(5, 8)])
             s.y % SchemWire(vertices=[Vec2R(5, 7), Vec2R(9, 7)])
-            
+
+=======
+            node.a % SchemWire(vertices=[Vec2R(x=1, y=4), Vec2R(x=2, y=4), Vec2R(x=3, y=4)])
+            node.y % SchemWire(vertices=[Vec2R(x=5, y=6), Vec2R(x=5, y=7), Vec2R(x=5, y=8)])
+            node.y % SchemWire(vertices=[Vec2R(x=5, y=7), Vec2R(x=9, y=7)])
+
+>>>>>>> ngspicewindows
         if self.params.variant in ("manual_conn_points", "double_connpoint"):
             s.vss % SchemConnPoint(pos=Vec2R(5, 1))
             s.vss % SchemConnPoint(pos=Vec2R(8, 4))
@@ -289,6 +316,7 @@ class TestNmosInv(Cell):
         return s
 
 class RingoscTb(Cell):
+<<<<<<< HEAD
     @generate
     def schematic(self):
         s = Schematic(cell=self)
@@ -296,7 +324,15 @@ class RingoscTb(Cell):
         s.vdd = Net()
         s.vss = Net()
         s.y = Net()
-        
+
+=======
+    @generate(Schematic)
+    def schematic(self, node):
+        node.vdd = Net()
+        node.vss = Net()
+        node.y = Net()
+
+>>>>>>> ngspicewindows
         vdc = Vdc().symbol
         s.i0 = SchemInstance(pos=Vec2R(0, 2), ref=vdc,
             portmap={vdc.m:s.vss, vdc.p:s.vdd})
@@ -317,14 +353,23 @@ class RingoscTb(Cell):
 
         s.outline = Rect4R(lx=0, ly=-4, ux=15, uy=7)
 
+<<<<<<< HEAD
         s.vss % SchemWire(vertices=[Vec2R(2, 2), Vec2R(2, 1), Vec2R(2, 0)])
         s.vss % SchemWire(vertices=[Vec2R(2, 1), Vec2R(7, 1), Vec2R(7, 2)])
         s.vdd % SchemWire(vertices=[Vec2R(2, 6), Vec2R(2, 7), Vec2R(7, 7), Vec2R(7, 6)])
         s.y % SchemWire(vertices=[Vec2R(9, 4), Vec2R(10, 4)])
-        
+
         helpers.schem_check(s, add_conn_points=True)
 
         return s
+=======
+        node.vss % SchemWire(vertices=[Vec2R(x=2, y=2), Vec2R(x=2, y=1), Vec2R(x=2, y=0)])
+        node.vss % SchemWire(vertices=[Vec2R(x=2, y=1), Vec2R(x=7, y=1), Vec2R(x=7, y=2)])
+        node.vdd % SchemWire(vertices=[Vec2R(x=2, y=6), Vec2R(x=2, y=7), Vec2R(x=7, y=7), Vec2R(x=7, y=6)])
+        node.y % SchemWire(vertices=[Vec2R(x=9, y=4), Vec2R(x=10, y=4)])
+
+        helpers.schem_check(node, add_conn_points=True)
+>>>>>>> ngspicewindows
 
 class ResdivFlatTb(Cell):
     @generate
@@ -336,6 +381,7 @@ class ResdivFlatTb(Cell):
         s.a = Net()
         s.b = Net()
 
+<<<<<<< HEAD
         sym_vdc = Vdc(dc=R(1)).symbol
         sym_gnd = Gnd().symbol
         sym_res = Res(r=R(100)).symbol
@@ -345,14 +391,29 @@ class ResdivFlatTb(Cell):
         s.I2 = SchemInstance(sym_res.portmap(m=s.vss, p=s.a), pos=Vec2R(5, 6))
         s.I3 = SchemInstance(sym_res.portmap(m=s.a, p=s.b), pos=Vec2R(5, 11))
         s.I4 = SchemInstance(sym_res.portmap(m=s.b, p=s.vdd), pos=Vec2R(5, 16))
-        
+
         s.vss % SchemWire(vertices=[Vec2R(7, 4), Vec2R(7, 5), Vec2R(7, 6)])
         s.vss % SchemWire(vertices=[Vec2R(2, 6), Vec2R(2, 5), Vec2R(7, 5)])
         s.vdd % SchemWire(vertices=[Vec2R(2, 10), Vec2R(2, 21), Vec2R(7, 21), Vec2R(7, 20)])
         s.a % SchemWire(vertices=[Vec2R(7, 10), Vec2R(7, 11)])
         s.b % SchemWire(vertices=[Vec2R(7, 15), Vec2R(7, 16)])
-        
+
         s.outline = Rect4R(lx=0, ly=0, ux=9, uy=21)
+=======
+        node.I0 = SchemInstance(s_gnd.portmap(p=node.vss), pos=Vec2R(x=5,y=0))
+        node.I1 = SchemInstance(s_vdc.portmap(m=node.vss, p=node.vdd), pos=Vec2R(x=0,y=6))
+        node.I2 = SchemInstance(s_res.portmap(m=node.vss, p=node.a), pos=Vec2R(x=5,y=6))
+        node.I3 = SchemInstance(s_res.portmap(m=node.a, p=node.b), pos=Vec2R(x=5,y=11))
+        node.I4 = SchemInstance(s_res.portmap(m=node.b, p=node.vdd), pos=Vec2R(x=5,y=16))
+
+        node.vss % SchemWire(vertices=[Vec2R(x=7, y=4), Vec2R(x=7, y=5), Vec2R(x=7, y=6)])
+        node.vss % SchemWire(vertices=[Vec2R(x=2, y=6), Vec2R(x=2, y=5), Vec2R(x=7, y=5)])
+        node.vdd % SchemWire(vertices=[Vec2R(x=2, y=10), Vec2R(x=2, y=21), Vec2R(x=7, y=21), Vec2R(x=7, y=20)])
+        node.a % SchemWire(vertices=[Vec2R(x=7, y=10), Vec2R(x=7, y=11)])
+        node.b % SchemWire(vertices=[Vec2R(x=7, y=15), Vec2R(x=7, y=16)])
+
+        node.outline = Rect4R(lx=0, ly=0, ux=9, uy=21)
+>>>>>>> ngspicewindows
 
         helpers.schem_check(s, add_conn_points=True)
 
@@ -364,6 +425,43 @@ class ResdivFlatTb(Cell):
         sim = HighlevelSim(self.schematic, s)
         sim.op()
         return s
+
+    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1):
+        """Run async transient simulation."""
+        # Create hierarchical simulation
+        from ..sim2.sim_hierarchy import SimHierarchy
+        node = SimHierarchy()
+        highlevel_sim = HighlevelSim(self.schematic, node)
+
+        # Create result wrapper class
+        class TranResult:
+            def __init__(self, data_dict, sim_hierarchy, netlister, progress):
+                self._data = data_dict
+                self._node = sim_hierarchy
+                self._netlister = netlister
+                self.time = data_dict.get('time', 0.0)
+                self.progress = progress
+
+                # Create hierarchical access
+                for net in sim_hierarchy.all(SimNet):
+                    net_name = netlister.name_hier_simobj(net)
+                    if net_name in data_dict:
+                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
+
+                for inst in sim_hierarchy.all(SimInstance):
+                    inst_name = netlister.name_hier_simobj(inst)
+                    if inst_name in data_dict:
+                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
+
+
+        # Run simulation
+        with Ngspice.launch(backend=backend) as sim:
+            sim.load_netlist(highlevel_sim.netlister.out())
+
+            for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
+                data = data_point.get('data', {})
+                progress = data_point.get('progress', 0.0)
+                yield TranResult(data, node, highlevel_sim.netlister, progress)
 
 
 class ResdivHier2(Cell):
@@ -437,12 +535,12 @@ class ResdivHier1(Cell):
 
         sym_1 = ResdivHier2(r=R(100)).symbol
         sym_2 = ResdivHier2(r=R(200)).symbol
-    
+
         #s % SchemInstance(pos=Vec2R(5, 0), ref=sym_1, portmap={sym_1.t: s.m, sym_1.b:s.gnd, sym_1.r:s.br})
         s.I0 = SchemInstance(sym_1.portmap(t=s.m, b=s.b, r=s.br), pos=Vec2R(5, 0))
         s.I1 = SchemInstance(sym_2.portmap(t=s.t, b=s.m, r=s.tr), pos=Vec2R(5, 6))
         s.I2 = SchemInstance(sym_1.portmap(t=s.tr, b=s.br, r=s.r), pos=Vec2R(10, 3))
-        
+
         s.outline = Rect4R(lx=5, ly=-1, ux=15, uy=12)
 
         s.b % SchemWire(vertices=[Vec2R(7, -1), Vec2R(7, 0)])
@@ -463,7 +561,7 @@ class ResdivHierTb(Cell):
         s.t = Net()
         s.r = Net()
         s.gnd = Net()
-    
+
         s.I0 = SchemInstance(ResdivHier1().symbol.portmap(t=s.t, b=s.gnd, r=s.r), pos=Vec2R(5, 0))
         s.I1 = SchemInstance(NoConn().symbol.portmap(a=s.r), pos=Vec2R(10, 0))
         s.I2 = SchemInstance(Vdc(dc=R(1)).symbol.portmap(m=s.gnd, p=s.t), pos=Vec2R(0, 0))
@@ -493,6 +591,44 @@ class ResdivHierTb(Cell):
         sim.op()
         return s
 
+    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1):
+        """Run async transient simulation."""
+        # Create hierarchical simulation
+        from ..sim2.sim_hierarchy import SimHierarchy
+        node = SimHierarchy()
+        highlevel_sim = HighlevelSim(self.schematic, node)
+
+        # Create result wrapper class
+        class TranResult:
+            def __init__(self, data_dict, sim_hierarchy, netlister, progress):
+                self._data = data_dict
+                self._node = sim_hierarchy
+                self._netlister = netlister
+                self.time = data_dict.get('time', 0.0)
+                self.progress = progress
+
+                # Create hierarchical access
+                for net in sim_hierarchy.all(SimNet):
+                    net_name = netlister.name_hier_simobj(net)
+                    if net_name in data_dict:
+                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
+
+                for inst in sim_hierarchy.all(SimInstance):
+                    inst_name = netlister.name_hier_simobj(inst)
+                    if inst_name in data_dict:
+                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
+
+        # Run simulation
+        with Ngspice.launch(backend=backend) as sim:
+            netlist = highlevel_sim.netlister.out()
+            print(f"Netlist for {self.__class__.__name__}:\n{netlist}")
+            sim.load_netlist(netlist)
+
+            for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
+                data = data_point.get('data', {})
+                progress = data_point.get('progress', 0.0)
+                yield TranResult(data, node, highlevel_sim.netlister, progress)
+
 class NmosSourceFollowerTb(Cell):
     """Nmos (generic_mos) source follower with optional parameter vin."""
     @generate
@@ -509,14 +645,14 @@ class NmosSourceFollowerTb(Cell):
             vin = R(2)
 
         s.I0 = SchemInstance(Nmos(w=R('5u'), l=R('1u')).symbol.portmap(d=s.vdd, s=s.o, g=s.i, b=s.vss), pos=Vec2R(11, 12))
-        
+
         s.I1 = SchemInstance(Gnd().symbol.portmap(p=s.vss), pos=Vec2R(11, 0))
         s.I2 = SchemInstance(Vdc(dc=R('5')).symbol.portmap(m=s.vss, p=s.vdd), pos=Vec2R(0, 6))
         s.I3 = SchemInstance(Vdc(dc=vin).symbol.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6))
         s.I4 = SchemInstance(Idc(dc=R('5u')).symbol.portmap(m=s.vss, p=s.o), pos=Vec2R(11, 6))
-        
+
         s.outline = Rect4R(lx=0, ly=0, ux=16, uy=22)
-        
+
         helpers.schem_check(s, add_conn_points=True, add_terminal_taps=True)
 
         return s
@@ -527,6 +663,117 @@ class NmosSourceFollowerTb(Cell):
         sim = HighlevelSim(self.schematic, s)
         sim.op()
         return s
+
+    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1):
+        """Run async transient simulation."""
+        # Create hierarchical simulation
+        from ..sim2.sim_hierarchy import SimHierarchy
+        node = SimHierarchy()
+        highlevel_sim = HighlevelSim(self.schematic, node)
+
+        # Create result wrapper class
+        class TranResult:
+            def __init__(self, data_dict, sim_hierarchy, netlister, progress):
+                self._data = data_dict
+                self._node = sim_hierarchy
+                self._netlister = netlister
+                self.time = data_dict.get('time', 0.0)
+                self.progress = progress
+
+                # Create hierarchical access
+                for net in sim_hierarchy.all(SimNet):
+                    net_name = netlister.name_hier_simobj(net)
+                    if net_name in data_dict:
+                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
+
+                for inst in sim_hierarchy.all(SimInstance):
+                    inst_name = netlister.name_hier_simobj(inst)
+                    if inst_name in data_dict:
+                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
+
+
+        # Run simulation
+        with Ngspice.launch(backend=backend) as sim:
+            sim.load_netlist(highlevel_sim.netlister.out())
+
+            for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
+                data = data_point.get('data', {})
+                progress = data_point.get('progress', 0.0)
+                yield TranResult(data, node, highlevel_sim.netlister, progress)
+
+    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1):
+        """Run async transient simulation."""
+        # Create hierarchical simulation
+        from ..sim2.sim_hierarchy import SimHierarchy
+        node = SimHierarchy()
+        highlevel_sim = HighlevelSim(self.schematic, node)
+
+        # Create result wrapper class
+        class TranResult:
+            def __init__(self, data_dict, sim_hierarchy, netlister, progress):
+                self._data = data_dict
+                self._node = sim_hierarchy
+                self._netlister = netlister
+                self.time = data_dict.get('time', 0.0)
+                self.progress = progress
+
+                # Create hierarchical access
+                for net in sim_hierarchy.all(SimNet):
+                    net_name = netlister.name_hier_simobj(net)
+                    if net_name in data_dict:
+                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
+
+                for inst in sim_hierarchy.all(SimInstance):
+                    inst_name = netlister.name_hier_simobj(inst)
+                    if inst_name in data_dict:
+                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
+
+
+        # Run simulation
+        with Ngspice.launch(backend=backend) as sim:
+            sim.load_netlist(highlevel_sim.netlister.out())
+
+            for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
+                data = data_point.get('data', {})
+                progress = data_point.get('progress', 0.0)
+                yield TranResult(data, node, highlevel_sim.netlister, progress)
+
+    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1):
+        """Run async transient simulation."""
+        # Create hierarchical simulation
+        from ..sim2.sim_hierarchy import SimHierarchy
+        node = SimHierarchy()
+        highlevel_sim = HighlevelSim(self.schematic, node)
+
+        # Create result wrapper class
+        class TranResult:
+            def __init__(self, data_dict, sim_hierarchy, netlister, progress):
+                self._data = data_dict
+                self._node = sim_hierarchy
+                self._netlister = netlister
+                self.time = data_dict.get('time', 0.0)
+                self.progress = progress
+
+                # Create hierarchical access
+                for net in sim_hierarchy.all(SimNet):
+                    net_name = netlister.name_hier_simobj(net)
+                    if net_name in data_dict:
+                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
+
+                for inst in sim_hierarchy.all(SimInstance):
+                    inst_name = netlister.name_hier_simobj(inst)
+                    if inst_name in data_dict:
+                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
+
+
+        # Run simulation
+        with Ngspice.launch(backend=backend) as sim:
+            sim.load_netlist(highlevel_sim.netlister.out())
+
+            for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
+                data = data_point.get('data', {})
+                progress = data_point.get('progress', 0.0)
+                yield TranResult(data, node, highlevel_sim.netlister, progress)
 
 class InvTb(Cell):
     @generate
@@ -546,9 +793,9 @@ class InvTb(Cell):
         s.I2 = SchemInstance(Gnd().symbol.portmap(p=s.vss), pos=Vec2R(11, 0))
         s.I3 = SchemInstance(Vdc(dc=R('5')).symbol.portmap(m=s.vss, p = s.vdd), pos=Vec2R(0, 6))
         s.I4 = SchemInstance(Vdc(dc=vin).symbol.portmap(m=s.vss, p = s.i), pos=Vec2R(5, 6))
-        
+
         s.outline = Rect4R(lx=0, ly=0, ux=20, uy=14)
-        
+
         helpers.schem_check(s, add_conn_points=True, add_terminal_taps=True)
 
         return s
@@ -559,6 +806,52 @@ class InvTb(Cell):
         sim = HighlevelSim(self.schematic, s)
         sim.op()
         return s
+
+    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1, enable_savecurrents=True):
+        """Run async transient simulation.
+
+        Args:
+            tstep: Time step for the simulation
+            tstop: Stop time for the simulation
+            backend: Simulation backend ('ffi' or 'subprocess')
+            callback: Optional callback function for data updates
+            throttle_interval: Minimum time between callbacks (seconds)
+            enable_savecurrents: If True (default), enables .option savecurrents
+        """
+        # Create hierarchical simulation
+        from ..sim2.sim_hierarchy import SimHierarchy
+        node = SimHierarchy()
+        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents)
+
+        # Create result wrapper class
+        class TranResult:
+            def __init__(self, data_dict, sim_hierarchy, netlister, progress):
+                self._data = data_dict
+                self._node = sim_hierarchy
+                self._netlister = netlister
+                self.time = data_dict.get('time', 0.0)
+                self.progress = progress
+
+                # Create hierarchical access
+                for net in sim_hierarchy.all(SimNet):
+                    net_name = netlister.name_hier_simobj(net)
+                    if net_name in data_dict:
+                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
+
+                for inst in sim_hierarchy.all(SimInstance):
+                    inst_name = netlister.name_hier_simobj(inst)
+                    if inst_name in data_dict:
+                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
+
+
+        # Run simulation
+        with Ngspice.launch(backend=backend) as sim:
+            sim.load_netlist(highlevel_sim.netlister.out())
+
+            for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
+                data = data_point.get('data', {})
+                progress = data_point.get('progress', 0.0)
+                yield TranResult(data, node, highlevel_sim.netlister, progress)
 
 class InvSkyTb(Cell):
     @generate
@@ -599,3 +892,48 @@ class InvSkyTb(Cell):
         sim = HighlevelSim(self.schematic, s)
         sim.op()
         return s
+
+    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1, enable_savecurrents=False):
+        """Run async transient simulation.
+
+        Args:
+            tstep: Time step for the simulation
+            tstop: Stop time for the simulation
+            backend: Simulation backend ('ffi' or 'subprocess')
+            callback: Optional callback function for data updates
+            throttle_interval: Minimum time between callbacks (seconds)
+            enable_savecurrents: If False (default), disables .option savecurrents for Sky130 compatibility
+        """
+        # Create hierarchical simulation
+        from ..sim2.sim_hierarchy import SimHierarchy
+        node = SimHierarchy()
+        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents)
+
+        # Create result wrapper class
+        class TranResult:
+            def __init__(self, data_dict, sim_hierarchy, netlister, progress):
+                self._data = data_dict
+                self._node = sim_hierarchy
+                self._netlister = netlister
+                self.time = data_dict.get('time', 0.0)
+                self.progress = progress
+
+                # Create hierarchical access
+                for net in sim_hierarchy.all(SimNet):
+                    net_name = netlister.name_hier_simobj(net)
+                    if net_name in data_dict:
+                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
+
+                for inst in sim_hierarchy.all(SimInstance):
+                    inst_name = netlister.name_hier_simobj(inst)
+                    if inst_name in data_dict:
+                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
+
+        # Run simulation
+        with Ngspice.launch(backend=backend) as sim:
+            sim.load_netlist(highlevel_sim.netlister.out())
+
+            for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
+                data = data_point.get('data', {})
+                progress = data_point.get('progress', 0.0)
+                yield TranResult(data, node, highlevel_sim.netlister, progress)
