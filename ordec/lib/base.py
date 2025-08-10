@@ -11,7 +11,8 @@ from .. import helpers
 
 @public
 class Res(Cell):
-    spiceSymbol = "R"
+    r = Parameter(R)
+    alt_symbol = Parameter(bool, optional=True)
 
     @generate
     def symbol(self):
@@ -20,7 +21,7 @@ class Res(Cell):
         s.m = Pin(pos=Vec2R(2, 0), pintype=PinType.Inout, align=Orientation.South)
         s.p = Pin(pos=Vec2R(2, 4), pintype=PinType.Inout, align=Orientation.North)
         
-        if self.params.get("alt_symbol", False):
+        if self.alt_symbol:
             # Box symbol
             s % SymbolPoly(vertices=[Vec2R(1.5, 3), Vec2R(2.5, 3), Vec2R(2.5, 1), Vec2R(1.5, 1), Vec2R(1.5, 3)])
             s % SymbolPoly(vertices=[Vec2R(2, 3), Vec2R(2, 4)])
@@ -47,13 +48,16 @@ class Res(Cell):
         return s
     
     def netlist_ngspice(self, netlister, inst, schematic):
-        param_r = self.params.r
         pins = [inst.symbol.p, inst.symbol.m]
-        netlister.add(netlister.name_obj(inst, schematic, prefix="r"), netlister.portmap(inst, pins), f'r={param_r.compat_str()}')
+        netlister.add(netlister.name_obj(inst, schematic, prefix="r"), netlister.portmap(inst, pins), f'r={self.r.compat_str()}')
+
+    @classmethod
+    def discoverable_instances(cls):
+        return [cls('1k')]
 
 @public
 class Cap(Cell):
-    spiceSymbol = "C"
+    c = Parameter(R)
 
     @generate
     def symbol(self):
@@ -75,9 +79,13 @@ class Cap(Cell):
         s.outline = Rect4R(lx=0, ly=0, ux=4, uy=4)
         return s
 
+    @classmethod
+    def discoverable_instances(cls):
+        return [cls('1p')]
+
 @public
 class Ind(Cell):
-    spiceSymbol = "L"
+    l = Parameter(R)
 
     @generate
     def symbol(self):
@@ -102,14 +110,16 @@ class Ind(Cell):
 
         s.outline = Rect4R(lx=0, ly=0, ux=4, uy=4)
         return s
+
+    @classmethod
+    def discoverable_instances(cls):
+        return [cls('1u')]
  
 # Misc
 # ====
 
 @public
 class Gnd(Cell):
-    spiceSymbol = "V"
-
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -151,7 +161,8 @@ class NoConn(Cell):
 
 @public
 class Vdc(Cell):
-    #V: Rational = field(mandatory=True) 
+    dc = Parameter(R)
+    alt_symbol = Parameter(bool, optional=True)
 
     @generate
     def symbol(self):
@@ -167,7 +178,7 @@ class Vdc(Cell):
         s % SymbolPoly(vertices=[Vec2R(2, 3), Vec2R(2, 4)])
         s % SymbolPoly(vertices=[Vec2R(2, 1), Vec2R(2, 0)])
 
-        if self.params.get("alt_symbol", False):
+        if self.alt_symbol:
             #Pfeil
             s % SymbolPoly(vertices=[Vec2R(0.5, 1), Vec2R(0.5, 3)])
             s % SymbolPoly(vertices=[Vec2R(0.5, 3)+Vec2R(-0.2, -0.2), Vec2R(0.5, 3)])
@@ -190,14 +201,18 @@ class Vdc(Cell):
         return s
  
     def netlist_ngspice(self, netlister, inst, schematic):
-        param_dc = self.params.dc
         pins = [inst.symbol.p, inst.symbol.m]
-        netlister.add(netlister.name_obj(inst, schematic, prefix="v"), netlister.portmap(inst, pins) , f'dc {param_dc.compat_str()}')
+        netlister.add(netlister.name_obj(inst, schematic, prefix="v"), netlister.portmap(inst, pins) , f'dc {self.dc.compat_str()}')
+
+    @classmethod
+    def discoverable_instances(cls):
+        return [cls('1')]
 
 @public
 class Idc(Cell):
-    spiceSymbol = "I"
-    #V: Rational = field(mandatory=True) 
+    dc = Parameter(R)
+    alt_symbol = Parameter(bool, optional=True)
+
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -205,7 +220,7 @@ class Idc(Cell):
         s.m = Pin(pos=Vec2R(2, 0), pintype=PinType.Inout, align=Orientation.South)
         s.p = Pin(pos=Vec2R(2, 4), pintype=PinType.Inout, align=Orientation.North)
         
-        if self.params.get("alt_symbol", False):
+        if self.alt_symbol:
              #Kreis
             s % SymbolArc(pos=Vec2R(2, 4-2*0.7), radius=R(7,10))
             s % SymbolArc(pos=Vec2R(2, 0+2*0.7), radius=R(7,10))
@@ -232,9 +247,12 @@ class Idc(Cell):
         return s
 
     def netlist_ngspice(self, netlister, inst, schematic):
-        param_dc = self.params.dc
         pins = [inst.symbol.p, inst.symbol.m]
-        netlister.add(netlister.name_obj(inst, schematic, prefix="i"), netlister.portmap(inst, pins) , f'dc {param_dc.compat_str()}')
+        netlister.add(netlister.name_obj(inst, schematic, prefix="i"), netlister.portmap(inst, pins) , f'dc {self.dc.compat_str()}')
+
+    @classmethod
+    def discoverable_instances(cls):
+        return [cls('1u')]
 
 @public
 class PieceWiseLinearVoltageSource(Cell):
@@ -243,7 +261,6 @@ class PieceWiseLinearVoltageSource(Cell):
     Expects a parameter 'V' which is a list of (time, voltage) tuples.
     Example: V=[(0, 0), (1e-9, 1.8), (5e-9, 1.8), (6e-9, 0)]
     """
-    spiceSymbol = "V" 
     
     @generate
     def symbol(self):
@@ -282,8 +299,7 @@ class PulseVoltageSource(Cell):
     Requires parameters: initial_value, pulsed_value, delay_time,
                          rise_time, fall_time, pulse_width, period.
     """
-    spiceSymbol = "V"
-
+    
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -323,7 +339,6 @@ class SinusoidalVoltageSource(Cell):
     Requires parameters: offset, amplitude, frequency, delay.
     Optional parameter: damping_factor (defaults to 0).
     """
-    spiceSymbol = "V"
 
     @generate
     def symbol(self):
@@ -355,8 +370,6 @@ class SinusoidalVoltageSource(Cell):
 
 @public
 class PieceWiseLinearCurrentSource(Cell):
-    spiceSymbol = "I"
-
     @generate
     def symbol(self):
         """ Defines the schematic symbol for the PWL current source. """
@@ -402,8 +415,6 @@ class PulseCurrentSource(Cell):
     Requires parameters: initial_value, pulsed_value, delay_time,
                          rise_time, fall_time, pulse_width, period.
     """
-    spiceSymbol = "I"
-
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -452,8 +463,6 @@ class SinusoidalCurrentSource(Cell):
     Requires parameters: offset, amplitude, frequency, delay.
     Optional parameter: damping_factor (defaults to 0).
     """
-    spiceSymbol = "I"
-
     @generate
     def symbol(self):
         s = Symbol(cell=self)

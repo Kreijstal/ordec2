@@ -6,9 +6,9 @@
 .. autoclass:: Cell
   :members:
 
-.. py:decorator:: generate
+.. autodecorator:: generate
 
-  Decorator for view generator methods. Example:
+  Example:
 
   .. code-block:: python
 
@@ -19,3 +19,25 @@
             s.my_net = Net()
             # ...
             return s
+
+  To disable automatic refreshing in the web interface (e.g. for long simulations):
+
+  .. code-block:: python
+
+    class SomeCell(Cell):
+        @generate(auto_refresh=False)
+        def schematic(self):
+            # ...
+
+.. autodecorator:: generate_func
+
+  Example:
+
+  .. code-block:: python
+
+    @generate
+    def schematic():
+        s = Schematic()
+        s.my_net = Net()
+        # ...
+        return s

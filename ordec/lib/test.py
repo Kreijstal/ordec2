@@ -93,6 +93,8 @@ class DFF(Cell):
         return s
 
 class MultibitReg_Arrays(Cell):
+    bits = Parameter(int)
+
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -101,7 +103,7 @@ class MultibitReg_Arrays(Cell):
         s.vdd = Pin(pintype=PinType.In, align=Orientation.North)
         s.mkpath('d')
         s.mkpath('q')
-        for i in range(self.params.bits):
+        for i in range(self.bits):
             s.d[i] = Pin(pintype=PinType.In, align=Orientation.West)
             s.q[i] = Pin(pintype=PinType.Out, align=Orientation.East)
         s.clk = Pin(pintype=PinType.In, align=Orientation.West)
@@ -123,7 +125,7 @@ class MultibitReg_Arrays(Cell):
         s.vss % SchemPort(pos=Vec2R(1, 0), align=Orientation.East)
         s.vdd % SchemPort(pos=Vec2R(1, 1), align=Orientation.East)
         s.clk % SchemPort(pos=Vec2R(1, 2), align=Orientation.East)
-        for i in range(self.params.bits):
+        for i in range(self.bits):
             s.d[i] = Net(pin=self.symbol.d[i])
             s.q[i] = Net(pin=self.symbol.q[i])
             s.I[i] = SchemInstance(DFF().symbol.portmap(
@@ -139,7 +141,7 @@ class MultibitReg_Arrays(Cell):
             s.q[i] % SchemPort(pos=Vec2R(9, 5+8*i), align=Orientation.West)
             s.q[i] % SchemWire(vertices=[Vec2R(8, 5+8*i), Vec2R(9, 5+8*i)])
 
-        s.outline = Rect4R(lx=0, ly=0, ux=10, uy=2+8*self.params.bits)
+        s.outline = Rect4R(lx=0, ly=0, ux=10, uy=2+8*self.bits)
 
         helpers.schem_check(s, add_conn_points=True, add_terminal_taps=True)
 
@@ -147,6 +149,8 @@ class MultibitReg_Arrays(Cell):
 
 
 class MultibitReg_ArrayOfStructs(Cell):
+    bits = Parameter(int)
+
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -154,7 +158,7 @@ class MultibitReg_ArrayOfStructs(Cell):
         s.vss = Pin(pintype=PinType.In, align=Orientation.South)
         s.vdd = Pin(pintype=PinType.In, align=Orientation.North)
         s.mkpath('bit')
-        for i in range(self.params.bits):
+        for i in range(self.bits):
             s.bit.mkpath(i)
             s.bit[i].d = Pin(pintype=PinType.In, align=Orientation.West)
             s.bit[i].q = Pin(pintype=PinType.Out, align=Orientation.East)
@@ -164,6 +168,8 @@ class MultibitReg_ArrayOfStructs(Cell):
         return s
 
 class MultibitReg_StructOfArrays(Cell):
+    bits = Parameter(int)
+
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -173,7 +179,7 @@ class MultibitReg_StructOfArrays(Cell):
         s.mkpath('data')
         s.data.mkpath('d')
         s.data.mkpath('q')
-        for i in range(self.params.bits):
+        for i in range(self.bits):
             s.data.d[i] = Pin(pintype=PinType.In, align=Orientation.West)
             s.data.q[i] = Pin(pintype=PinType.Out, align=Orientation.East)
         s.clk = Pin(pintype=PinType.In, align=Orientation.West)
@@ -182,9 +188,17 @@ class MultibitReg_StructOfArrays(Cell):
         return s
 
 class TestNmosInv(Cell):
+<<<<<<< HEAD
     """
     For testing schem_check.
     """
+=======
+    """For testing schem_check."""
+
+    variant = Parameter(str)
+    add_conn_points = Parameter(bool)
+    add_terminal_taps = Parameter(bool)
+>>>>>>> main
 
     @generate
     def symbol(self):
@@ -208,88 +222,100 @@ class TestNmosInv(Cell):
         s.vdd = Net(pin=self.symbol.vdd)
         s.vss = Net(pin=self.symbol.vss)
 
+
         nmos = Nmos(w=R("500n"), l=R("250n")).symbol
 
         portmap = nmos.portmap(s=s.vss, b=s.vss, g=s.a, d=s.y)
-        if self.params.variant == "incorrect_pin_conn":
+        if self.variant == "incorrect_pin_conn":
             portmap = nmos.portmap(s=s.vss, b=s.a, g=s.a, d=s.y)
-        elif self.params.variant == "portmap_missing_key":
+        elif self.variant == "portmap_missing_key":
             portmap = nmos.portmap(s=s.vss, b=s.vss, d=s.y)
 
         s.pd = SchemInstance(portmap, pos=Vec2R(3, 2))
-        if self.params.variant == "portmap_stray_key":
-            s.pd % SchemInstanceConn(here=0, there=0)
-        elif self.params.variant == "portmap_bad_value":
+        if self.variant == "portmap_stray_key":
+            s.stray = Net()
+            s.pd % SchemInstanceConn(here=s.stray, there=0)
+        elif self.variant == "portmap_bad_value":
             list(s.pd.conns)[0].there = 12345
 
         s.pu = SchemInstance(nmos.portmap(d=s.vdd, b=s.vss, g=s.vdd, s=s.y), pos=Vec2R(3, 8))
-        if self.params.variant=="double_instance":
+        if self.variant=="double_instance":
             s.pu2 = SchemInstance(nmos.portmap(d=s.vdd, b=s.vss, g=s.vdd, s=s.y), pos=Vec2R(3, 8))
 
         s.vdd % SchemPort(pos=Vec2R(1, 13), align=Orientation.East)
         s.vss % SchemPort(pos=Vec2R(1, 1), align=Orientation.East)
         s.a % SchemPort(pos=Vec2R(1, 4), align=Orientation.East)
-        if self.params.variant == 'incorrect_port_conn':
+        if self.variant == 'incorrect_port_conn':
             s.vss % SchemPort(pos=Vec2R(9, 7), align=Orientation.West)
         else:
             s.y % SchemPort(pos=Vec2R(9, 7), align=Orientation.West)
+<<<<<<< HEAD
 
 
         if self.params.variant == "no_wiring":
+=======
+        
+        if self.variant == "no_wiring":
+>>>>>>> main
             s.default_supply = s.vdd
             s.default_ground = s.vss
         else:
             s.vss % SchemWire(vertices=[Vec2R(1, 1), Vec2R(5, 1), s.pd.pos + nmos.s.pos])
-            if self.params.variant == 'skip_single_pin':
+            if self.variant == 'skip_single_pin':
                 s.vss % SchemWire(vertices=[Vec2R(7, 4), Vec2R(8, 4)])
             else:
                 s.vss % SchemWire(vertices=[Vec2R(7, 4), Vec2R(8, 4), Vec2R(8, 10), Vec2R(7, 10)])
-            if self.params.variant not in ('net_partitioned', 'net_partitioned_tapped'):
+            if self.variant not in ('net_partitioned', 'net_partitioned_tapped'):
                 s.vss % SchemWire(vertices=[Vec2R(8, 4), Vec2R(8, 1), Vec2R(5, 1)])
 
-            if self.params.variant == 'net_partitioned_tapped':
+            if self.variant == 'net_partitioned_tapped':
                 s.vss % SchemTapPoint(pos=Vec2R(8, 4), align=Orientation.South)
                 s.vss % SchemTapPoint(pos=Vec2R(5, 1), align=Orientation.East)
 
-            if self.params.variant == 'vdd_bad_wiring':
+            if self.variant == 'vdd_bad_wiring':
                 s.vdd % SchemWire(vertices=[Vec2R(1, 13), Vec2R(2, 13)])
-            elif self.params.variant != 'skip_vdd_wiring':
+            elif self.variant != 'skip_vdd_wiring':
                 s.vdd % SchemWire(vertices=[Vec2R(1, 13), Vec2R(2, 13), Vec2R(5, 13), s.pu.pos + nmos.d.pos])
-                if self.params.variant == "terminal_multiple_wires":
+                if self.variant == "terminal_multiple_wires":
                     s.vdd % SchemWire(vertices=[Vec2R(1, 13), Vec2R(1, 10), Vec2R(3, 10)])
                 else:
                     s.vdd % SchemWire(vertices=[Vec2R(2, 13), Vec2R(2, 10), Vec2R(3, 10)])
 
-            if self.params.variant == "terminal_connpoint":
+            if self.variant == "terminal_connpoint":
                 s.vdd % SchemConnPoint(pos=Vec2R(1, 13))
 
-            if self.params.variant == "stray_conn_point":
+            if self.variant == "stray_conn_point":
                 s.vdd % SchemConnPoint(pos=Vec2R(5, 13))
-            if self.params.variant == "tap_short":
+            if self.variant == "tap_short":
                 s.vss % SchemTapPoint(pos=Vec2R(5, 13))
 
-            if self.params.variant == 'poly_short':
+            if self.variant == 'poly_short':
                 s.vdd % SchemWire(vertices=[Vec2R(2, 10), Vec2R(2, 4),])
 
             s.a % SchemWire(vertices=[Vec2R(1, 4), Vec2R(2, 4), Vec2R(3, 4)])
             s.y % SchemWire(vertices=[Vec2R(5, 6), Vec2R(5, 7), Vec2R(5, 8)])
             s.y % SchemWire(vertices=[Vec2R(5, 7), Vec2R(9, 7)])
+<<<<<<< HEAD
 
 
         if self.params.variant in ("manual_conn_points", "double_connpoint"):
+=======
+            
+        if self.variant in ("manual_conn_points", "double_connpoint"):
+>>>>>>> main
             s.vss % SchemConnPoint(pos=Vec2R(5, 1))
             s.vss % SchemConnPoint(pos=Vec2R(8, 4))
             s.vdd % SchemConnPoint(pos=Vec2R(2, 13))
             s.y % SchemConnPoint(pos=Vec2R(5, 7))
-            if self.params.variant == "double_connpoint":
+            if self.variant == "double_connpoint":
                 s.y % SchemConnPoint(pos=Vec2R(5, 7))
 
-        if self.params.variant == "unconnected_conn_point":
+        if self.variant == "unconnected_conn_point":
             s.y % SchemConnPoint(pos=Vec2R(4, 7))
 
 
         s.outline = Rect4R(lx=0, ly=1, ux=10, uy=13)
-        helpers.schem_check(s, add_conn_points=self.params.add_conn_points, add_terminal_taps=self.params.add_terminal_taps)
+        helpers.schem_check(s, add_conn_points=self.add_conn_points, add_terminal_taps=self.add_terminal_taps)
 
         return s
 
@@ -413,6 +439,8 @@ class ResdivFlatTb(Cell):
 
 
 class ResdivHier2(Cell):
+    r = Parameter(R)
+
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -437,7 +465,7 @@ class ResdivHier2(Cell):
         s.r % SchemPort(pos=Vec2R(10, 6), align=Orientation.West)
         s.b % SchemPort(pos=Vec2R(2, 0), align=Orientation.North)
 
-        sym_res = Res(r=self.params.r).symbol
+        sym_res = Res(r=self.r).symbol
 
         s.I0 = SchemInstance(sym_res.portmap(m=s.b, p=s.m), pos=Vec2R(0, 1))
         s.I1 = SchemInstance(sym_res.portmap(m=s.m, p=s.t), pos=Vec2R(0, 7))
@@ -579,6 +607,9 @@ class ResdivHierTb(Cell):
 
 class NmosSourceFollowerTb(Cell):
     """Nmos (generic_mos) source follower with optional parameter vin."""
+    
+    vin = Parameter(R)
+
     @generate
     def schematic(self):
         s = Schematic(cell=self)
@@ -588,7 +619,7 @@ class NmosSourceFollowerTb(Cell):
         s.o = Net()
         s.vss = Net()
         try:
-            vin = self.params.vin
+            vin = self.vin
         except AttributeError:
             vin = R(2)
 
@@ -724,6 +755,8 @@ class NmosSourceFollowerTb(Cell):
                 yield TranResult(data, node, highlevel_sim.netlister, progress)
 
 class InvTb(Cell):
+    vin = Parameter(R)
+    
     @generate
     def schematic(self):
         s = Schematic(cell=self)
@@ -732,7 +765,7 @@ class InvTb(Cell):
         s.o = Net()
         s.vss = Net()
         try:
-            vin = self.params.vin
+            vin = self.vin
         except AttributeError:
             vin = R(0)
 
@@ -802,6 +835,8 @@ class InvTb(Cell):
                 yield TranResult(data, node, highlevel_sim.netlister, progress)
 
 class InvSkyTb(Cell):
+    vin = Parameter(R)
+
     @generate
     def schematic(self):
         s = Schematic(cell=self)
@@ -811,7 +846,7 @@ class InvSkyTb(Cell):
         s.o = Net()
         s.vss = Net()
         try:
-            vin = self.params.vin
+            vin = self.vin
         except AttributeError:
             vin = R(0)
 

@@ -3,16 +3,18 @@
 
 export class OrdecClient {
     constructor(srctype, resultViewers, setStatus) {
-        this.views = []
-        this.reqPending = false
-        this.srctype = srctype
-        this.resultViewers = resultViewers
-        this.setStatus = setStatus
+        this.views = new Map();
+        this.reqPending = false;
+        this.srctype = srctype;
+        this.src = ""; // set by Editor from the outside
+        this.resultViewers = resultViewers;
+        this.setStatus = setStatus;
+        this.localModule = null; // Set to module name when in localModule mode.
     }
 
     getAuthCookie() {
         let authCookie = '';
-        document.cookie.split(';').forEach(function(el) {
+        document.cookie.split(';').forEach(el => {
             let split = el.split('=');
             if(split[0].trim() == 'ordecAuth') {
                 authCookie = split.slice(1).join("=");
@@ -32,62 +34,75 @@ export class OrdecClient {
             wsUrl.protocol = 'wss:';
         }
         this.sock = new WebSocket(wsUrl.href, []);
-        this.sock.onopen = this.wsOnOpen.bind(this);
-        this.sock.onmessage = this.wsOnMessage.bind(this);
-        this.sock.onclose = this.wsOnClose.bind(this);
+        this.sock.onopen = (ev) => this.wsOnOpen(ev);
+        this.sock.onmessage = (ev) => this.wsOnMessage(ev);
+        this.sock.onclose = (ev) => this.wsOnClose(ev);
         this.reqPending = false;
     }
 
     wsOnMessage(messageEvent) {
         const msg = JSON.parse(messageEvent.data);
         //console.log(msg)
-        if ((msg['msg'] == 'views') || (msg['msg'] == 'exception')) {
-            if (msg['msg'] == 'exception') {
-                this.exception = msg['exception']
-                this.setStatus('exception')
-            } else {
-                this.exception = undefined
-                this.views = msg['views']
-            }
-            this.resultViewers.forEach(function(rv) {
-                rv.updateGlobalState()
-            })
-            this.requestNextView()
+        if (msg['msg'] == 'viewlist') {
+            this.exception = null;
+            this.views.clear();
+            msg['views'].forEach(view => {
+                this.views.set(view.name, view);
+            });
+            this.resultViewers.forEach(rv => rv.updateGlobalState());
+            this.requestNextView();
+        } else if (msg['msg'] == 'exception') {
+            this.exception = msg['exception'];
+            this.setStatus('exception');
+            this.resultViewers.forEach(rv => rv.updateGlobalState());
+            this.requestNextView();
         } else if (msg['msg'] == 'view') {
             this.nextView.updateView(msg);
             this.reqPending = false;
             this.requestNextView();
+        } else if (msg['msg'] == 'localmodule_changed') {
+            console.log("ordecClient.connect() triggered by localmodule_changed message.");
+            this.connect();
         }
-    };
+    }
 
     wsOnClose(closeEvent) {
         if (!this.exception) {
-            this.exception = "Websocket disconnected.";
-            this.setStatus('disconnected')
+            //this.exception = "Websocket disconnected.";
+            this.setStatus('disconnected');
         }
-        this.resultViewers.forEach(function(rv) {
-            rv.updateGlobalState()
-        })
-    };
+    }
 
     wsOnOpen(event) {
-        this.setStatus('busy')
-        this.sock.send(JSON.stringify({
-            'msg': 'source',
-            'srctype': this.srctype,
-            'src': this.editor.editor.getValue(),
-            'auth': this.getAuthCookie(),
-        }))
+        let msg;
+        this.setStatus('busy');
+        if(this.localModule) {
+            // Local mode:
+            msg = {
+                msg: 'localmodule',
+                module: this.localModule,
+                auth: this.getAuthCookie(),
+            };
+        } else {
+            // Integrated mode:
+            msg = {
+                msg: 'source',
+                srctype: this.srctype,
+                src: this.src,
+                auth: this.getAuthCookie(),
+            };
+        }
+        this.sock.send(JSON.stringify(msg));
     }
 
     requestNextView() {
-        if (this.reqPending) {
+        if (this.reqPending || this.exception) {
             return;
         }
 
-        this.nextView = undefined;
+        this.nextView = null;
         this.resultViewers.some((rv) => {
-            if (!rv.viewLoaded && rv.viewRequested) {
+            if (rv.requestsView()) {
                 this.nextView = rv;
                 return true; // = "break;" in some()
             }
@@ -95,14 +110,15 @@ export class OrdecClient {
 
         if (this.nextView) {
             //console.log('next view', nextView.viewRequested)
+            this.setStatus('busy');
             this.sock.send(JSON.stringify({
-                'msg': 'getview',
-                'view': this.nextView.viewRequested,
-            }))
+                msg: 'getview',
+                view: this.nextView.viewSelected,
+            }));
             this.reqPending = true;
         } else {
             if (!this.exception) {
-                this.setStatus('ready')
+                this.setStatus('ready');
             }
         }
     }
