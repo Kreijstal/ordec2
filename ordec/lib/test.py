@@ -188,18 +188,9 @@ class MultibitReg_StructOfArrays(Cell):
         return s
 
 class TestNmosInv(Cell):
-<<<<<<< HEAD
     """
     For testing schem_check.
     """
-=======
-    """For testing schem_check."""
-
-    variant = Parameter(str)
-    add_conn_points = Parameter(bool)
-    add_terminal_taps = Parameter(bool)
->>>>>>> main
-
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -249,14 +240,10 @@ class TestNmosInv(Cell):
             s.vss % SchemPort(pos=Vec2R(9, 7), align=Orientation.West)
         else:
             s.y % SchemPort(pos=Vec2R(9, 7), align=Orientation.West)
-<<<<<<< HEAD
 
 
         if self.params.variant == "no_wiring":
-=======
         
-        if self.variant == "no_wiring":
->>>>>>> main
             s.default_supply = s.vdd
             s.default_ground = s.vss
         else:
@@ -295,14 +282,9 @@ class TestNmosInv(Cell):
             s.a % SchemWire(vertices=[Vec2R(1, 4), Vec2R(2, 4), Vec2R(3, 4)])
             s.y % SchemWire(vertices=[Vec2R(5, 6), Vec2R(5, 7), Vec2R(5, 8)])
             s.y % SchemWire(vertices=[Vec2R(5, 7), Vec2R(9, 7)])
-<<<<<<< HEAD
 
 
         if self.params.variant in ("manual_conn_points", "double_connpoint"):
-=======
-            
-        if self.variant in ("manual_conn_points", "double_connpoint"):
->>>>>>> main
             s.vss % SchemConnPoint(pos=Vec2R(5, 1))
             s.vss % SchemConnPoint(pos=Vec2R(8, 4))
             s.vdd % SchemConnPoint(pos=Vec2R(2, 13))
