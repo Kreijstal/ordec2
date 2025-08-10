@@ -7,6 +7,7 @@ path = [
     "docs/make.bat",
     "web/package-lock.json",
     "tests/renderview_ref/*.svg",
+    "ordec/webdist.tar",
 ]
 SPDX-FileCopyrightText = "NONE"
 SPDX-License-Identifier = "CC0-1.0"
