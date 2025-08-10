@@ -191,6 +191,10 @@ class TestNmosInv(Cell):
     """
     For testing schem_check.
     """
+    variant = Parameter(str, optional=True, default='default')
+    add_conn_points = Parameter(bool, optional=True, default=True)
+    add_terminal_taps = Parameter(bool, optional=True, default=False)
+    
     @generate
     def symbol(self):
         s = Symbol(cell=self)
