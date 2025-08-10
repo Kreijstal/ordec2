@@ -68,10 +68,10 @@ def select_backend(preferred: NgSpiceBackend) -> NgSpiceBackend:
     is_subprocess_available = _detect_subprocess_availability()
 
     if preferred == NgSpiceBackend.AUTO:
-        if is_subprocess_available:
-            return NgSpiceBackend.SUBPROCESS
         if is_ffi_available:
             return NgSpiceBackend.FFI
+        if is_subprocess_available:
+            return NgSpiceBackend.SUBPROCESS
         raise NgSpiceConfigError("No suitable NgSpice backend found. Please install NgSpice.")
     elif preferred == NgSpiceBackend.FFI:
         if is_ffi_available:
@@ -118,7 +118,17 @@ class NgspiceTransientResult:
 
         # Extract time data if we don't have it yet
         if not self.time and table.data:
-            self.time = [float(row[time_idx]) for row in table.data if len(row) > time_idx]
+            # Filter out any rows that might contain header strings
+            valid_time_data = []
+            for row in table.data:
+                if len(row) > time_idx:
+                    try:
+                        time_val = float(row[time_idx])
+                        valid_time_data.append(time_val)
+                    except (ValueError, TypeError):
+                        # Skip rows that can't be converted to float (likely headers)
+                        continue
+            self.time = valid_time_data
 
         # Extract signal data
         for i, header in enumerate(table.headers):
@@ -132,13 +142,15 @@ class NgspiceTransientResult:
                 if len(row) > i:
                     try:
                         signal_data.append(float(row[i]))
-                    except (ValueError, IndexError):
-                        signal_data.append(0.0)
+                    except (ValueError, TypeError, IndexError):
+                        # Skip rows that can't be converted to float or are malformed
+                        continue
 
-            self.signals[signal_name] = signal_data
-
-            # Categorize signals for easier access
-            self._categorize_signal(signal_name, signal_data)
+            # Only add signal if we got valid data
+            if signal_data:
+                self.signals[signal_name] = signal_data
+                # Categorize signals for easier access
+                self._categorize_signal(signal_name, signal_data)
 
     def _categorize_signal(self, signal_name, signal_data):
         """Categorize signals into voltages, currents, and branches."""
@@ -1055,8 +1067,14 @@ class _SubprocessBackend:
                             not data_line.strip()):
                             break
 
-                        # Add data row
-                        table.data.append(data_line.split())
+                        # Skip header lines that appear mid-data (these have text matching column names)
+                        if self._is_header_line(data_line, table.headers):
+                            continue
+
+                        # Add data row - split and validate it looks like numeric data
+                        row_data = data_line.split()
+                        if row_data and self._is_numeric_row(row_data):
+                            table.data.append(row_data)
 
                     result.add_table(table)
                     continue
@@ -1065,6 +1083,42 @@ class _SubprocessBackend:
             i += 1
 
         return result
+
+    def _is_header_line(self, line, expected_headers):
+        """Check if a line looks like a header line."""
+        if not line.strip():
+            return False
+            
+        # Check if line contains column names from the expected headers
+        line_lower = line.lower()
+        header_matches = 0
+        for header in expected_headers:
+            if header.lower() in line_lower:
+                header_matches += 1
+        
+        # If most headers are found in this line, it's likely a header
+        return header_matches >= len(expected_headers) * 0.6
+
+    def _is_numeric_row(self, row_data):
+        """Check if a row contains mostly numeric data."""
+        if not row_data:
+            return False
+            
+        numeric_count = 0
+        for item in row_data:
+            try:
+                float(item)
+                numeric_count += 1
+            except ValueError:
+                # First column might be an index (integer)
+                try:
+                    int(item)
+                    numeric_count += 1
+                except ValueError:
+                    pass
+        
+        # Consider it numeric if at least 80% of values are numbers
+        return numeric_count >= len(row_data) * 0.8
 
 
 def check_errors(ngspice_out):
