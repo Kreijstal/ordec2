@@ -9,13 +9,11 @@ The devcontainer provides a complete development environment equivalent to the D
 ### Core Tools
 - **Node.js 22** with npm for web frontend development
 - **Java 17** (Temurin distribution) for Java-based tools
-- **Rust** toolchain for building Krakatau
 - **Python 3.11** with virtual environment
 
 ### EDA Tools
 - **ngspice 44.2** - SPICE circuit simulator (compiled from source)
 - **OpenVAF 23.5.0** - Verilog-A compiler
-- **Krakatau (krak2)** - Java bytecode analysis toolkit
 
 ### Process Design Kits (PDKs)
 - **IHP SG13G2** - IHP's 130nm technology PDK
@@ -82,12 +80,6 @@ ngspice           # Start interactive mode
 ngspice -b circuit.cir  # Batch mode
 ```
 
-### Using Krakatau
-```bash
-krak2 dis MyClass.class     # Disassemble Java class
-krak2 asm MyClass.j         # Assemble from bytecode
-```
-
 ## Troubleshooting
 
 ### Setup fails
@@ -99,7 +91,7 @@ bash .devcontainer/setup.sh
 ### Missing tools
 Check that all tools are in PATH:
 ```bash
-which ngspice openvaf krak2 python node npm
+which ngspice openvaf python node npm
 ```
 
 ### PDK issues
