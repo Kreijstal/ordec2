@@ -33,10 +33,73 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
+      - name: Install system dependencies for ngspice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            automake \
+            bison \
+            flex \
+            gfortran \
+            libedit-dev \
+            libncurses-dev \
+            libtool \
+            libreadline-dev \
+            libgomp1 \
+            binutils \
+            wget \
+            ca-certificates \
+            zstd \
+            git
 
-      - name: Install Krakatau (krak2)
-        run: bash scripts/install-krakatau.sh
+      - name: Install ngspice 44.2
+        run: |
+          cd /tmp
+          wget -q https://netcologne.dl.sourceforge.net/project/ngspice/ng-spice-rework/44.2/ngspice-44.2.tar.gz
+          echo "e7dadfb7bd5474fd22409c1e5a67acdec19f77e597df68e17c5549bc1390d7fd ngspice-44.2.tar.gz" | sha256sum -c
+          tar xf ngspice-44.2.tar.gz
+          cd ngspice-44.2
+          ./configure --disable-debug --without-x --enable-xspice --disable-cider --enable-openmp --enable-osdi --with-readline=no --with-editline=no
+          make -j$(nproc --ignore=1)
+          sudo make install
+          
+      - name: Install OpenVAF 23.5.0
+        run: |
+          cd /tmp
+          wget -q https://openva.fra1.cdn.digitaloceanspaces.com/openvaf_23_5_0_linux_amd64.tar.gz
+          echo "79c0e08ad948a7a9f460dc87be88b261bbd99b63a4038db3c64680189f44e4f0 openvaf_23_5_0_linux_amd64.tar.gz" | sha256sum -c
+          tar xf openvaf_23_5_0_linux_amd64.tar.gz
+          sudo cp openvaf /usr/local/bin/
+          sudo chmod +x /usr/local/bin/openvaf
+          
+      - name: Install IHP Open PDK
+        run: |
+          cd /tmp
+          git init ihp-pdk
+          cd ihp-pdk
+          git remote add origin https://github.com/IHP-GmbH/IHP-Open-PDK.git
+          git fetch --depth 1 origin 0854e9bcd558b68c573149038b4c95706314e2f1
+          git checkout FETCH_HEAD
+          rm -rf ihp-sg13g2/libs.doc ihp-sg13g2/libs.tech/openems .git
+          sudo mkdir -p /usr/local/share/pdk
+          sudo cp -r ihp-sg13g2 /usr/local/share/pdk/
+          cd /usr/local/share/pdk/ihp-sg13g2/libs.tech/verilog-a/
+          sudo ./openvaf-compile-va.sh
+          echo "ORDEC_PDK_IHP_SG13G2=/usr/local/share/pdk/ihp-sg13g2" >> $GITHUB_ENV
+          
+      - name: Install SkyWater PDKs
+        run: |
+          cd /tmp
+          wget -q "https://github.com/efabless/volare/releases/download/sky130-fa87f8f4bbcc7255b6f0c0fb506960f531ae2392/common.tar.zst"
+          echo "c7c155596a1fd1fcf6d5414dfcffcbbcf4e35b2b33160af97f4340e763c97406 common.tar.zst" | sha256sum -c
+          wget -q "https://github.com/efabless/volare/releases/download/sky130-fa87f8f4bbcc7255b6f0c0fb506960f531ae2392/sky130_fd_pr.tar.zst"
+          echo "41dc9098541ed3329eba4ec7f5dfd1422eb09e94b623ea1f6dc3895f9ccebf63 sky130_fd_pr.tar.zst" | sha256sum -c
+          tar xf common.tar.zst
+          tar xf sky130_fd_pr.tar.zst
+          sudo mkdir -p /usr/local/share/pdk
+          sudo cp -r sky130A sky130B /usr/local/share/pdk/
+          sudo rm -rf /usr/local/share/pdk/sky130A/libs.tech/xschem /usr/local/share/pdk/sky130B/libs.tech/xschem
+          sudo rm -rf /usr/local/share/pdk/sky130A/libs.tech/openlane /usr/local/share/pdk/sky130B/libs.tech/openlane
+          echo "ORDEC_PDK_SKY130A=/usr/local/share/pdk/sky130A" >> $GITHUB_ENV
+          echo "ORDEC_PDK_SKY130B=/usr/local/share/pdk/sky130B" >> $GITHUB_ENV
