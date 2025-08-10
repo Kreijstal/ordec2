@@ -1,0 +1,60 @@
+=== ORDeC Sine Wave Testbench Demo ===
+
+1. Creating sine wave testbench...
+   ✓ Testbench created
+
+2. Generating SPICE netlist...
+   Generated netlist:
+     .title sinewavedemo_frequency_1k_amplitude_1__offset_0_
+     .option savecurrents
+     vsine_source input_node gnd SIN(0.0e0 1.0e0 1.0e3 0.0e0 0.0e0)
+     rload input_node gnd r=1.0e3
+     vgnd_inst gnd 0 dc 0
+     .end
+
+   Netlist validation:
+     ✓ Sine voltage source
+     ✓ Sine source instance
+     ✓ Load resistor
+     ✓ 1kHz frequency
+
+3. Detecting terminal capabilities...
+   ✗ SIXEL support: False
+   ✗ X11 support: False
+   ✓ ASCII support: True
+
+4. Demonstrating waveform display...
+   Generated demo sine wave data:
+   - Frequency: 1000 Hz
+   - Time points: 100
+   - Time range: 0.000 to 0.002 s
+   - Voltage range: -0.998 to 0.998 V
+
+   ASCII Art Plot:
+                            1kHz Sine Wave                            
+|                                          *                          
+|     ******                             *****                        
+|   **     **                          **     **                      
+|  **        *                        **        *                     
+| *           *                      *           *                    
+| *            *                    *             *                   
+|*              *                   *             *                   
+|               **                **               *                  
+|                 *               *                 *                *
+|                 *              *                   *              * 
+|                  *            *                     *            *  
+|                   *           *                      *          *   
+|                   **        **                       **        **   
+|                     *      *                           *      *     
++---------------------------------------------------------------------
+Time: 0.00e+00 to 1.98e-03 s
+Voltage: -0.998 to 0.998 V
+
+5. Summary:
+   ✓ SinusoidalVoltageSource with proper parameters implemented
+   ✓ SPICE netlist generation working
+   ✓ Terminal capability detection working
+   ✓ ASCII art plotting working
+   ✓ Framework ready for transient simulation
+
+Demo completed successfully! 🎉
