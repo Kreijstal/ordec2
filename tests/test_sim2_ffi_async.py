@@ -7,7 +7,6 @@ from ordec.core.rational import R
 
 
 def test_highlevel_async_tran_basic():
-    """Test basic high-level async transient simulation."""
     h = lib_test.ResdivFlatTb()
 
     data_points = []
@@ -35,7 +34,6 @@ def test_highlevel_async_tran_basic():
 
 
 def test_highlevel_async_tran_with_callback():
-    """Test async transient simulation with progress callback."""
     progress_updates = []
 
     def progress_callback(data_point):
@@ -69,7 +67,6 @@ def test_highlevel_async_tran_with_callback():
 
 
 def test_sky130_streaming_without_savecurrents():
-    """Test Sky130 streaming callbacks work when savecurrents is disabled."""
     h = lib_test.InvSkyTb(vin=R(2.5))
 
     callback_count = 0
@@ -85,16 +82,14 @@ def test_sky130_streaming_without_savecurrents():
                                                 callback=count_callback,
                                                 throttle_interval=0.05)):
         data_points.append(result)
-        if i >= 5:  # Collect reasonable number of points
+        if i >= 5:
             break
 
-    # Without savecurrents, Sky130 should receive streaming data
     assert len(data_points) >= 1, f"Expected at least 1 data point without savecurrents, got {len(data_points)}"
     assert callback_count >= 1, f"Expected at least 1 callback without savecurrents, got {callback_count}"
 
 
 def test_sky130_streaming_with_savecurrents():
-    """Test Sky130 streaming works with savecurrents enabled (may have different behavior)."""
     h = lib_test.InvSkyTb(vin=R(2.5))
 
     callback_count = 0
@@ -110,16 +105,14 @@ def test_sky130_streaming_with_savecurrents():
                                                 callback=count_callback,
                                                 throttle_interval=0.05)):
         data_points.append(result)
-        if i >= 5:  # Collect reasonable number of points
+        if i >= 5:
             break
 
-    # With savecurrents, Sky130 should still provide simulation data
     assert len(data_points) >= 1, f"Expected at least 1 data point with savecurrents, got {len(data_points)}"
     assert callback_count >= 0, f"Expected non-negative callbacks with savecurrents, got {callback_count}"
 
 
 def test_sky130_netlist_savecurrents_option():
-    """Test that enable_savecurrents parameter controls netlist generation."""
     from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 
     h = lib_test.InvSkyTb(vin=R(2.5))
@@ -145,62 +138,50 @@ def test_highlevel_async_mos_sourcefollower():
     data_points = []
     for i, result in enumerate(h.sim_tran_async("0.1u", "1u", backend='ffi')):
         data_points.append(result)
-        if i >= 5:  # Collect a few points
+        if i >= 5:
             break
 
-    # Should have at least one data point
     assert len(data_points) >= 1
 
-    # Verify the output voltage is reasonable for a source follower
     final_result = data_points[-1]
     assert hasattr(final_result, 'o')
     assert hasattr(final_result.o, 'voltage')
 
 
 def test_highlevel_async_mos_inverter():
-    """Test async transient simulation with MOS inverter."""
     h = lib_test.InvTb(vin=R(0))
 
     data_points = []
     for i, result in enumerate(h.sim_tran_async("0.1u", "1u", backend='ffi')):
         data_points.append(result)
-        if i >= 5:  # Collect a few points
+        if i >= 5:
             break
 
     # Should have at least one data point
     assert len(data_points) >= 1
 
-    # Verify the output voltage is reasonable for an inverter with low input
     final_result = data_points[-1]
     assert hasattr(final_result, 'o')
     assert hasattr(final_result.o, 'voltage')
 
 
 def test_highlevel_async_sky_inverter():
-    """Test async transient simulation with Sky130 inverter.
-
-    Uses enable_savecurrents=False to avoid zero-length current vectors
-    that interfere with Sky130 streaming callbacks.
-    """
     h = lib_test.InvSkyTb(vin=R(2.5))
 
     data_points = []
     for i, result in enumerate(h.sim_tran_async("0.1u", "1u", backend='ffi', enable_savecurrents=False)):
         data_points.append(result)
-        if i >= 5:  # Collect a few points
+        if i >= 5:
             break
 
-    # Should have at least one data point
     assert len(data_points) >= 1
 
-    # Verify the output voltage is reasonable for a Sky130 inverter
     final_result = data_points[-1]
     assert hasattr(final_result, 'o')
     assert hasattr(final_result.o, 'voltage')
 
 
 def test_highlevel_async_early_termination():
-    """Test early termination of async transient simulation."""
     h = lib_test.ResdivFlatTb()
 
     data_count = 0
@@ -210,11 +191,9 @@ def test_highlevel_async_early_termination():
         data_count += 1
         final_time = result.time
 
-        # Terminate early after collecting some data
         if data_count >= 5:
             break
 
-    # Should have terminated early (but static circuits may only yield one point)
     assert data_count >= 1
     assert data_count <= 5
 
@@ -226,7 +205,7 @@ def test_highlevel_async_multiple_circuits():
     results1 = []
     for i, result in enumerate(h1.sim_tran_async("0.1u", "1u", backend='ffi')):
         results1.append(result)
-        if i >= 3:  # Collect a few points
+        if i >= 3:
             break
 
     assert len(results1) >= 1
@@ -238,7 +217,7 @@ def test_highlevel_async_multiple_circuits():
     results2 = []
     for i, result in enumerate(h2.sim_tran_async("0.1u", "1u", backend='ffi')):
         results2.append(result)
-        if i >= 3:  # Collect a few points
+        if i >= 3:
             break
 
     assert len(results2) >= 1
@@ -247,7 +226,6 @@ def test_highlevel_async_multiple_circuits():
 
 
 def test_highlevel_async_parameter_sweep():
-    """Test async transient simulation with parameter variations."""
     input_voltages = [2.0, 3.0, 4.0]
     results = {}
 
@@ -257,7 +235,7 @@ def test_highlevel_async_parameter_sweep():
         async_results = []
         for i, result in enumerate(h.sim_tran_async("0.1u", "1u", backend='ffi')):
             async_results.append(result)
-            if i >= 3:  # Collect a few points
+            if i >= 3:
                 break
 
         assert len(async_results) >= 1
