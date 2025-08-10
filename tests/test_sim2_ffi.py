@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: 2025 ORDeC contributors
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import re
 import pytest
 from ordec.sim2.ngspice import Ngspice, NgspiceError, NgspiceFatalError, Netlister
