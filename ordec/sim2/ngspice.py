@@ -45,12 +45,8 @@ class NgSpiceBackend(Enum):
 
 
 def get_default_backend() -> NgSpiceBackend:
-    backend_str = os.environ.get('NGSPICE_BACKEND', 'auto').lower()
-    try:
-        return NgSpiceBackend(backend_str)
-    except ValueError:
-        warnings.warn(f"Invalid NGSPICE_BACKEND '{backend_str}', falling back to auto.")
-        return NgSpiceBackend.AUTO
+    # Environment variable option is disabled - always default to auto
+    return NgSpiceBackend.AUTO
 
 
 def _detect_ffi_availability() -> bool:

@@ -372,9 +372,10 @@ class ResdivFlatTb(Cell):
     @generate
     def sim_dc(self):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s)
+        sim = HighlevelSim(self.schematic, s, backend='subprocess')
         sim.op()
         return s
+
 
 
 class ResdivHier2(Cell):
@@ -496,15 +497,16 @@ class ResdivHierTb(Cell):
     def sim_hierarchy(self):
         s = SimHierarchy(cell=self)
         # Build SimHierarchy, but runs no simulations.
-        HighlevelSim(self.schematic, s)
+        HighlevelSim(self.schematic, s, backend='subprocess')
         return s
 
     @generate
     def sim_dc(self):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s)
+        sim = HighlevelSim(self.schematic, s, backend='subprocess')
         sim.op()
         return s
+
 
 class NmosSourceFollowerTb(Cell):
     """Nmos (generic_mos) source follower with optional parameter vin."""
@@ -540,9 +542,10 @@ class NmosSourceFollowerTb(Cell):
     @generate
     def sim_dc(self):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s)
+        sim = HighlevelSim(self.schematic, s, backend='subprocess')
         sim.op()
         return s
+
 
 class InvTb(Cell):
     vin = Parameter(R)
@@ -574,9 +577,10 @@ class InvTb(Cell):
     @generate
     def sim_dc(self):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s)
+        sim = HighlevelSim(self.schematic, s, backend='subprocess')
         sim.op()
         return s
+
 
 class InvSkyTb(Cell):
     vin = Parameter(R)
@@ -616,6 +620,7 @@ class InvSkyTb(Cell):
     @generate
     def sim_dc(self):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s)
+        sim = HighlevelSim(self.schematic, s, backend='subprocess')
         sim.op()
         return s
+
