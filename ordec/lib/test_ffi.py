@@ -45,7 +45,7 @@ class ResdivFlatTb(Cell):
     @generate
     def sim_dc(self):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s)
+        sim = HighlevelSim(self.schematic, s, backend='ffi')
         sim.op()
         return s
 
@@ -54,7 +54,7 @@ class ResdivFlatTb(Cell):
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
         node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node)
+        highlevel_sim = HighlevelSim(self.schematic, node, backend=backend)
 
         # Create result wrapper class
         class TranResult:
@@ -207,13 +207,13 @@ class ResdivHierTb(Cell):
     def sim_hierarchy(self):
         s = SimHierarchy(cell=self)
         # Build SimHierarchy, but runs no simulations.
-        HighlevelSim(self.schematic, s)
+        HighlevelSim(self.schematic, s, backend='ffi')
         return s
 
     @generate
     def sim_dc(self):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s)
+        sim = HighlevelSim(self.schematic, s, backend='ffi')
         sim.op()
         return s
 
@@ -222,7 +222,7 @@ class ResdivHierTb(Cell):
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
         node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node)
+        highlevel_sim = HighlevelSim(self.schematic, node, backend=backend)
 
         # Create result wrapper class
         class TranResult:
@@ -286,7 +286,7 @@ class NmosSourceFollowerTb(Cell):
     @generate
     def sim_dc(self):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s)
+        sim = HighlevelSim(self.schematic, s, backend='ffi')
         sim.op()
         return s
 
@@ -295,7 +295,7 @@ class NmosSourceFollowerTb(Cell):
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
         node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node)
+        highlevel_sim = HighlevelSim(self.schematic, node, backend=backend)
 
         # Create result wrapper class
         class TranResult:
@@ -354,7 +354,7 @@ class InvTb(Cell):
     @generate
     def sim_dc(self):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s)
+        sim = HighlevelSim(self.schematic, s, backend='ffi')
         sim.op()
         return s
 
@@ -372,7 +372,7 @@ class InvTb(Cell):
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
         node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents)
+        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents, backend=backend)
 
         # Create result wrapper class
         class TranResult:
@@ -439,7 +439,7 @@ class InvSkyTb(Cell):
     @generate
     def sim_dc(self):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s)
+        sim = HighlevelSim(self.schematic, s, backend='ffi')
         sim.op()
         return s
 
@@ -448,7 +448,7 @@ class InvSkyTb(Cell):
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
         node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents)
+        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents, backend=backend)
 
         # Create result wrapper class
         class TranResult:
