@@ -48,7 +48,7 @@ jobs:
           echo "e7dadfb7bd5474fd22409c1e5a67acdec19f77e597df68e17c5549bc1390d7fd ngspice-44.2.tar.gz" | sha256sum -c
           tar xf ngspice-44.2.tar.gz
           cd ngspice-44.2
-          ./configure --disable-debug --without-x --enable-xspice --disable-cider --enable-openmp --enable-osdi --with-readline=no --with-editline=no
+          ./configure --disable-debug --without-x --enable-xspice --disable-cider --enable-openmp --enable-osdi --with-readline=no --with-editline=no --enable-shared
           make -j$(nproc --ignore=1)
           sudo make install
           
@@ -96,6 +96,8 @@ jobs:
         run: |
           echo "Testing ngspice installation:"
           ngspice -v
+          echo "Testing ngspice shared libraries:"
+          ls -la /usr/local/lib/libngspice* || echo "No shared libraries found"
           echo "Testing OpenVAF installation:"
           openvaf --version
           echo "Testing PDK installations:"
