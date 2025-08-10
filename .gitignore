@@ -7,3 +7,6 @@ __pycache__
 *.ipynb
 *.swp
 dist/
+build/
+.pytest_cache/
+htmlcov/
