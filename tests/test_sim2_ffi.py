@@ -10,8 +10,8 @@ from ordec.lib import test_ffi as lib_test
 
 @pytest.fixture(autouse=True)
 def set_ffi_backend(monkeypatch):
-    """Set environment variable to force FFI backend for all tests in this file.
-    This ensures proper isolation from subprocess backend tests.
+    """Clear cell caches to prevent cross-contamination between tests.
+    FFI backend is now specified explicitly in testbench classes.
     """
     # Clear cell caches to prevent cross-contamination between backend tests
     from ordec.lib import test_ffi as lib_test
@@ -20,8 +20,6 @@ def set_ffi_backend(monkeypatch):
                      lib_test.ResdivFlatTb, lib_test.ResdivHierTb]:
         for cell_instance in cell_cls.instances.values():
             cell_instance.cached_subgraphs.clear()
-
-    monkeypatch.setenv('NGSPICE_BACKEND', 'ffi')
 
 def test_ngspice_illegal_netlist_1():
     with Ngspice.launch(backend="ffi", debug=True) as sim:

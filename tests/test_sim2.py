@@ -10,8 +10,8 @@ from ordec.lib import test as lib_test
 
 @pytest.fixture(autouse=True)
 def set_subprocess_backend(monkeypatch):
-    """Set environment variable to force subprocess backend for all tests in this file.
-    This ensures proper isolation from FFI backend tests.
+    """Clear cell caches to prevent cross-contamination between tests.
+    Subprocess backend is now specified explicitly in testbench classes.
     """
     # Clear cell caches to prevent cross-contamination between backend tests
     from ordec.lib import test as lib_test
@@ -20,8 +20,6 @@ def set_subprocess_backend(monkeypatch):
                      lib_test.ResdivFlatTb, lib_test.ResdivHierTb]:
         for cell_instance in cell_cls.instances.values():
             cell_instance.cached_subgraphs.clear()
-
-    monkeypatch.setenv('NGSPICE_BACKEND', 'subprocess')
 
 def test_ngspice_illegal_netlist_1():
     with Ngspice.launch(debug=True) as sim:
