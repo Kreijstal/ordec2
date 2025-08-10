@@ -88,7 +88,7 @@ class ResdivFlatTb(Cell):
 
 class ResdivHier2(Cell):
     r = Parameter(R)
-    
+
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -259,7 +259,7 @@ class ResdivHierTb(Cell):
 class NmosSourceFollowerTb(Cell):
     """Nmos (generic_mos) source follower with optional parameter vin."""
     vin = Parameter(R, optional=True, default=R(2))
-    
+
     @generate
     def schematic(self):
         s = Schematic(cell=self)
@@ -329,7 +329,7 @@ class NmosSourceFollowerTb(Cell):
 
 class InvTb(Cell):
     vin = Parameter(R, optional=True, default=R(0))
-    
+
     @generate
     def schematic(self):
         s = Schematic(cell=self)
@@ -406,7 +406,7 @@ class InvTb(Cell):
 
 class InvSkyTb(Cell):
     vin = Parameter(R, optional=True, default=R(0))
-    
+
     @generate
     def schematic(self):
         s = Schematic(cell=self)
