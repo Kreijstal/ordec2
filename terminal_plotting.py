@@ -15,10 +15,88 @@ import os
 import subprocess
 import sys
 import math
+import termios
+import tty
+import select
+
+def query_terminal_device_attributes():
+    """
+    Query terminal for Secondary Device Attributes (DA) to detect SIXEL support.
+    
+    Returns:
+        str or None: Terminal response or None if no response/error
+    """
+    if not sys.stdout.isatty() or not sys.stdin.isatty():
+        return None
+    
+    try:
+        # Save terminal settings
+        old_termios = termios.tcgetattr(sys.stdin.fileno())
+        
+        # Set terminal to raw mode with timeout
+        tty.setraw(sys.stdin.fileno())
+        new_termios = termios.tcgetattr(sys.stdin.fileno())
+        new_termios[6][termios.VMIN] = 0  # Non-blocking read  
+        new_termios[6][termios.VTIME] = 1  # 100ms timeout
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, new_termios)
+        
+        # Send Secondary Device Attributes query
+        sys.stdout.write('\033[>c')
+        sys.stdout.flush()
+        
+        # Wait for response with timeout
+        response = ""
+        if select.select([sys.stdin], [], [], 0.1)[0]:  # 100ms timeout
+            response = sys.stdin.read(32)  # Read up to 32 characters
+        
+        # Restore terminal settings
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, old_termios)
+        
+        return response if response else None
+        
+    except (OSError, termios.error, ImportError):
+        # Restore terminal settings on error
+        try:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, old_termios)
+        except:
+            pass
+        return None
+
+def detect_sixel_support():
+    """
+    Detect SIXEL support using proper Secondary Device Attributes query.
+    
+    Returns:
+        bool: True if SIXEL is supported, False otherwise
+    """
+    # Query terminal for device attributes
+    response = query_terminal_device_attributes()
+    
+    if not response:
+        # Fallback to basic terminal name detection
+        term = os.environ.get('TERM', '').lower()
+        # Known SIXEL-supporting terminals
+        sixel_terms = ['xterm', 'mintty', 'mlterm', 'foot', 'wezterm', 'ghostty']
+        return any(term_name in term for term_name in sixel_terms)
+    
+    # Parse the response: format is \e[>P1;P2;P3c
+    # P1 indicates terminal type - values 2, 4, 64, 65 indicate SIXEL support
+    import re
+    match = re.match(r'\033\[>(\d+);.*?c', response)
+    if match:
+        terminal_type = int(match.group(1))
+        # Terminal types that support SIXEL:
+        # 2: VT240, VT241
+        # 4: VT340, VT330 (and modern emulators like XTerm)
+        # 64: VT520
+        # 65: VT525
+        return terminal_type in [2, 3, 4, 64, 65]
+    
+    return False
 
 def detect_terminal_capabilities():
     """
-    Comprehensive terminal capability detection.
+    Comprehensive terminal capability detection using proper methods.
     
     Returns:
         dict: Dictionary with keys 'sixel', 'x11', 'ascii' and boolean values
@@ -50,23 +128,8 @@ def detect_terminal_capabilities():
     except:
         capabilities['unicode'] = False
     
-    # Check for sixel support
-    term = os.environ.get('TERM', '')
-    if term:
-        # Terminals known to support sixel
-        sixel_terms = ['xterm', 'mintty', 'mlterm', 'foot']
-        capabilities['sixel'] = any(x in term for x in sixel_terms) and capabilities['color']
-        
-        # Advanced detection: try sending sixel escape sequence
-        if capabilities['sixel']:
-            try:
-                # Send a simple sixel test (very small 1x1 pixel)
-                # This is a safe test that shouldn't cause issues
-                sys.stdout.write('\033Pq"1;1;8;8#0;2;0;0;0#0N\033\\')
-                sys.stdout.flush()
-                capabilities['sixel'] = True
-            except:
-                capabilities['sixel'] = False
+    # Check for sixel support using proper DA query
+    capabilities['sixel'] = detect_sixel_support()
     
     # Check for X11 server
     display = os.environ.get('DISPLAY')

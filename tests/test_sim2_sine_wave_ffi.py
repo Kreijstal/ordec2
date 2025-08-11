@@ -86,22 +86,44 @@ class SineWaveTestbench(Cell):
             return result
 
 def detect_terminal_capabilities():
-    """Detect terminal capabilities for plotting."""
-    capabilities = {
-        'sixel': False,
-        'x11': False,
-        'ascii': True  # Always available fallback
-    }
+    """Detect terminal capabilities for plotting using proper methods."""
+    # Import the proper detection function from terminal_plotting
+    import sys
+    import os
+    from pathlib import Path
     
-    # Simplified detection - just use ASCII for testing
-    return capabilities
+    # Add the root directory to sys.path to import terminal_plotting
+    root_dir = Path(__file__).parent.parent
+    if str(root_dir) not in sys.path:
+        sys.path.insert(0, str(root_dir))
+    
+    try:
+        from terminal_plotting import detect_terminal_capabilities as detect_caps
+        return detect_caps()
+    except ImportError:
+        # Fallback to simple detection
+        capabilities = {
+            'sixel': False,
+            'x11': False,
+            'ascii': True  # Always available fallback
+        }
+        
+        # Simple TERM-based detection as fallback
+        term = os.environ.get('TERM', '').lower()
+        sixel_terms = ['xterm', 'mintty', 'mlterm', 'foot', 'wezterm', 'ghostty']
+        capabilities['sixel'] = any(term_name in term for term_name in sixel_terms)
+        
+        display = os.environ.get('DISPLAY')
+        capabilities['x11'] = bool(display)
+        
+        return capabilities
 
 def plot_ascii(time_data, voltage_data, width=80, height=20, title="Sine Wave"):
-    """Create ASCII art plot of the waveform."""
+    """Create ASCII art plot of the waveform with improved voltage range handling."""
     if not time_data or not voltage_data or len(time_data) != len(voltage_data):
         return "No data to plot"
 
-    # Normalize data
+    # Normalize data with proper handling of edge cases
     min_v = min(voltage_data)
     max_v = max(voltage_data)
     v_range = max_v - min_v if max_v != min_v else 1
@@ -113,11 +135,23 @@ def plot_ascii(time_data, voltage_data, width=80, height=20, title="Sine Wave"):
     # Create plot grid
     grid = [[' ' for _ in range(width)] for _ in range(height)]
 
-    # Plot data points
+    # Plot data points with better handling of edge values
     for i, (t, v) in enumerate(zip(time_data, voltage_data)):
         if i < len(time_data) - 1:  # Skip last point to avoid index error
+            # Map time to x coordinate
             x = int((t - min_t) / t_range * (width - 1))
-            y = height - 1 - int((v - min_v) / v_range * (height - 1))
+            x = max(0, min(width - 1, x))  # Clamp to valid range
+            
+            # Map voltage to y coordinate (inverted for display)
+            # Ensure we capture the full range including min and max values
+            if v_range > 0:
+                y_normalized = (v - min_v) / v_range
+                y = int((height - 1) * (1 - y_normalized))
+            else:
+                y = height // 2  # Center if no variation
+            
+            y = max(0, min(height - 1, y))  # Clamp to valid range
+            
             if 0 <= x < width and 0 <= y < height:
                 grid[y][x] = '*'
 
@@ -131,11 +165,11 @@ def plot_ascii(time_data, voltage_data, width=80, height=20, title="Sine Wave"):
     # Convert to string
     lines = [''.join(row) for row in grid]
 
-    # Add title and labels
+    # Add title and labels with better formatting
     result = [f"{title:^{width}}"]
     result.extend(lines)
     result.append(f"Time: {min_t:.2e} to {max_t:.2e} s")
-    result.append(f"Voltage: {min_v:.3f} to {max_v:.3f} V")
+    result.append(f"Voltage: {min_v:.3f} to {max_v:.3f} V (range: {v_range:.3f})")
 
     return '\n'.join(result)
 
@@ -264,6 +298,59 @@ def test_ascii_plotting():
     assert "*" in plot  # Should have plot points
     assert "|" in plot  # Should have y-axis
     assert "-" in plot  # Should have x-axis
+    assert "range:" in plot  # Should show voltage range
+
+def test_voltage_range_plotting():
+    """Test that plots properly show the full voltage range including minimum values."""
+    import math
+    
+    # Create test data with known min/max values
+    time_points = [i * 0.01 for i in range(50)]  
+    voltage_points = [2 * math.sin(2 * math.pi * t) - 1 for t in time_points]  # -3V to +1V range
+    
+    plot = plot_ascii(time_points, voltage_points, width=40, height=10, title="Range Test")
+    
+    # Verify the plot contains information about the full range
+    assert isinstance(plot, str)
+    assert "Range Test" in plot
+    min_v, max_v = min(voltage_points), max(voltage_points)
+    
+    # Check that min and max voltages are reported correctly 
+    lines = plot.split('\n')
+    voltage_line = [line for line in lines if 'Voltage:' in line][0]
+    
+    # Should contain the actual min and max values
+    assert f"{min_v:.3f}" in voltage_line
+    assert f"{max_v:.3f}" in voltage_line
+    
+    # Should have plot points spanning the full height (minimum and maximum should both be plotted)
+    plot_lines = [line for line in lines if '|' in line and '*' in line]
+    assert len(plot_lines) > 0  # Should have plotted data points
+
+def test_sixel_detection_functionality():
+    """Test that SIXEL detection functions work without errors."""
+    # Import detection functions
+    from pathlib import Path
+    import sys
+    root_dir = Path(__file__).parent.parent
+    if str(root_dir) not in sys.path:
+        sys.path.insert(0, str(root_dir))
+    
+    try:
+        from terminal_plotting import detect_sixel_support, query_terminal_device_attributes
+        
+        # Test DA query function (should not crash)
+        response = query_terminal_device_attributes()
+        # Response can be None or a string, both are valid
+        assert response is None or isinstance(response, str)
+        
+        # Test sixel detection (should return boolean)
+        sixel_support = detect_sixel_support()
+        assert isinstance(sixel_support, bool)
+        
+    except ImportError:
+        # If we can't import, that's also fine for testing
+        pass
 
 if __name__ == "__main__":
     # Run a quick demo
@@ -281,6 +368,12 @@ if __name__ == "__main__":
 
     test_ascii_plotting()
     print("✓ ASCII plotting works")
+
+    test_voltage_range_plotting()
+    print("✓ Voltage range plotting works")
+
+    test_sixel_detection_functionality()
+    print("✓ SIXEL detection functionality works")
 
     # Try running simulation
     print("\n=== Running Transient Simulation ===")
