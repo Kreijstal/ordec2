@@ -74,7 +74,6 @@ class SineWaveTestbench(Cell):
         helpers.schem_check(s, add_conn_points=True, add_terminal_taps=True)
         return s
 
-    @generate
     def sim_tran(self, tstep="1u", tstop="10m"):
         """Run transient simulation."""
         s = SimHierarchy(cell=self)
