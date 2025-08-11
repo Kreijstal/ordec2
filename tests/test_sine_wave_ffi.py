@@ -15,8 +15,15 @@ from ordec import helpers
 
 @pytest.fixture(autouse=True)
 def set_backend(monkeypatch):
-    """Set environment variable to use subprocess backend since FFI is not available."""
-    monkeypatch.setenv('NGSPICE_BACKEND', 'subprocess')
+    """Use FFI backend if available, otherwise fall back to subprocess."""
+    # Try FFI first, then subprocess
+    monkeypatch.setenv('NGSPICE_BACKEND', 'auto')
+
+class SineWaveSimResult:
+    """Simple container for simulation results."""
+    def __init__(self, time, signals):
+        self._sim_time = time
+        self._sim_signals = signals
 
 class SineWaveTestbench(Cell):
     """A testbench that uses SinusoidalVoltageSource with a load resistor."""
@@ -73,24 +80,25 @@ class SineWaveTestbench(Cell):
         helpers.schem_check(s, add_conn_points=True, add_terminal_taps=True)
         return s
 
-    @generate 
     def sim_tran(self, tstep="1u", tstop="10m"):
         """Run transient simulation."""
         s = SimHierarchy(cell=self)
         sim = HighlevelSim(self.schematic, s)
         
-        # Use the built-in tran method
-        with Ngspice.launch(backend="subprocess", debug=False) as ngspice_sim:
+        # Use the best available backend (FFI preferred, then subprocess)
+        with Ngspice.launch(backend="auto", debug=False) as ngspice_sim:
+            # Detect which backend was actually selected
+            backend_type = type(ngspice_sim._backend_impl).__name__
+            print(f"Using {backend_type} backend")
             netlist = sim.netlister.out()
             ngspice_sim.load_netlist(netlist)
             result = ngspice_sim.tran(tstep, tstop)
             
-            # Store the raw result
-            s.tran_result = result
-            s.time = result.time if result.time else []
-            s.signals = result.signals if result.signals else {}
-            
-        return s
+            # Return a simple result object instead of storing in SimHierarchy
+            return SineWaveSimResult(
+                time=result.time if result.time else [],
+                signals=result.signals if result.signals else {}
+            )
 
 def detect_terminal_capabilities():
     """Detect terminal capabilities for plotting."""
@@ -231,55 +239,38 @@ def test_sine_wave_transient_simulation():
     assert 'vsine_source' in netlist
     print("✓ Netlist generation and validation successful")
     
-    try:
-        # Attempt actual simulation
-        result = tb.sim_tran(tstep="10u", tstop="2m")  # 2ms = 2 periods at 1kHz
+    # Attempt actual simulation
+    result = tb.sim_tran(tstep="10u", tstop="2m")  # 2ms = 2 periods at 1kHz
+    
+    assert result is not None
+    assert hasattr(result, '_sim_time')
+    assert hasattr(result, '_sim_signals')
+    
+    if result._sim_time and len(result._sim_time) > 1:
+        print(f"Simulation successful! {len(result._sim_time)} time points")
+        print(f"Time range: {min(result._sim_time):.2e} to {max(result._sim_time):.2e} seconds")
         
-        assert result is not None
-        assert hasattr(result, 'time')
-        assert hasattr(result, 'signals')
-        
-        if result.time and len(result.time) > 1:
-            print(f"Simulation successful! {len(result.time)} time points")
-            print(f"Time range: {min(result.time):.2e} to {max(result.time):.2e} seconds")
+        # Look for the input_node signal (the sine wave)
+        if 'input_node' in result._sim_signals:
+            signal_data = result._sim_signals['input_node']
             
-            # Look for voltage signals
-            voltage_signals = {k: v for k, v in result.signals.items() 
-                             if not k.lower().startswith('@') and k.lower() != 'time'}
+            print(f"Found sine wave signal: input_node")
+            print(f"Voltage range: {min(signal_data):.3f} to {max(signal_data):.3f} V")
             
-            if voltage_signals:
-                signal_name = list(voltage_signals.keys())[0]
-                signal_data = voltage_signals[signal_name]
-                
-                print(f"Found voltage signal: {signal_name}")
-                print(f"Voltage range: {min(signal_data):.3f} to {max(signal_data):.3f} V")
-                
-                # Display the waveform
-                display_sine_wave(result.time, signal_data, 
-                                title=f"Sine Wave {tb.params.get('frequency', R(1000)).compat_str()}Hz")
-                
-                # Basic validation - should see sine wave characteristics
-                assert len(signal_data) > 1
-                assert max(signal_data) > min(signal_data)  # Should have variation
-                print("✓ Full simulation test passed!")
-                
-            else:
-                print("No voltage signals found in simulation results")
-                print("Available signals:", list(result.signals.keys()))
+            # Display the waveform
+            display_sine_wave(result._sim_time, signal_data, 
+                            title=f"Sine Wave {tb.params.get('frequency', R(1000)).compat_str()}Hz")
+            
+            # Basic validation - should see sine wave characteristics
+            assert len(signal_data) > 1
+            assert max(signal_data) > min(signal_data)  # Should have variation
+            print("✓ Full simulation test passed!")
+            
         else:
-            print("No time data in simulation results")
-            
-    except Exception as e:
-        print(f"Simulation engine failed: {e}")
-        # Since netlist generation works, we can verify the core functionality
-        # The subprocess backend has known parsing issues in some environments
-        if "could not convert string to float" in str(e) or "circuit not parsed" in str(e):
-            print("✓ Known subprocess backend issue - core functionality validated through netlist generation")
-            # Test passes because we validated the important parts work
-            return
-        else:
-            # Unexpected error, re-raise it
-            raise
+            print("Input node signal not found in simulation results")
+            print("Available signals:", list(result._sim_signals.keys()))
+    else:
+        print("No time data in simulation results")
 
 def test_terminal_capabilities():
     """Test terminal capability detection."""
