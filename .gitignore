@@ -13,3 +13,4 @@ htmlcov/
 ordec/webdist.tar
 sky130A/
 sky130B/
+test_venv/
