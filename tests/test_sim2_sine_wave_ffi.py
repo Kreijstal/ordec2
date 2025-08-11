@@ -13,12 +13,6 @@ from ordec.core import *
 from ordec import Rational as R
 from ordec import helpers
 
-class SineWaveSimResult:
-    """Simple container for simulation results."""
-    def __init__(self, time, signals):
-        self._sim_time = time
-        self._sim_signals = signals
-
 class SineWaveTestbench(Cell):
     """A testbench that uses SinusoidalVoltageSource with a load resistor."""
     frequency = Parameter(R, optional=True)
@@ -87,12 +81,9 @@ class SineWaveTestbench(Cell):
             netlist = sim.netlister.out()
             ngspice_sim.load_netlist(netlist)
             result = ngspice_sim.tran(tstep, tstop)
-
-            # Return a simple result object instead of storing in SimHierarchy
-            return SineWaveSimResult(
-                time=result.time if result.time else [],
-                signals=result.signals if result.signals else {}
-            )
+            
+            # Return the NgspiceTransientResult directly
+            return result
 
 def detect_terminal_capabilities():
     """Detect terminal capabilities for plotting."""
@@ -101,26 +92,8 @@ def detect_terminal_capabilities():
         'x11': False,
         'ascii': True  # Always available fallback
     }
-
-    # Check for sixel support
-    if os.environ.get('TERM'):
-        # Check if terminal supports sixel
-        try:
-            result = subprocess.run(['tput', 'colors'], capture_output=True, text=True, timeout=2)
-            if result.returncode == 0 and int(result.stdout.strip()) >= 256:
-                # Advanced terminal, might support sixel
-                capabilities['sixel'] = os.environ.get('TERM') in ['xterm-256color', 'screen-256color'] or 'xterm' in os.environ.get('TERM', '')
-        except:
-            pass
-
-    # Check for X11 server
-    if os.environ.get('DISPLAY'):
-        try:
-            result = subprocess.run(['xdpyinfo'], capture_output=True, timeout=2)
-            capabilities['x11'] = result.returncode == 0
-        except:
-            pass
-
+    
+    # Simplified detection - just use ASCII for testing
     return capabilities
 
 def plot_ascii(time_data, voltage_data, width=80, height=20, title="Sine Wave"):
@@ -237,22 +210,22 @@ def test_sine_wave_transient_simulation():
     result = tb.sim_tran(tstep="10u", tstop="2m")  # 2ms = 2 periods at 1kHz
 
     assert result is not None
-    assert hasattr(result, '_sim_time')
-    assert hasattr(result, '_sim_signals')
+    assert hasattr(result, 'time')
+    assert hasattr(result, 'signals')
 
-    if result._sim_time and len(result._sim_time) > 1:
-        print(f"Simulation successful! {len(result._sim_time)} time points")
-        print(f"Time range: {min(result._sim_time):.2e} to {max(result._sim_time):.2e} seconds")
+    if result.time and len(result.time) > 1:
+        print(f"Simulation successful! {len(result.time)} time points")
+        print(f"Time range: {min(result.time):.2e} to {max(result.time):.2e} seconds")
 
         # Look for the input_node signal (the sine wave)
-        if 'input_node' in result._sim_signals:
-            signal_data = result._sim_signals['input_node']
+        if 'input_node' in result.signals:
+            signal_data = result.signals['input_node']
 
             print(f"Found sine wave signal: input_node")
             print(f"Voltage range: {min(signal_data):.3f} to {max(signal_data):.3f} V")
 
             # Display the waveform
-            display_sine_wave(result._sim_time, signal_data,
+            display_sine_wave(result.time, signal_data,
                             title=f"Sine Wave {tb.params.get('frequency', R(1000)).compat_str()}Hz")
 
             # Basic validation - should see sine wave characteristics
@@ -262,7 +235,7 @@ def test_sine_wave_transient_simulation():
 
         else:
             print("Input node signal not found in simulation results")
-            print("Available signals:", list(result._sim_signals.keys()))
+            print("Available signals:", list(result.signals.keys()))
     else:
         print("No time data in simulation results")
 
