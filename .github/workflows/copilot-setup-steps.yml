@@ -140,4 +140,4 @@ jobs:
       - name: Test ngspice FFI functionality
         run: |
           # Test that FFI backend works with the installed shared library
-          python -m pytest tests/test_sim2_ffi.py -v
+          python -m pytest tests/test_sim2_ffi_async.py -v
