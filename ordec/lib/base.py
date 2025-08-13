@@ -79,6 +79,10 @@ class Cap(Cell):
         s.outline = Rect4R(lx=0, ly=0, ux=4, uy=4)
         return s
 
+    def netlist_ngspice(self, netlister, inst, schematic):
+        pins = [inst.symbol.p, inst.symbol.m]
+        netlister.add(netlister.name_obj(inst, schematic, prefix="c"), netlister.portmap(inst, pins), f'c={self.c.compat_str()}')
+
     @classmethod
     def discoverable_instances(cls):
         return [cls('1p')]
@@ -110,6 +114,10 @@ class Ind(Cell):
 
         s.outline = Rect4R(lx=0, ly=0, ux=4, uy=4)
         return s
+
+    def netlist_ngspice(self, netlister, inst, schematic):
+        pins = [inst.symbol.p, inst.symbol.m]
+        netlister.add(netlister.name_obj(inst, schematic, prefix="l"), netlister.portmap(inst, pins), f'l={self.l.compat_str()}')
 
     @classmethod
     def discoverable_instances(cls):
@@ -261,7 +269,8 @@ class PieceWiseLinearVoltageSource(Cell):
     Expects a parameter 'V' which is a list of (time, voltage) tuples.
     Example: V=[(0, 0), (1e-9, 1.8), (5e-9, 1.8), (6e-9, 0)]
     """
-    
+    V = Parameter(list)
+
     @generate
     def symbol(self):
         """ Defines the schematic symbol for the PWL source. """
@@ -292,6 +301,21 @@ class PieceWiseLinearVoltageSource(Cell):
         s.outline = Rect4R(lx=0, ly=0, ux=4, uy=4)
         return s
 
+    def netlist_ngspice(self, netlister, inst, schematic):
+        pins = [inst.symbol.p, inst.symbol.m]
+
+        V_list = self.params['V']
+
+        # Coerce values to Rational
+        V_rational = [(R(t), R(v)) for t, v in V_list]
+
+        pwl_args = " ".join([f"{v.compat_str()}" for t, v_val in V_rational for v in (t, v_val)])
+
+        netlister.add(
+            netlister.name_obj(inst, schematic, prefix="v"),
+            netlister.portmap(inst, pins),
+            f'PWL({pwl_args})')
+
 @public
 class PulseVoltageSource(Cell):
     """
@@ -299,7 +323,14 @@ class PulseVoltageSource(Cell):
     Requires parameters: initial_value, pulsed_value, delay_time,
                          rise_time, fall_time, pulse_width, period.
     """
-    
+    initial_value = Parameter(R, optional=True)
+    pulsed_value = Parameter(R)
+    delay_time = Parameter(R, optional=True)
+    rise_time = Parameter(R, optional=True)
+    fall_time = Parameter(R, optional=True)
+    pulse_width = Parameter(R, optional=True)
+    period = Parameter(R, optional=True)
+
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -331,6 +362,23 @@ class PulseVoltageSource(Cell):
 
         s.outline = Rect4R(lx=0, ly=0, ux=4, uy=4)
         return s
+
+    def netlist_ngspice(self, netlister, inst, schematic):
+        pins = [inst.symbol.p, inst.symbol.m]
+
+        initial_value = self.params.get('initial_value') or R(0)
+        pulsed_value = self.params.get('pulsed_value') or R(1)
+        delay_time = self.params.get('delay_time') or R(0)
+        rise_time = self.params.get('rise_time') or R(0)
+        fall_time = self.params.get('fall_time') or R(0)
+        pulse_width = self.params.get('pulse_width') or R(0)
+        period = self.params.get('period') or R(0)
+
+        netlister.add(
+            netlister.name_obj(inst, schematic, prefix="v"),
+            netlister.portmap(inst, pins),
+            f'PULSE({initial_value.compat_str()} {pulsed_value.compat_str()} {delay_time.compat_str()} '
+            f'{rise_time.compat_str()} {fall_time.compat_str()} {pulse_width.compat_str()} {period.compat_str()})')
 
 @public
 class SinusoidalVoltageSource(Cell):
@@ -379,10 +427,18 @@ class SinusoidalVoltageSource(Cell):
         amplitude = self.params['amplitude']
         frequency = self.params['frequency']
         
-        # The optional parameters can keep using .get() with a default.
-        offset = self.params.get('offset', R(0))
-        delay = self.params.get('delay', R(0))
-        damping = self.params.get('damping_factor', R(0))
+        # Handle optional parameters, providing a default if they are missing or None.
+        offset = self.params.get('offset')
+        if offset is None:
+            offset = R(0)
+
+        delay = self.params.get('delay')
+        if delay is None:
+            delay = R(0)
+
+        damping = self.params.get('damping_factor')
+        if damping is None:
+            damping = R(0)
         
         netlister.add(
             netlister.name_obj(inst, schematic, prefix="v"), 
