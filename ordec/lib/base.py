@@ -392,6 +392,13 @@ class SinusoidalVoltageSource(Cell):
    
 @public
 class PieceWiseLinearCurrentSource(Cell):
+    """
+    Represents a Piecewise Linear Current Source.
+    Expects a parameter 'I' which is a list of (time, current) tuples.
+    Example: I=[(0, 0), (1e-9, 1.8), (5e-9, 1.8), (6e-9, 0)]
+    """
+    I = Parameter(list)
+
     @generate
     def symbol(self):
         """ Defines the schematic symbol for the PWL current source. """
@@ -429,6 +436,16 @@ class PieceWiseLinearCurrentSource(Cell):
         s.outline = Rect4R(lx=0, ly=0, ux=4, uy=4)
         return s
 
+    def netlist_ngspice(self, netlister, inst, schematic):
+        pins = [inst.symbol.p, inst.symbol.m]
+
+        pwl_values = " ".join([f"{t} {v}" for t, v in self.I])
+
+        netlister.add(
+            netlister.name_obj(inst, schematic, prefix="i"),
+            netlister.portmap(inst, pins),
+            f'PWL({pwl_values})')
+
 @public
 class PulseCurrentSource(Cell):
     """
@@ -437,6 +454,14 @@ class PulseCurrentSource(Cell):
     Requires parameters: initial_value, pulsed_value, delay_time,
                          rise_time, fall_time, pulse_width, period.
     """
+    initial_value = Parameter(R)
+    pulsed_value = Parameter(R)
+    delay_time = Parameter(R, optional=True)
+    rise_time = Parameter(R, optional=True)
+    fall_time = Parameter(R, optional=True)
+    pulse_width = Parameter(R, optional=True)
+    period = Parameter(R, optional=True)
+
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -477,6 +502,23 @@ class PulseCurrentSource(Cell):
         s.outline = Rect4R(lx=0, ly=0, ux=4, uy=4)
         return s
 
+    def netlist_ngspice(self, netlister, inst, schematic):
+        pins = [inst.symbol.p, inst.symbol.m]
+
+        pulse_values = (
+            f"PULSE({self.initial_value.compat_str()} {self.pulsed_value.compat_str()} "
+            f"{self.params.get('delay_time', R(0)).compat_str()} "
+            f"{self.params.get('rise_time', R(0)).compat_str()} "
+            f"{self.params.get('fall_time', R(0)).compat_str()} "
+            f"{self.params.get('pulse_width', R(0)).compat_str()} "
+            f"{self.params.get('period', R(0)).compat_str()})"
+        )
+
+        netlister.add(
+            netlister.name_obj(inst, schematic, prefix="i"),
+            netlister.portmap(inst, pins),
+            pulse_values)
+
 @public
 class SinusoidalCurrentSource(Cell):
     """
@@ -485,6 +527,12 @@ class SinusoidalCurrentSource(Cell):
     Requires parameters: offset, amplitude, frequency, delay.
     Optional parameter: damping_factor (defaults to 0).
     """
+    offset = Parameter(R, optional=True)
+    amplitude = Parameter(R)
+    frequency = Parameter(R)
+    delay = Parameter(R, optional=True)
+    damping_factor = Parameter(R, optional=True)
+
     @generate
     def symbol(self):
         s = Symbol(cell=self)
@@ -522,3 +570,19 @@ class SinusoidalCurrentSource(Cell):
 
         s.outline = Rect4R(lx=0, ly=0, ux=4, uy=4)
         return s
+
+    def netlist_ngspice(self, netlister, inst, schematic):
+        pins = [inst.symbol.p, inst.symbol.m]
+
+        amplitude = self.params['amplitude']
+        frequency = self.params['frequency']
+
+        # The optional parameters can keep using .get() with a default.
+        offset = self.params.get('offset', R(0))
+        delay = self.params.get('delay', R(0))
+        damping = self.params.get('damping_factor', R(0))
+
+        netlister.add(
+            netlister.name_obj(inst, schematic, prefix="i"),
+            netlister.portmap(inst, pins),
+            f'SIN({offset.compat_str()} {amplitude.compat_str()} {frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})')
