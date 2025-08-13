@@ -171,7 +171,7 @@ def run_and_plot_simulation(tb_cell, title, tstop="5m"):
         netlist = sim.netlister.out()
         ngspice_sim.load_netlist(netlist)
         # Simulate for 5 periods of a 1kHz signal for good resolution
-        result = ngspice_sim.tran(tstep="10u", tstop=tstop)
+        result = ngspice_sim.tran("10u", tstop)
 
     if result and result.time:
         vin = result.get_signal('vin')
