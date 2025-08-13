@@ -375,18 +375,21 @@ class SinusoidalVoltageSource(Cell):
 
     def netlist_ngspice(self, netlister, inst, schematic):
         pins = [inst.symbol.p, inst.symbol.m]
-        # NGSPICE sine format: SIN(VOFF VAMP FREQ TD THETA PHASE)
-        # VOFF = offset voltage, VAMP = amplitude, FREQ = frequency 
-        # TD = delay, THETA = damping factor, PHASE = phase (default 0)
+        
+        amplitude = self.params['amplitude']
+        frequency = self.params['frequency']
+        
+        # The optional parameters can keep using .get() with a default.
         offset = self.params.get('offset', R(0))
         delay = self.params.get('delay', R(0))
         damping = self.params.get('damping_factor', R(0))
+        
         netlister.add(
             netlister.name_obj(inst, schematic, prefix="v"), 
             netlister.portmap(inst, pins),
-            f'SIN({offset.compat_str()} {self.amplitude.compat_str()} {self.frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
-        )
+            f'SIN({offset.compat_str()} {amplitude.compat_str()} {frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})')
 
+   
 @public
 class PieceWiseLinearCurrentSource(Cell):
     @generate
