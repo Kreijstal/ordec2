@@ -11,3 +11,7 @@ build/
 ordec/webdist.tar
 sky130A/
 sky130B/
+
+ihp-sg13g2
+sky130A
+sky130B
