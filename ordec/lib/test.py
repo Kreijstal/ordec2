@@ -410,6 +410,48 @@ class SimBase(Cell):
                 progress = data_point.get('progress', 0.0)
                 yield TranResult(data, node, highlevel_sim.netlister, progress)
 
+    def sim_tran(self, tstep, tstop, backend='ffi', enable_savecurrents=True):
+        """Run sync transient simulation.
+
+        Args:
+            tstep: Time step for the simulation
+            tstop: Stop time for the simulation
+            backend: Simulation backend ('ffi' or 'subprocess')
+            enable_savecurrents: If True (default), enables .option savecurrents
+        """
+        # Create hierarchical simulation
+        from ..sim2.sim_hierarchy import SimHierarchy, SimNet, SimInstance
+        from ..sim2.ngspice import Ngspice
+
+        node = SimHierarchy()
+        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents, backend=backend)
+
+        # Create result wrapper class
+        class TranResult:
+            def __init__(self, data, sim_hierarchy, netlister):
+                self._data = data
+                self._node = sim_hierarchy
+                self._netlister = netlister
+                self.time = data.time
+
+                # Create hierarchical access
+                for net in sim_hierarchy.all(SimNet):
+                    net_name = netlister.name_hier_simobj(net)
+                    if net_name in data.voltages:
+                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data.voltages[net_name]})())
+
+                for inst in sim_hierarchy.all(SimInstance):
+                    inst_name = netlister.name_hier_simobj(inst)
+                    if inst_name in data.currents:
+                        setattr(self, inst.npath.name, type('InstData', (), {'currents': data.currents[inst_name]})())
+
+
+        # Run simulation
+        with Ngspice.launch(backend=backend) as sim:
+            sim.load_netlist(highlevel_sim.netlister.out())
+            data = sim.tran(tstep, tstop)
+            return TranResult(data, node, highlevel_sim.netlister)
+
 class ResdivFlatTb(SimBase):
     @generate
     def schematic(self):

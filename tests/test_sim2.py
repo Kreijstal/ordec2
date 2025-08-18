@@ -136,3 +136,16 @@ def test_sky_mos_inv_ffi():
     assert lib_test.InvSkyTb(vin=R(0)).sim_dc_ffi.o.dc_voltage == 4.999999973187308
     assert lib_test.InvSkyTb(vin=R('2.5')).sim_dc_ffi.o.dc_voltage == 1.9806063550640076
     assert lib_test.InvSkyTb(vin=R(5)).sim_dc_ffi.o.dc_voltage == 0.00012158997833462999
+
+def test_sim_tran_flat():
+    result = lib_test.ResdivFlatTb().sim_tran("0.1u", "1u", backend='subprocess')
+    assert len(result.time) > 0
+    assert abs(result.a.voltage[-1] - 0.3333333) < 1e-6
+    assert abs(result.b.voltage[-1] - 0.6666667) < 1e-6
+
+@pytest.mark.libngspice
+def test_sim_tran_flat_ffi():
+    result = lib_test.ResdivFlatTb().sim_tran("0.1u", "1u", backend='ffi')
+    assert len(result.time) > 0
+    assert abs(result.a.voltage[-1] - 0.33333333333333337) < 1e-9
+    assert abs(result.b.voltage[-1] - 0.6666666666666667) < 1e-9
