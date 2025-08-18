@@ -45,7 +45,7 @@ def plot_sixel(time_data, voltage_in, voltage_out, title="RC Circuit Response"):
         plt.xlabel("Time (s)", color='white')
         plt.ylabel("Voltage (V)", color='white')
         plt.legend()
-        
+
         ax = plt.gca()
         ax.set_facecolor('#202020')
         plt.gcf().set_facecolor('#202020')
@@ -53,7 +53,7 @@ def plot_sixel(time_data, voltage_in, voltage_out, title="RC Circuit Response"):
         ax.tick_params(axis='y', colors='white')
         for spine in ax.spines.values():
             spine.set_edgecolor('white')
-        
+
         plt.grid(True, color='gray', linestyle='--', linewidth=0.5)
         plt.tight_layout()
         plt.show()
@@ -108,10 +108,25 @@ def _query_sixel_support_from_terminal():
     try:
         old_settings = termios.tcgetattr(sys.stdin)
         tty.setraw(sys.stdin.fileno())
+
+        # Set up timeout for select
+        timeout = 5.0  # 5 seconds
         sys.stdout.write('\x1b[c'); sys.stdout.flush()
-        if b'4' in sys.stdin.read(10).encode('utf-8'): return True
+
+        # Use select to check if data is available with timeout
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if ready:
+            response = sys.stdin.read(10)
+            if b'4' in response.encode('utf-8'): return True
+
         sys.stdout.write('\x1b[>0c'); sys.stdout.flush()
-        if b'4' in sys.stdin.read(10).encode('utf-8'): return True
+
+        # Use select again for second query
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if ready:
+            response = sys.stdin.read(10)
+            if b'4' in response.encode('utf-8'): return True
+
     except Exception: return False
     finally:
         if old_settings: termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
@@ -142,10 +157,10 @@ class RCTestbench(Cell):
             pos=Vec2R(2, 5)
         )
         s.R1 = SchemInstance(Res(r=R(1000)).symbol.portmap(p=s.vin, m=s.vout), pos=Vec2R(8, 5))
-        
+
         # --- CORRECTED LINE: Removed 'F' from the Rational string ---
         s.C1 = SchemInstance(Cap(c=R('1u')).symbol.portmap(p=s.vout, m=s.gnd), pos=Vec2R(14, 5))
-        
+
         s.gnd_inst = SchemInstance(Gnd().symbol.portmap(p=s.gnd), pos=Vec2R(8, 0))
 
         s.outline = Rect4R(lx=0, ly=0, ux=18, uy=10)

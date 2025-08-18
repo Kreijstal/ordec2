@@ -24,11 +24,8 @@ from ordec.core import *
 from ordec import Rational as R
 from ordec import helpers
 
-# +++ MODIFIED: REMOVED the faulty check for Sixel libs here. +++
-# The check will now happen inside the plot_sixel function.
 
 class SineWaveTestbench(Cell):
-    # ... (class definition is unchanged) ...
     frequency = Parameter(R, optional=True)
     amplitude = Parameter(R, optional=True)
     offset = Parameter(R, optional=True)
@@ -37,7 +34,6 @@ class SineWaveTestbench(Cell):
 
     @generate
     def schematic(self):
-        # ... (schematic generation code is unchanged) ...
         s = Schematic(cell=self)
         s.input_node = Net()
         s.gnd = Net()
@@ -60,7 +56,6 @@ class SineWaveTestbench(Cell):
         return s
 
     def sim_tran(self, tstep="1u", tstop="10m"):
-        # ... (sim_tran code is unchanged) ...
         s = SimHierarchy(cell=self)
         sim = HighlevelSim(self.schematic, s)
         backend_to_use = NgspiceBackend.SUBPROCESS
@@ -79,8 +74,6 @@ class SineWaveTestbench(Cell):
             result = ngspice_sim.tran(tstep, tstop)
             return result
 
-# --- Sixel and Terminal Detection Logic (unchanged) ---
-# ... (all detection functions like _read_terminal_response, etc. are unchanged) ...
 def _read_terminal_response_bytes(timeout=0.5):
     response = b''
     start_time = time.time()
@@ -118,9 +111,7 @@ def detect_terminal_capabilities():
     return {'sixel': sixel_support, 'x11': bool(display), 'ascii': True}
 
 
-# --- Plotting Functions ---
 
-# +++ MODIFIED: This function now contains the full check logic. +++
 def plot_sixel(time_data, voltage_data, title="Sine Wave"):
     """
     Generate and display a Sixel plot by using the matplotlib-backend-sixel module.
@@ -204,7 +195,42 @@ def plot_ascii(time_data, voltage_data, width=80, height=20, title="Sine Wave"):
     result.append(f"Voltage: {min_v:.3f} to {max_v:.3f} V (range: {v_range:.3f})")
     return '\n'.join(result)
 
-# +++ MODIFIED: `display_sine_wave` is now cleaner +++
+# In the plotting section of the script
+
+def plot_x11(time_data, voltage_data, title="Sine Wave"):
+    """Generate and display a plot in a separate X11 window."""
+    try:
+        import matplotlib
+        # A common, often built-in backend is TkAgg
+        matplotlib.use('TkAgg') 
+        import matplotlib.pyplot as plt
+
+        plt.figure(figsize=(8, 6))
+        plt.plot(time_data, voltage_data)
+        plt.title(title)
+        plt.xlabel("Time (s)")
+        plt.ylabel("Voltage (V)")
+        plt.grid(True)
+        plt.tight_layout()
+        
+        print("Displaying plot in new window. Close the window to continue...")
+        plt.show() # This call blocks until the window is closed
+        plt.close()
+        return True
+
+    except ImportError:
+        print("\n--- X11 plotting failed ---", file=sys.stderr)
+        print("  Could not import a GUI backend (like tkinter).", file=sys.stderr)
+        print("---------------------------------\n", file=sys.stderr)
+        return False
+    except Exception as e:
+        # This catches errors like "no display name and no $DISPLAY environment variable"
+        print(f"\n--- X11 plotting failed ---", file=sys.stderr)
+        print(f"  Error: {e}", file=sys.stderr)
+        print("---------------------------------\n", file=sys.stderr)
+        return False
+
+
 def display_sine_wave(time_data, voltage_data, title="Sine Wave"):
     """Display sine wave using best available method."""
     capabilities = detect_terminal_capabilities()
@@ -215,20 +241,18 @@ def display_sine_wave(time_data, voltage_data, title="Sine Wave"):
 
     if capabilities['sixel']:
         print("Attempting to use Sixel graphics backend...")
-        success = plot_sixel(time_data, voltage_data, title=title)
-        if success:
-            return # The job is done.
-        print("...Sixel backend failed. Falling back to ASCII art.\n")
+        if plot_sixel(time_data, voltage_data, title=title):
+            return # Success
 
-    elif capabilities['x11']:
-        print("X11 available but interactive plotting not implemented, falling back to ASCII.")
+    # Add the X11 check here
+    if capabilities['x11']:
+        print("Attempting to use X11 backend...")
+        if plot_x11(time_data, voltage_data, title=title):
+            return # Success
 
-    print("Using ASCII art plotting:")
+    print("Falling back to ASCII art plotting:")
     print(plot_ascii(time_data, voltage_data, title=title))
 
-
-# --- Pytest Functions and __main__ block (all unchanged) ---
-# ... (all test functions and the main block remain the same) ...
 def test_sine_wave_testbench_creation():
     tb = SineWaveTestbench(frequency=R(1000), amplitude=R(2), offset=R(0))
     assert tb is not None
@@ -278,10 +302,7 @@ def test_sixel_detection_functionality():
     sixel_support = _query_sixel_support_from_terminal()
     assert isinstance(sixel_support, bool)
 
-# Replace the old __main__ block with this one.
 
 if __name__ == "__main__":
-    # Run the simulation and plotting demo directly.
-    # The individual test_* functions are for a test runner like pytest.
     test_sine_wave_transient_simulation()
 
