@@ -23,7 +23,7 @@ import numpy as np
 
 from ..core import *
 
-NgspiceVector = namedtuple('NgspiceVector', ['name', 'quantity', 'dtype', 'rest'])
+NgspiceVector = namedtuple('NgspiceVector', ['name', 'quantity', 'dtype', 'length', 'rest'])
 NgspiceValue = namedtuple('NgspiceValue', ['type', 'name', 'subname', 'value'])
 
 class NgspiceError(Exception):
@@ -170,6 +170,27 @@ class NgspiceTransientResult:
         for name in signal_names:
             result[name] = self.get_signal(name)
         return result
+
+class NgspiceAcResult:
+    def __init__(self):
+        self.freq = []
+        self.voltages = {}
+        self.currents = {}
+        self.branches = {}
+
+    def _categorize_signal(self, signal_name, signal_data):
+        """Categorize signals into voltages, currents, and branches."""
+        if signal_name.startswith('@') and '[' in signal_name:
+            device_part = signal_name.split('[')[0][1:]
+            current_type = signal_name.split('[')[1].rstrip(']')
+            if device_part not in self.currents:
+                self.currents[device_part] = {}
+            self.currents[device_part][current_type] = signal_data
+        elif signal_name.endswith('#branch'):
+            branch_name = signal_name.replace('#branch', '')
+            self.branches[branch_name] = signal_data
+        else:
+            self.voltages[signal_name] = signal_data
 
 class _FFIBackend:
     """FFI backend for ngspice shared library.
@@ -1017,6 +1038,85 @@ class _SubprocessBackend:
         # If most headers are found in this line, it's likely a header
         return header_matches >= len(expected_headers) * 0.6
 
+    def ac(self, *args) -> 'NgspiceAcResult':
+        self.command(f"ac {' '.join(args)}")
+
+        vectors = list(self.vector_info())
+        # The first vector is always 'frequency' and it is real.
+        # The other vectors are complex and are the ones we are interested in.
+        valid_vectors = [v.name for v in vectors if v.length > 0]
+
+        data_fn = self.cwd / 'ac_data.txt'
+
+        # Use wrdata to write simulation results to a file
+        self.command(f"wrdata {data_fn} {' '.join(valid_vectors)}")
+
+        with open(data_fn, 'r') as f:
+            lines = f.readlines()
+
+        result = NgspiceAcResult()
+        if not lines:
+            return result
+
+        data_rows = [line.split() for line in lines]
+
+        # The output of wrdata does not have a header.
+        # The columns are in the order of the vectors given to wrdata.
+        # For complex vectors, two columns are written: real and imag.
+
+        # Let's build a map from vector name to column index
+        col_map = {}
+        col_idx = 0
+
+        # We need to know the order of vectors as provided to wrdata
+        wrdata_vectors = [v for v in vectors if v.length > 0]
+
+        for v in wrdata_vectors:
+            col_map[v.name] = col_idx
+            if v.dtype == 'complex':
+                col_idx += 2
+            else:
+                col_idx += 1
+
+        if 'frequency' not in col_map:
+             # This can happen if the AC simulation fails and no vectors are generated.
+             # An empty result will be returned.
+             return result
+
+        freq_idx = col_map['frequency']
+        result.freq = [float(row[freq_idx]) for row in data_rows]
+
+        for vec in wrdata_vectors:
+            if vec.name != 'frequency':
+                if vec.dtype == 'complex':
+                    signal_data = []
+                    vec_idx = col_map[vec.name]
+                    for row in data_rows:
+                        real = float(row[vec_idx])
+                        imag = float(row[vec_idx+1])
+                        signal_data.append(complex(real, imag))
+                    result._categorize_signal(vec.name, signal_data)
+        return result
+
+    def vector_info(self) -> Iterator[NgspiceVector]:
+        """Wrapper for ngspice's "display" command."""
+        display_output = self.command("display")
+        lines = display_output.split('\n')
+
+        in_vectors_section = False
+        for line in lines:
+            if 'Here are the vectors currently active:' in line:
+                in_vectors_section = True
+                continue
+
+            if in_vectors_section:
+                if len(line) == 0 or line.startswith('Title:') or line.startswith('Name:') or line.startswith('Date:'):
+                    continue
+                res = re.match(r"\s*([0-9a-zA-Z_.#@\[\]]*)\s*:\s*([a-zA-Z]+),\s*([a-zA-Z]+),\s*([0-9]+) long(.*)", line)
+                if res:
+                    name, vtype, dtype, length, rest = res.groups()
+                    yield NgspiceVector(name, vtype, dtype, int(length), rest)
+
     def _is_numeric_row(self, row_data):
         """Check if a row contains mostly numeric data."""
         if not row_data:
@@ -1046,6 +1146,8 @@ def check_errors(ngspice_out):
     has_fatal_indicator = False
 
     for line in ngspice_out.split('\n'):
+        if "no such vector" in line:
+            continue # Ignore this error
         # Handle both "Error: ..." and "stderr Error: ..." formats
         m = re.match(r"(?:stderr )?Error:\s*(.*)", line)
         if m and first_error_msg is None:
@@ -1089,15 +1191,6 @@ class Ngspice:
         """Executes ngspice command and returns string output from ngspice process."""
         return self._backend_impl.command(command)
 
-    def vector_info(self) -> Iterator[NgspiceVector]:
-        """Wrapper for ngspice's "display" command."""
-        for line in self.command("display").split("\n\n")[2].split('\n'):
-            if len(line) == 0:
-                continue
-            res = re.match(r"\s*([0-9a-zA-Z_.#]*)\s*:\s*([a-zA-Z]+),\s*([a-zA-Z]+),\s*(.*)", line)
-            if res:
-                yield NgspiceVector(*res.groups())
-
     def load_netlist(self, netlist: str, no_auto_gnd: bool = True):
         return self._backend_impl.load_netlist(netlist, no_auto_gnd=no_auto_gnd)
 
@@ -1108,6 +1201,9 @@ class Ngspice:
 
     def tran(self, *args) -> NgspiceTransientResult:
         return self._backend_impl.tran(*args)
+
+    def ac(self, *args) -> 'NgspiceAcResult':
+        return self._backend_impl.ac(*args)
 
     def tran_async(self, *args, callback: Optional[Callable] = None, throttle_interval: float = 0.1) -> Generator:
         if hasattr(self._backend_impl, 'tran_async'):

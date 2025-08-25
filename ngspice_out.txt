@@ -1,0 +1,26 @@
+ngspice 1 ->
+Note: No compatibility mode selected!
+
+
+Circuit: rcfiltertb_r_1k_c_1_0000000000000000622815914577798564188970686927859787829220294952392578125n
+
+ngspice 2 -> Doing analysis at TEMP = 27.000000 and TNOM = 27.000000
+
+Using SPARSE 1.3 as Direct Linear Solver
+
+No. of Data Rows : 91
+ngspice 3 -> Here are the vectors currently active:
+
+Title: rcfiltertb_r_1k_c_1_0000000000000000622815914577798564188970686927859787829220294952392578125n
+Name: ac1 (AC Analysis)
+Date: Mon Aug 25 19:10:56  2025
+
+    @ci3[i]             : current, complex, 0 long
+    @ri2[i]             : current, complex, 0 long
+    frequency           : frequency, complex, 91 long, grid = xlog [default scale]
+    inp                 : voltage, complex, 91 long
+    out                 : voltage, complex, 91 long
+    vi0#branch          : current, complex, 91 long
+    vi1#branch          : current, complex, 91 long
+    vss                 : voltage, complex, 91 long
+ngspice 4 -> ngspice-44.2 done
