@@ -251,6 +251,12 @@ class SchemConnPoint(Node):
 # Simulation hierarchy
 # --------------------
 
+@public
+class SimType(Enum):
+    DC = 'dc'
+    TRAN = 'tran'
+    AC = 'ac'
+
 def parent_siminstance(c: Node) -> Node:
     while not isinstance(c, (SimInstance, SimHierarchy)):
         c = c.parent
@@ -260,33 +266,61 @@ def parent_siminstance(c: Node) -> Node:
 class SimHierarchy(SubgraphRoot):
     schematic = SubgraphRef(Schematic)
     cell = Attr(Cell)
+    sim_type = Attr(SimType)
+    time = Attr(tuple)
+    freq = Attr(tuple)
 
     def webdata(self):
-        def fmt_float(val, unit):
-            import re
-            x=str(R(f"{val:.03e}"))+unit
-            x=re.sub(r"([0-9])([a-zA-Z])", r"\1 \2", x)
-            x=x.replace("u", "μ")
-            x=re.sub(r"e([+-]?[0-9]+)", r"×10<sup>\1</sup>", x)
-            return x
+        if self.sim_type == SimType.TRAN:
+            voltages = {}
+            for sn in self.all(SimNet):
+                if sn.trans_voltage:
+                    voltages[sn.full_path_str()] = sn.trans_voltage
+            currents = {}
+            for si in self.all(SimInstance):
+                if si.trans_current:
+                    currents[si.full_path_str()] = si.trans_current
+            return 'transim', {'time': self.time, 'voltages': voltages, 'currents': currents}
+        elif self.sim_type == SimType.AC:
+            voltages = {}
+            for sn in self.all(SimNet):
+                if sn.ac_voltage:
+                    voltages[sn.full_path_str()] = sn.ac_voltage
+            currents = {}
+            for si in self.all(SimInstance):
+                if si.ac_current:
+                    currents[si.full_path_str()] = si.ac_current
+            return 'acsim', {'freq': self.freq, 'voltages': voltages, 'currents': currents}
+        elif self.sim_type == SimType.DC:
+            def fmt_float(val, unit):
+                import re
+                x=str(R(f"{val:.03e}"))+unit
+                x=re.sub(r"([0-9])([a-zA-Z])", r"\1 \2", x)
+                x=x.replace("u", "μ")
+                x=re.sub(r"e([+-]?[0-9]+)", r"×10<sup>\1</sup>", x)
+                return x
 
-        dc_voltages = []
-        for sn in self.all(SimNet):
-            if not sn.dc_voltage:
-                continue
-            dc_voltages.append([sn.full_path_str(), fmt_float(sn.dc_voltage, "V")])
-        dc_currents = []
-        for si in self.all(SimInstance):
-            if not si.dc_current:
-                continue
-            dc_currents.append([si.full_path_str(), fmt_float(si.dc_current, "A")])
-        return 'dcsim', {'dc_voltages': dc_voltages, 'dc_currents': dc_currents}
+            dc_voltages = []
+            for sn in self.all(SimNet):
+                if not sn.dc_voltage:
+                    continue
+                dc_voltages.append([sn.full_path_str(), fmt_float(sn.dc_voltage, "V")])
+            dc_currents = []
+            for si in self.all(SimInstance):
+                if not si.dc_current:
+                    continue
+                dc_currents.append([si.full_path_str(), fmt_float(si.dc_current, "A")])
+            return 'dcsim', {'dc_voltages': dc_voltages, 'dc_currents': dc_currents}
+        else:
+            return 'nosim', {}
 
 @public
 class SimNet(Node):
     in_subgraphs = [SimHierarchy]
     trans_voltage = Attr(tuple)
     trans_current = Attr(tuple)
+    ac_voltage = Attr(tuple)
+    ac_current = Attr(tuple)
     dc_voltage = Attr(float)
 
     eref = ExternalRef(Net|Pin, of_subgraph=lambda c: parent_siminstance(c).schematic)
@@ -294,6 +328,8 @@ class SimNet(Node):
 @public
 class SimInstance(NonLeafNode):
     in_subgraphs = [SimHierarchy]
+    trans_current = Attr(tuple)
+    ac_current = Attr(tuple)
     dc_current = Attr(float)
 
     schematic = SubgraphRef(Symbol|Schematic, typecheck_custom=lambda v: isinstance(v, (Symbol, Schematic)))

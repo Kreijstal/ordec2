@@ -223,6 +223,47 @@ class Vdc(Cell):
         return [cls('1')]
 
 @public
+class Vac(Cell):
+    """AC voltage source"""
+    dc = Parameter(R, default=R(0)) #: DC voltage in volt
+    ac_mag = Parameter(R, default=R(1)) #: AC magnitude in volt
+    ac_phase = Parameter(R, default=R(0)) #: AC phase in degrees
+    alt_symbol = Parameter(bool, optional=True) #: Use alternative symbol
+
+    @generate
+    def symbol(self) -> Symbol:
+        s = Symbol(cell=self)
+
+        s.m = Pin(pos=Vec2R(2, 0), pintype=PinType.Inout, align=Orientation.South)
+        s.p = Pin(pos=Vec2R(2, 4), pintype=PinType.Inout, align=Orientation.North)
+
+        # Circle
+        s % SymbolArc(pos=Vec2R(2, 2), radius=R(1))
+
+        # Lines
+        s % SymbolPoly(vertices=[Vec2R(2, 3), Vec2R(2, 4)])
+        s % SymbolPoly(vertices=[Vec2R(2, 1), Vec2R(2, 0)])
+
+        # Sine wave symbol
+        import numpy as np
+        sine_wave_points = [
+            Vec2R(1.5 + 0.05 * t, 2.0 + 0.4 * np.sin(np.pi * t / 4))
+            for t in range(21)
+        ]
+        s % SymbolPoly(vertices=sine_wave_points)
+
+        s.outline = Rect4R(lx=0, ly=0, ux=4, uy=4)
+        return s
+
+    def netlist_ngspice(self, netlister, inst, schematic):
+        pins = [inst.symbol.p, inst.symbol.m]
+        netlister.add(netlister.name_obj(inst, schematic, prefix="v"), netlister.portmap(inst, pins) , f'dc {self.dc.compat_str()} ac {self.ac_mag.compat_str()} {self.ac_phase.compat_str()}')
+
+    @classmethod
+    def discoverable_instances(cls):
+        return [cls('1')]
+
+@public
 class Idc(Cell):
     """DC current source"""
     dc = Parameter(R) #: DC current in ampere
