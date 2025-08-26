@@ -7,8 +7,11 @@ from contextlib import contextmanager
 from enum import Enum
 from typing import Iterator, Optional, Callable, Generator
 
+import numpy as np
+
 from ..core import *
-from .ngspice_backends import _FFIBackend, _SubprocessBackend, NgspiceError, NgspiceFatalError, check_errors
+from .ngspice_ffi import _FFIBackend
+from .ngspice_subprocess import _SubprocessBackend
 
 class NgspiceBackend(Enum):
     """Available NgSpice backend types."""

@@ -4,7 +4,7 @@
 import re
 import pytest
 from ordec.sim2.ngspice import Ngspice, Netlister
-from ordec.sim2.ngspice_backends import NgspiceError, NgspiceFatalError
+from ordec.sim2.ngspice_common import NgspiceError, NgspiceFatalError
 from ordec import Rational as R
 from ordec.lib import test as lib_test
 
