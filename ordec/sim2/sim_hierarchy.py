@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: 2025 ORDeC contributors
 # SPDX-License-Identifier: Apache-2.0
 
+from typing import Optional
+
 from ..core import *
 from ..core.schema import SimType
 from .ngspice import Ngspice, Netlister
@@ -91,11 +93,11 @@ class HighlevelSim:
                 except KeyError:
                     continue
 
-    def ac(self, *args):
+    def ac(self, *args, wrdata_file: Optional[str] = None):
         self.simhier.sim_type = SimType.AC
         with Ngspice.launch(debug=False, backend=self.backend) as sim:
             sim.load_netlist(self.netlister.out())
-            data = sim.ac(*args)
+            data = sim.ac(*args, wrdata_file=wrdata_file)
             self.simhier.freq = tuple(data.freq)
             for name, value in data.voltages.items():
                 try:

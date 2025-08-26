@@ -383,7 +383,7 @@ class _FFIBackend:
         result.add_table(table)
         return result
 
-    def ac(self, *args) -> 'NgspiceAcResult':
+    def ac(self, *args, **kwargs) -> 'NgspiceAcResult':
         self.command(f"ac {' '.join(args)}")
         result = NgspiceAcResult()
 

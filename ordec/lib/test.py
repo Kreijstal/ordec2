@@ -362,10 +362,10 @@ class SimBase(Cell):
         sim.op()
         return s
 
-    def sim_ac(self, *args, backend='subprocess'):
+    def sim_ac(self, *args, backend='subprocess', **kwargs):
         s = SimHierarchy(cell=self)
         sim = HighlevelSim(self.schematic, s, backend=backend)
-        sim.ac(*args)
+        sim.ac(*args, **kwargs)
         return s
 
     def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1, enable_savecurrents=True):

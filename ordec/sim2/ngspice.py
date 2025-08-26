@@ -53,8 +53,8 @@ class Ngspice:
     def tran(self, *args) -> 'NgspiceTransientResult':
         return self._backend_impl.tran(*args)
 
-    def ac(self, *args) -> 'NgspiceAcResult':
-        return self._backend_impl.ac(*args)
+    def ac(self, *args, **kwargs) -> 'NgspiceAcResult':
+        return self._backend_impl.ac(*args, **kwargs)
 
     def tran_async(self, *args, callback: Optional[Callable] = None, throttle_interval: float = 0.1) -> Generator:
         if hasattr(self._backend_impl, 'tran_async'):

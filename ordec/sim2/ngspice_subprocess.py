@@ -10,7 +10,9 @@ from collections import namedtuple
 from contextlib import contextmanager
 from pathlib import Path
 from subprocess import Popen, PIPE, STDOUT
-from typing import Iterator
+from typing import Iterator, Optional
+
+import numpy as np
 
 from .ngspice_common import (
     NgspiceValue,
@@ -246,52 +248,99 @@ class _SubprocessBackend:
         # If most headers are found in this line, it's likely a header
         return header_matches >= len(expected_headers) * 0.6
 
-    def ac(self, *args) -> 'NgspiceAcResult':
-        self.command(f"ac {' '.join(args)}")
-
-        print_all_res = "".join(self.print_all())
+    def _parse_ac_wrdata(self, file_path: str, vectors: list[str]) -> 'NgspiceAcResult':
+        """Parses the ASCII output of a wrdata command for AC analysis."""
         result = NgspiceAcResult()
 
-        # Split the output into sections for each vector table
-        sections = re.split(r'AC Analysis\s+.*\n\s*-{60,}', print_all_res)
+        # Use numpy to load the text file, which is much more robust
+        try:
+            data = np.loadtxt(file_path)
+        except (IOError, ValueError):
+            # Return an empty result if the file is empty or malformed
+            return result
 
-        for section in sections:
-            if not section.strip():
-                continue
+        if data.ndim == 1:
+            # Handle case with only one row of data by reshaping it
+            data = data.reshape(1, -1)
 
-            lines = section.strip().split('\n')
-            header_line = lines[0]
-            data_lines = lines[1:]
+        if data.shape[0] == 0:
+            return result
 
-            # Extract vector names from header
-            headers = header_line.split()
-            if len(headers) < 2:
-                continue
+        # The `wrdata` command repeats the scale (frequency) for each vector.
+        # The first column is the definitive frequency scale.
+        result.freq = tuple(data[:, 0])
 
-            vector_name = headers[-1]
+        # Subsequent columns are grouped in threes: freq, real, imag.
+        for i, vec_name in enumerate(vectors):
+            # The block for vector `i` starts at column i*3
+            real_col_idx = i * 3 + 1
+            imag_col_idx = i * 3 + 2
 
-            if 'frequency' in headers:
-                if not result.freq:
-                    for line in data_lines:
-                        match = re.match(r"\s*\d+\s+([\d.eE+-]+)", line)
-                        if match:
-                            result.freq.append(float(match.group(1)))
+            if data.shape[1] > imag_col_idx:
+                real_parts = data[:, real_col_idx]
+                imag_parts = data[:, imag_col_idx]
 
-            signal_data = []
-            for line in data_lines:
-                match = re.search(r"([\d.eE+-]+),\s*([\d.eE+-]+)", line)
-                if match:
-                    real = float(match.group(1))
-                    imag = float(match.group(2))
-                    signal_data.append(complex(real, imag))
+                complex_data = [complex(r, i) for r, i in zip(real_parts, imag_parts)]
+                result._categorize_signal(vec_name, complex_data)
 
-            if not signal_data:
-                continue
-
-            result._categorize_signal(vector_name, signal_data)
-
-        result.freq = tuple(result.freq)
         return result
+
+    def ac(self, *args, wrdata_file: Optional[str] = None) -> 'NgspiceAcResult':
+        self.command(f"ac {' '.join(args)}")
+
+        if wrdata_file is None:
+            # Original logic using print all
+            print_all_res = "".join(self.print_all())
+            result = NgspiceAcResult()
+
+            sections = re.split(r'AC Analysis\s+.*\n\s*-{60,}', print_all_res)
+
+            for section in sections:
+                if not section.strip():
+                    continue
+
+                lines = section.strip().split('\n')
+                header_line = lines[0]
+                data_lines = lines[1:]
+
+                headers = header_line.split()
+                if len(headers) < 2:
+                    continue
+
+                vector_name = headers[-1]
+
+                if 'frequency' in headers:
+                    if not result.freq:
+                        for line in data_lines:
+                            match = re.match(r"\s*\d+\s+([\d.eE+-]+)", line)
+                            if match:
+                                result.freq.append(float(match.group(1)))
+
+                signal_data = []
+                for line in data_lines:
+                    match = re.search(r"([\d.eE+-]+),\s*([\d.eE+-]+)", line)
+                    if match:
+                        real = float(match.group(1))
+                        imag = float(match.group(2))
+                        signal_data.append(complex(real, imag))
+
+                if not signal_data:
+                    continue
+
+                result._categorize_signal(vector_name, signal_data)
+
+            result.freq = tuple(result.freq)
+            return result
+        else:
+            # New logic using wrdata
+            vectors_to_write = [v.name for v in self.vector_info() if v.name != 'frequency' and v.length > 0]
+            if not vectors_to_write:
+                return NgspiceAcResult() # Return empty result if no vectors
+
+            # Quote vector names to handle special characters
+            vectors_quoted = [f'"{v}"' for v in vectors_to_write]
+            self.command(f"wrdata {wrdata_file} {' '.join(vectors_quoted)}")
+            return self._parse_ac_wrdata(wrdata_file, vectors_to_write)
 
     def vector_info(self) -> Iterator[NgspiceVector]:
         """Wrapper for ngspice's "display" command."""
