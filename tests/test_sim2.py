@@ -192,3 +192,31 @@ def test_sim_ac_rc_filter():
 
     # At the -3dB point, the magnitude should be 1/sqrt(2)
     assert np.isclose(vout_mag, 1/math.sqrt(2), atol=1e-2)
+
+@pytest.mark.libngspice
+def test_sim_ac_rc_filter_ffi():
+    import math
+    import numpy as np
+
+    r_val = 1e3
+    c_val = 1e-9
+    h = lib_test.RcFilterTb(r=R(r_val), c=R(c_val)).sim_ac('dec', '10', '1', '1G', backend='ffi')
+
+    # Check that we have results
+    assert len(h.freq) > 0
+    assert hasattr(h, 'out')
+    assert len(h.out.ac_voltage) > 0
+
+    # Calculate cutoff frequency
+    f_c = 1 / (2 * math.pi * r_val * c_val)
+
+    # Find the frequency in the simulation results closest to the cutoff frequency
+    freq_array = np.array(h.freq)
+    idx = (np.abs(freq_array - f_c)).argmin()
+
+    # Check the voltage magnitude at the cutoff frequency
+    vout_complex = h.out.ac_voltage[idx]
+    vout_mag = np.sqrt(vout_complex[0]**2 + vout_complex[1]**2)
+
+    # At the -3dB point, the magnitude should be 1/sqrt(2)
+    assert np.isclose(vout_mag, 1/math.sqrt(2), atol=1e-2)

@@ -554,6 +554,36 @@ class _FFIBackend:
         result.add_table(table)
         return result
 
+    def ac(self, *args) -> 'NgspiceAcResult':
+        self.command(f"ac {' '.join(args)}")
+        result = NgspiceAcResult()
+
+        all_vectors = self._get_all_vectors()
+
+        num_points = 0
+        vector_data_map = {}
+        valid_headers = []
+
+        for vec_name in all_vectors:
+            vec_info = self._get_vector_info(vec_name)
+            if vec_info and vec_info.v_length > 0:
+                num_points = max(num_points, vec_info.v_length)
+                if vec_info.v_compdata:
+                    data_list = [complex(vec_info.v_compdata[i].cx_real, vec_info.v_compdata[i].cx_imag) for i in range(vec_info.v_length)]
+                else:
+                    data_list = [vec_info.v_realdata[i] for i in range(vec_info.v_length)]
+                vector_data_map[vec_name] = data_list
+                valid_headers.append(vec_name)
+
+        if 'frequency' in vector_data_map:
+            result.freq = tuple(vector_data_map['frequency'])
+
+        for name, value in vector_data_map.items():
+            if name != 'frequency':
+                result._categorize_signal(name, value)
+
+        return result
+
     def tran_async(self, *args, callback: Optional[Callable] = None, throttle_interval: float = 0.1) -> Generator:
         self._async_callback = callback
         self._async_throttle_interval = throttle_interval
