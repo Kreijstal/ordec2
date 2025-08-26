@@ -437,20 +437,38 @@ class SinusoidalVoltageSource(Cell):
 
     def netlist_ngspice(self, netlister, inst, schematic):
         pins = [inst.symbol.p, inst.symbol.m]
-        # NGSPICE sine format: SIN(VOFF VAMP FREQ TD THETA PHASE)
-        offset = self.params.get('offset')
+
+        cell = inst.symbol.cell
+        offset = cell.params.get('offset')
         if offset is None:
             offset = R(0)
-        delay = self.params.get('delay')
+        amplitude = cell.params.get('amplitude')
+        if amplitude is None:
+            amplitude = R(0)
+        frequency = cell.params.get('frequency')
+        if frequency is None:
+            frequency = R(0)
+        delay = cell.params.get('delay')
         if delay is None:
             delay = R(0)
-        damping = self.params.get('damping_factor')
+        damping = cell.params.get('damping_factor')
         if damping is None:
             damping = R(0)
+
+        # For AC analysis, we need to specify the AC magnitude. We'll use the amplitude for this.
+        # For transient analysis, we use the SIN specification.
+        # NGSPICE allows specifying multiple source types on the same line.
+
+        tran_spec = f'SIN({offset.compat_str()} {amplitude.compat_str()} {frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
+        ac_spec = f'ac {amplitude.compat_str()}'
+        dc_spec = f'dc {offset.compat_str()}'
+
         netlister.add(
             netlister.name_obj(inst, schematic, prefix="v"),
             netlister.portmap(inst, pins),
-            f'SIN({offset.compat_str()} {self.amplitude.compat_str()} {self.frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
+            dc_spec,
+            ac_spec,
+            tran_spec
         )
 
 @public

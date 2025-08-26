@@ -6,7 +6,7 @@ from ..core import *
 from ..sim2.sim_hierarchy import HighlevelSim
 
 from .generic_mos import Or2, Nmos, Pmos, Ringosc, Inv
-from .base import Gnd, NoConn, Res, Vdc, Idc
+from .base import Gnd, NoConn, Res, Vdc, Idc, Cap, SinusoidalVoltageSource
 from . import sky130
 
 class RotateTest(Cell):
@@ -145,7 +145,6 @@ class MultibitReg_Arrays(Cell):
         helpers.schem_check(s, add_conn_points=True, add_terminal_taps=True)
 
         return s
-
 
 class MultibitReg_ArrayOfStructs(Cell):
     bits = Parameter(int)
@@ -363,6 +362,12 @@ class SimBase(Cell):
         sim.op()
         return s
 
+    def sim_ac(self, *args, backend='subprocess', **kwargs):
+        s = SimHierarchy(cell=self)
+        sim = HighlevelSim(self.schematic, s, backend=backend)
+        sim.ac(*args, **kwargs)
+        return s
+
     def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1, enable_savecurrents=True):
         """Run async transient simulation.
 
@@ -410,7 +415,7 @@ class SimBase(Cell):
                 progress = data_point.get('progress', 0.0)
                 yield TranResult(data, node, highlevel_sim.netlister, progress)
 
-    def sim_tran(self, tstep, tstop, backend='ffi', enable_savecurrents=True):
+    def sim_tran(self, tstep, tstop, backend='subprocess', enable_savecurrents=True):
         """Run sync transient simulation.
 
         Args:
@@ -420,37 +425,45 @@ class SimBase(Cell):
             enable_savecurrents: If True (default), enables .option savecurrents
         """
         # Create hierarchical simulation
-        from ..sim2.sim_hierarchy import SimHierarchy, SimNet, SimInstance
-        from ..sim2.ngspice import Ngspice
+        from ..sim2.sim_hierarchy import SimHierarchy
+        s = SimHierarchy(cell=self)
+        sim = HighlevelSim(self.schematic, s, backend=backend, enable_savecurrents=enable_savecurrents)
+        sim.tran(tstep, tstop)
+        return s
 
-        node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents, backend=backend)
+class RcFilterTb(SimBase):
+    r = Parameter(R, default=R(1e3))
+    c = Parameter(R, default=R(1e-9))
 
-        # Create result wrapper class
-        class TranResult:
-            def __init__(self, data, sim_hierarchy, netlister):
-                self._data = data
-                self._node = sim_hierarchy
-                self._netlister = netlister
-                self.time = data.time
+    @generate
+    def schematic(self):
+        s = Schematic(cell=self)
 
-                # Create hierarchical access
-                for net in sim_hierarchy.all(SimNet):
-                    net_name = netlister.name_hier_simobj(net)
-                    if net_name in data.voltages:
-                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data.voltages[net_name]})())
+        s.inp = Net()
+        s.out = Net()
+        s.vss = Net()
 
-                for inst in sim_hierarchy.all(SimInstance):
-                    inst_name = netlister.name_hier_simobj(inst)
-                    if inst_name in data.currents:
-                        setattr(self, inst.npath.name, type('InstData', (), {'currents': data.currents[inst_name]})())
+        vac = SinusoidalVoltageSource(amplitude=R(1), frequency=R(1)).symbol # frequency is a dummy value
+        res = Res(r=self.r).symbol
+        cap = Cap(c=self.c).symbol
+        gnd = Gnd().symbol
 
+        s.I0 = SchemInstance(gnd.portmap(p=s.vss), pos=Vec2R(0, -4))
+        s.I1 = SchemInstance(vac.portmap(p=s.inp, m=s.vss), pos=Vec2R(0, 4))
+        s.I2 = SchemInstance(res.portmap(p=s.inp, m=s.out), pos=Vec2R(5, 4))
+        s.I3 = SchemInstance(cap.portmap(p=s.out, m=s.vss), pos=Vec2R(10, 4))
 
-        # Run simulation
-        with Ngspice.launch(backend=backend) as sim:
-            sim.load_netlist(highlevel_sim.netlister.out())
-            data = sim.tran(tstep, tstop)
-            return TranResult(data, node, highlevel_sim.netlister)
+        s.inp % SchemWire(vertices=[s.I1.pos + vac.p.pos, s.I2.pos + res.p.pos])
+        s.out % SchemWire(vertices=[s.I2.pos + res.m.pos, s.I3.pos + cap.p.pos])
+
+        vss_bus_y = R(-2)
+        s.vss % SchemWire(vertices=[Vec2R(2, vss_bus_y), Vec2R(12, vss_bus_y)]) # vss bus
+        s.vss % SchemWire(vertices=[s.I0.pos + gnd.p.pos, Vec2R(2, vss_bus_y)])
+        s.vss % SchemWire(vertices=[s.I1.pos + vac.m.pos, Vec2R(2, vss_bus_y)])
+        s.vss % SchemWire(vertices=[s.I3.pos + cap.m.pos, Vec2R(12, vss_bus_y)])
+
+        helpers.schem_check(s, add_conn_points=True)
+        return s
 
 class ResdivFlatTb(SimBase):
     @generate
