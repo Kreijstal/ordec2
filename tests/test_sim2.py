@@ -166,7 +166,6 @@ def test_webdata():
     assert 'voltages' in data
     assert 'currents' in data
 
-@pytest.mark.skip(reason="AC simulation is not yet fully implemented")
 def test_sim_ac_rc_filter():
     import math
     import numpy as np

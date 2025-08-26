@@ -6,7 +6,7 @@ from ..core import *
 from ..sim2.sim_hierarchy import HighlevelSim
 
 from .generic_mos import Or2, Nmos, Pmos, Ringosc, Inv
-from .base import Gnd, NoConn, Res, Vdc, Idc, Cap, Vac
+from .base import Gnd, NoConn, Res, Vdc, Idc, Cap, SinusoidalVoltageSource
 from . import sky130
 
 class RotateTest(Cell):
@@ -443,7 +443,7 @@ class RcFilterTb(SimBase):
         s.out = Net()
         s.vss = Net()
 
-        vac = Vac(ac_mag=R(1)).symbol
+        vac = SinusoidalVoltageSource(amplitude=R(1), frequency=R(1)).symbol # frequency is a dummy value
         res = Res(r=self.r).symbol
         cap = Cap(c=self.c).symbol
         gnd = Gnd().symbol

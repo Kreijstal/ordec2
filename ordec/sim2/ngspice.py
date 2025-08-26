@@ -1023,6 +1023,86 @@ class _SubprocessBackend:
 
         return result
 
+    def tran(self, *args) -> NgspiceTransientResult:
+        self.command(f"tran {' '.join(args)}")
+        print_all_res = self.command("print all")
+        lines = print_all_res.split('\n')
+
+        result = NgspiceTransientResult()
+        i = 0
+
+        while i < len(lines):
+            line = lines[i]
+
+            if len(line) == 0:
+                i += 1
+                continue
+
+            # Look for NGspice table pattern: (only tested with a single version of ngspice!)
+
+            # Check if this could be start of a table
+            if (not re.match(r"^-+$", line.strip()) and  # Not a separator line
+                line.strip() and  # Not empty
+                i + 4 < len(lines)):  # Enough lines ahead
+
+                # Look for the pattern ahead
+                desc_offset = 1
+
+                # Check if next line is description or separator
+                if re.match(r"^-+$", lines[i + 1].strip()):
+                    # Next line is separator, no description
+                    desc_offset = 0
+                elif (i + 2 < len(lines) and
+                      re.match(r"^-+$", lines[i + 2].strip())):
+                    # Line after next is separator, so next line is description
+                    desc_offset = 1
+                else:
+                    # Not a table pattern
+                    i += 1
+                    continue
+
+                separator1_idx = i + 1 + desc_offset
+                headers_idx = separator1_idx + 1
+                separator2_idx = headers_idx + 1
+
+                if (separator2_idx < len(lines) and
+                    re.match(r"^-+$", lines[separator1_idx].strip()) and
+                    re.match(r"^-+$", lines[separator2_idx].strip())):
+
+                    table = NgspiceTable(line.strip())
+                    table.headers = lines[headers_idx].split()
+
+                    # Skip to data section
+                    i = separator2_idx + 1
+
+                    # Read data rows
+                    while i < len(lines):
+                        data_line = lines[i]
+                        i += 1
+
+                        # Check for table end
+                        if (re.match(r"^-+$", data_line.strip()) or
+                            data_line == '\x0c' or
+                            not data_line.strip()):
+                            break
+
+                        # Skip header lines that appear mid-data (these have text matching column names)
+                        if self._is_header_line(data_line, table.headers):
+                            continue
+
+                        # Add data row - split and validate it looks like numeric data
+                        row_data = data_line.split()
+                        if row_data and self._is_numeric_row(row_data):
+                            table.data.append(row_data)
+
+                    result.add_table(table)
+                    continue
+
+            # Not a table, move to next line
+            i += 1
+
+        return result
+
     def _is_header_line(self, line, expected_headers):
         """Check if a line looks like a header line."""
         if not line.strip():
@@ -1041,61 +1121,48 @@ class _SubprocessBackend:
     def ac(self, *args) -> 'NgspiceAcResult':
         self.command(f"ac {' '.join(args)}")
 
-        vectors = list(self.vector_info())
-        # The first vector is always 'frequency' and it is real.
-        # The other vectors are complex and are the ones we are interested in.
-        valid_vectors = [v.name for v in vectors if v.length > 0]
-
-        data_fn = self.cwd / 'ac_data.txt'
-
-        # Use wrdata to write simulation results to a file
-        self.command(f"wrdata {data_fn} {' '.join(valid_vectors)}")
-
-        with open(data_fn, 'r') as f:
-            lines = f.readlines()
-
+        print_all_res = "".join(self.print_all())
         result = NgspiceAcResult()
-        if not lines:
-            return result
 
-        data_rows = [line.split() for line in lines]
+        # Split the output into sections for each vector table
+        sections = re.split(r'AC Analysis\s+.*\n\s*-{60,}', print_all_res)
 
-        # The output of wrdata does not have a header.
-        # The columns are in the order of the vectors given to wrdata.
-        # For complex vectors, two columns are written: real and imag.
+        for section in sections:
+            if not section.strip():
+                continue
 
-        # Let's build a map from vector name to column index
-        col_map = {}
-        col_idx = 0
+            lines = section.strip().split('\n')
+            header_line = lines[0]
+            data_lines = lines[1:]
 
-        # We need to know the order of vectors as provided to wrdata
-        wrdata_vectors = [v for v in vectors if v.length > 0]
+            # Extract vector names from header
+            headers = header_line.split()
+            if len(headers) < 2:
+                continue
 
-        for v in wrdata_vectors:
-            col_map[v.name] = col_idx
-            if v.dtype == 'complex':
-                col_idx += 2
-            else:
-                col_idx += 1
+            vector_name = headers[-1]
 
-        if 'frequency' not in col_map:
-             # This can happen if the AC simulation fails and no vectors are generated.
-             # An empty result will be returned.
-             return result
+            if 'frequency' in headers:
+                if not result.freq:
+                    for line in data_lines:
+                        match = re.match(r"\s*\d+\s+([\d.eE+-]+)", line)
+                        if match:
+                            result.freq.append(float(match.group(1)))
 
-        freq_idx = col_map['frequency']
-        result.freq = [float(row[freq_idx]) for row in data_rows]
+            signal_data = []
+            for line in data_lines:
+                match = re.search(r"([\d.eE+-]+),\s*([\d.eE+-]+)", line)
+                if match:
+                    real = float(match.group(1))
+                    imag = float(match.group(2))
+                    signal_data.append(complex(real, imag))
 
-        for vec in wrdata_vectors:
-            if vec.name != 'frequency':
-                if vec.dtype == 'complex':
-                    signal_data = []
-                    vec_idx = col_map[vec.name]
-                    for row in data_rows:
-                        real = float(row[vec_idx])
-                        imag = float(row[vec_idx+1])
-                        signal_data.append(complex(real, imag))
-                    result._categorize_signal(vec.name, signal_data)
+            if not signal_data:
+                continue
+
+            result._categorize_signal(vector_name, signal_data)
+
+        result.freq = tuple(result.freq)
         return result
 
     def vector_info(self) -> Iterator[NgspiceVector]:

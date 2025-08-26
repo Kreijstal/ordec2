@@ -223,47 +223,6 @@ class Vdc(Cell):
         return [cls('1')]
 
 @public
-class Vac(Cell):
-    """AC voltage source"""
-    dc = Parameter(R, default=R(0)) #: DC voltage in volt
-    ac_mag = Parameter(R, default=R(1)) #: AC magnitude in volt
-    ac_phase = Parameter(R, default=R(0)) #: AC phase in degrees
-    alt_symbol = Parameter(bool, optional=True) #: Use alternative symbol
-
-    @generate
-    def symbol(self) -> Symbol:
-        s = Symbol(cell=self)
-
-        s.m = Pin(pos=Vec2R(2, 0), pintype=PinType.Inout, align=Orientation.South)
-        s.p = Pin(pos=Vec2R(2, 4), pintype=PinType.Inout, align=Orientation.North)
-
-        # Circle
-        s % SymbolArc(pos=Vec2R(2, 2), radius=R(1))
-
-        # Lines
-        s % SymbolPoly(vertices=[Vec2R(2, 3), Vec2R(2, 4)])
-        s % SymbolPoly(vertices=[Vec2R(2, 1), Vec2R(2, 0)])
-
-        # Sine wave symbol
-        import numpy as np
-        sine_wave_points = [
-            Vec2R(1.5 + 0.05 * t, 2.0 + 0.4 * np.sin(np.pi * t / 4))
-            for t in range(21)
-        ]
-        s % SymbolPoly(vertices=sine_wave_points)
-
-        s.outline = Rect4R(lx=0, ly=0, ux=4, uy=4)
-        return s
-
-    def netlist_ngspice(self, netlister, inst, schematic):
-        pins = [inst.symbol.p, inst.symbol.m]
-        netlister.add(netlister.name_obj(inst, schematic, prefix="v"), netlister.portmap(inst, pins) , f'dc {self.dc.compat_str()} ac {self.ac_mag.compat_str()} {self.ac_phase.compat_str()}')
-
-    @classmethod
-    def discoverable_instances(cls):
-        return [cls('1')]
-
-@public
 class Idc(Cell):
     """DC current source"""
     dc = Parameter(R) #: DC current in ampere
@@ -478,20 +437,38 @@ class SinusoidalVoltageSource(Cell):
 
     def netlist_ngspice(self, netlister, inst, schematic):
         pins = [inst.symbol.p, inst.symbol.m]
-        # NGSPICE sine format: SIN(VOFF VAMP FREQ TD THETA PHASE)
-        offset = self.params.get('offset')
+
+        cell = inst.symbol.cell
+        offset = cell.params.get('offset')
         if offset is None:
             offset = R(0)
-        delay = self.params.get('delay')
+        amplitude = cell.params.get('amplitude')
+        if amplitude is None:
+            amplitude = R(0)
+        frequency = cell.params.get('frequency')
+        if frequency is None:
+            frequency = R(0)
+        delay = cell.params.get('delay')
         if delay is None:
             delay = R(0)
-        damping = self.params.get('damping_factor')
+        damping = cell.params.get('damping_factor')
         if damping is None:
             damping = R(0)
+
+        # For AC analysis, we need to specify the AC magnitude. We'll use the amplitude for this.
+        # For transient analysis, we use the SIN specification.
+        # NGSPICE allows specifying multiple source types on the same line.
+
+        tran_spec = f'SIN({offset.compat_str()} {amplitude.compat_str()} {frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
+        ac_spec = f'ac {amplitude.compat_str()}'
+        dc_spec = f'dc {offset.compat_str()}'
+
         netlister.add(
             netlister.name_obj(inst, schematic, prefix="v"),
             netlister.portmap(inst, pins),
-            f'SIN({offset.compat_str()} {self.amplitude.compat_str()} {self.frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
+            dc_spec,
+            ac_spec,
+            tran_spec
         )
 
 @public
