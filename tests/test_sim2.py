@@ -147,8 +147,8 @@ def test_ihp_mos_inv():
 
 @pytest.mark.libngspice
 def test_ihp_mos_inv_ffi():
-    # Test IHP inverter DC simulation with FFI backend
-    # FFI backend has state management issues with complex PDKs, use subprocess instead
+    # Test IHP inverter DC simulation with subprocess backend
+    # FFI backend has state management issues with complex PDK setups
     h = lib_test.InvIhpTb(vin=R(0)).sim_dc
     assert h.o.dc_voltage > 4.0  # Should be close to 5V
     h = lib_test.InvIhpTb(vin=R(5)).sim_dc

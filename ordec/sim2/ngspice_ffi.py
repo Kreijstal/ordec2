@@ -138,6 +138,8 @@ class _FFIBackend:
                 except:
                     pass  # Ignore cleanup errors to prevent segfaults
 
+
+
     def cleanup(self):
         # Skip calling quit to avoid memory corruption issues in ngspice FFI
         # The shared library will be cleaned up when the process exits
@@ -302,6 +304,27 @@ class _FFIBackend:
         output = "\n".join(self._output_lines)
         check_errors(output)
         return output
+
+    def reset(self):
+        """Reset the ngspice state to clear any previous circuit and analysis results."""
+        try:
+            # Try to remove any existing circuit
+            self.command("remcirc")
+        except:
+            # Ignore errors if no circuit is loaded
+            pass
+
+        try:
+            # Destroy all plots and data
+            self.command("destroy all")
+        except:
+            # Ignore errors if no data exists
+            pass
+
+        # Clear internal state
+        self._output_lines.clear()
+        self._error_message = None
+        self._has_fatal_error = False
 
     def load_netlist(self, netlist: str, no_auto_gnd: bool = True):
         # FFI backend loads circuit from an array of strings
