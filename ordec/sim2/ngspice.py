@@ -12,11 +12,13 @@ import numpy as np
 from ..core import *
 from .ngspice_ffi import _FFIBackend
 from .ngspice_subprocess import _SubprocessBackend
+from .ngspice_mp import IsolatedFFIBackend
 
 class NgspiceBackend(Enum):
     """Available NgSpice backend types."""
     SUBPROCESS = "subprocess"
     FFI = "ffi"
+    MULTIPROCESSING = "multiprocessing"
 
 class Ngspice:
     @staticmethod
@@ -31,6 +33,7 @@ class Ngspice:
         backend_class = {
             NgspiceBackend.FFI: _FFIBackend,
             NgspiceBackend.SUBPROCESS: _SubprocessBackend,
+            NgspiceBackend.MULTIPROCESSING: IsolatedFFIBackend,
         }[backend]
 
         with backend_class.launch(debug=debug) as backend_instance:
