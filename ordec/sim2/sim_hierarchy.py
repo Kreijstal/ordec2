@@ -50,9 +50,18 @@ class HighlevelSim:
             name = self.netlister.name_hier_simobj(sn)
             self.str_to_simobj[name] = sn
 
+        # Collect simulation setup hooks from netlister
+        self.sim_setup_hooks = []
+        if hasattr(self.netlister, '_sim_setup_hooks'):
+            self.sim_setup_hooks = list(self.netlister._sim_setup_hooks)
+
     def op(self):
         self.simhier.sim_type = SimType.DC
         with Ngspice.launch(debug=False, backend=self.backend) as sim:
+            # Run simulation setup hooks
+            for hook in self.sim_setup_hooks:
+                hook(sim)
+
             sim.load_netlist(self.netlister.out())
             for vtype, name, subname, value in sim.op():
                 if vtype == 'voltage':
@@ -77,6 +86,10 @@ class HighlevelSim:
     def tran(self, tstep, tstop):
         self.simhier.sim_type = SimType.TRAN
         with Ngspice.launch(debug=False, backend=self.backend) as sim:
+            # Run simulation setup hooks
+            for hook in self.sim_setup_hooks:
+                hook(sim)
+
             sim.load_netlist(self.netlister.out())
             data = sim.tran(tstep, tstop)
             self.simhier.time = tuple(data.time)
@@ -96,6 +109,10 @@ class HighlevelSim:
     def ac(self, *args, wrdata_file: Optional[str] = None):
         self.simhier.sim_type = SimType.AC
         with Ngspice.launch(debug=False, backend=self.backend) as sim:
+            # Run simulation setup hooks
+            for hook in self.sim_setup_hooks:
+                hook(sim)
+
             sim.load_netlist(self.netlister.out())
             data = sim.ac(*args, wrdata_file=wrdata_file)
             self.simhier.freq = tuple(data.freq)

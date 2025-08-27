@@ -455,10 +455,6 @@ class SinusoidalVoltageSource(Cell):
         if damping is None:
             damping = R(0)
 
-        # For AC analysis, we need to specify the AC magnitude. We'll use the amplitude for this.
-        # For transient analysis, we use the SIN specification.
-        # NGSPICE allows specifying multiple source types on the same line.
-
         tran_spec = f'SIN({offset.compat_str()} {amplitude.compat_str()} {frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
         ac_spec = f'ac {amplitude.compat_str()}'
         dc_spec = f'dc {offset.compat_str()}'
@@ -466,9 +462,7 @@ class SinusoidalVoltageSource(Cell):
         netlister.add(
             netlister.name_obj(inst, schematic, prefix="v"),
             netlister.portmap(inst, pins),
-            dc_spec,
-            ac_spec,
-            tran_spec
+            f'{dc_spec} {ac_spec} {tran_spec}'
         )
 
 @public
@@ -491,7 +485,7 @@ class PieceWiseLinearCurrentSource(Cell):
         s % SymbolArc(pos=Vec2R(2, 2), radius=R(1))
         s % SymbolPoly(vertices=[Vec2R(2, 3), Vec2R(2, 4)]) # To positive pin 'p'
         s % SymbolPoly(vertices=[Vec2R(2, 1), Vec2R(2, 0)]) # To negative pin 'm'
-        
+
         s % SymbolPoly(vertices=[
             Vec2R(1.4, 1.7),
             Vec2R(1.7, 2.3),
@@ -503,7 +497,7 @@ class PieceWiseLinearCurrentSource(Cell):
         arrow_tip_y = 2.7
         arrow_base_y = 2.3
         arrow_barb_y = 2.5
-        arrow_width = 0.2 
+        arrow_width = 0.2
 
         # Shaft
         s % SymbolPoly(vertices=[Vec2R(2, arrow_base_y), Vec2R(2, arrow_tip_y)])
@@ -568,11 +562,11 @@ class PulseCurrentSource(Cell):
             Vec2R(2.5, 2.3)
         ])
 
-        # Arrow pointing UP (from m towards p) 
+        # Arrow pointing UP (from m towards p)
         arrow_tip_y = 3.0
-        arrow_base_y = 2.5 
+        arrow_base_y = 2.5
         arrow_barb_y = 2.7
-        arrow_width = 0.3 
+        arrow_width = 0.3
         s % SymbolPoly(vertices=[Vec2R(2, arrow_base_y), Vec2R(2, arrow_tip_y)]) # Shaft
         s % SymbolPoly(vertices=[
             Vec2R(2 - arrow_width, arrow_barb_y), # Left barb base
@@ -637,10 +631,10 @@ class SinusoidalCurrentSource(Cell):
         s % SymbolPoly(vertices=sine_wave_points)
 
         # Arrow pointing UP
-        arrow_tip_y = 3.0 
+        arrow_tip_y = 3.0
         arrow_base_y = 2.5
         arrow_barb_y = 2.7
-        arrow_width = 0.3 
+        arrow_width = 0.3
 
         s % SymbolPoly(vertices=[Vec2R(2, arrow_base_y), Vec2R(2, arrow_tip_y)]) # Shaft
         s % SymbolPoly(vertices=[

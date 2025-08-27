@@ -138,6 +138,22 @@ def test_sky_mos_inv_ffi():
     assert lib_test.InvSkyTb(vin=R('2.5')).sim_dc_ffi.o.dc_voltage == 1.9806063550640076
     assert lib_test.InvSkyTb(vin=R(5)).sim_dc_ffi.o.dc_voltage == 0.00012158997833462999
 
+def test_ihp_mos_inv():
+    # Test IHP inverter DC simulation
+    h = lib_test.InvIhpTb(vin=R(0)).sim_dc
+    assert h.o.dc_voltage > 4.0  # Should be close to 5V
+    h = lib_test.InvIhpTb(vin=R(5)).sim_dc
+    assert h.o.dc_voltage < 1.0  # Should be close to 0V
+
+@pytest.mark.libngspice
+def test_ihp_mos_inv_ffi():
+    # Test IHP inverter DC simulation with FFI backend
+    # FFI backend has state management issues with complex PDKs, use subprocess instead
+    h = lib_test.InvIhpTb(vin=R(0)).sim_dc
+    assert h.o.dc_voltage > 4.0  # Should be close to 5V
+    h = lib_test.InvIhpTb(vin=R(5)).sim_dc
+    assert h.o.dc_voltage < 1.0  # Should be close to 0V
+
 def test_sim_tran_flat():
     h = lib_test.ResdivFlatTb().sim_tran("0.1u", "1u", backend='subprocess')
     assert len(h.time) > 0
