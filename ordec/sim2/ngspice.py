@@ -18,7 +18,7 @@ class NgspiceBackend(Enum):
     """Available NgSpice backend types."""
     SUBPROCESS = "subprocess"
     FFI = "ffi"
-    MULTIPROCESSING = "multiprocessing"
+    MP = "mp"
 
 class Ngspice:
     @staticmethod
@@ -33,7 +33,7 @@ class Ngspice:
         backend_class = {
             NgspiceBackend.FFI: _FFIBackend,
             NgspiceBackend.SUBPROCESS: _SubprocessBackend,
-            NgspiceBackend.MULTIPROCESSING: IsolatedFFIBackend,
+            NgspiceBackend.MP: IsolatedFFIBackend,
         }[backend]
 
         with backend_class.launch(debug=debug) as backend_instance:
