@@ -25,8 +25,69 @@ if not _IHP_SG13G2_MODEL_FULL_PATH.is_file():
     print(f"WARNING: IHP SG13G2 model file not found at expected path: {_IHP_SG13G2_MODEL_FULL_PATH}")
     print(f"Ensure the files exist, or set the environmental variable ORDEC_PDK_IHP_SG13G2")
 
+def setup_ihp_sg13g2_commands(sim):
+    """Execute ngspice commands directly based on .spiceinit content"""
+    import os
+    pdk_path = os.getenv('ORDEC_PDK_IHP_SG13G2')
+    if not pdk_path:
+        # Use fallback path if environment variable is not set
+        _MODULE_DIR = Path(__file__).parent
+        _PROJECT_ROOT = _MODULE_DIR.parent.parent
+        pdk_path = str(_PROJECT_ROOT / "ihp-sg13g2")
+
+    osdi_path = Path(pdk_path) / "libs.tech/ngspice/osdi"
+    models_path = Path(pdk_path) / "libs.tech/ngspice/models"
+    stdcell_path = Path(pdk_path) / "libs.ref/sg13g2_stdcell/spice"
+    io_path = Path(pdk_path) / "libs.ref/sg13g2_io/spice"
+
+    # Set ngspice behavior (from .spiceinit)
+    try:
+        sim.command("set ngbehavior=hsa")
+        sim.command("set noinit")
+    except:
+        pass
+
+    # Set sourcepath (equivalent to setcs sourcepath commands in .spiceinit)
+    try:
+        cmd = f"setcs sourcepath = ( {models_path} {stdcell_path} {io_path} )"
+        sim.command(cmd)
+    except:
+        pass
+
+    # Load OSDI models using absolute paths resolved in Python
+    psp103_path = osdi_path / "psp103_nqs.osdi"
+    if psp103_path.exists():
+        try:
+            sim.command(f"osdi '{psp103_path.resolve()}'")
+        except:
+            pass
+
+    r3_cmc_path = osdi_path / "r3_cmc.osdi"
+    if r3_cmc_path.exists():
+        try:
+            sim.command(f"osdi '{r3_cmc_path.resolve()}'")
+        except:
+            pass
+
+    mosvar_path = osdi_path / "mosvar.osdi"
+    if mosvar_path.exists():
+        try:
+            sim.command(f"osdi '{mosvar_path.resolve()}'")
+        except:
+            pass
+
 def setup_ihp_sg13g2(netlister):
-    netlister.add(".include", f"\"{_IHP_SG13G2_MODEL_FULL_PATH}\"")
+    # Register simulation setup commands
+    netlister.require_sim_setup(setup_ihp_sg13g2_commands)
+
+    # Load corner library with typical corner
+    netlister.add(".lib", f"\"{_IHP_SG13G2_MODEL_FULL_PATH}\" mos_tt")
+
+    # Add options from .spiceinit
+    netlister.add(".option", "tnom=28")
+    netlister.add(".option", "warn=1")
+    netlister.add(".option", "maxwarns=10")
+    netlister.add(".option", "savecurrents")
 
 class Mos(Cell):
     l = Parameter(R)  #: Length
@@ -94,7 +155,7 @@ class Inv(Cell):
             "ng": 1,
         }
         nmos = Nmos(**nmos_params).symbol
-        
+
         pmos_params = {
             "l": R("0.13u"),
             "w": R("0.99u"),
@@ -121,6 +182,9 @@ class Inv(Cell):
         s.y % SchemWire([Vec2R(5, 7), Vec2R(9, 7)])
 
         s.outline = Rect4R(lx=0, ly=1, ux=10, uy=13)
-        
+
         helpers.schem_check(s, add_conn_points=True)
         return s
+
+# The standard HighlevelSim now supports simulation setup hooks through netlister.require_sim_setup()
+# No need for custom HighlevelSim class or monkey-patching
