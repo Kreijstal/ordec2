@@ -8,6 +8,8 @@ from contextlib import contextmanager
 import traceback
 import queue # For queue.Empty exception
 
+from .ngspice_common import NgspiceTransientResult
+
 # Sentinel value to signal the end of an async simulation
 _ASYNC_SIM_SENTINEL = "---ASYNC_SIM_SENTINEL---"
 
@@ -79,7 +81,7 @@ class FFIWorkerProcess:
                     continue
 
                 result = method(*args, **kwargs)
-                if hasattr(result, '__iter__') and not isinstance(result, (list, tuple, dict, str)):
+                if hasattr(result, '__iter__') and not isinstance(result, (list, tuple, dict, str, NgspiceTransientResult)):
                     result = list(result)
 
                 self.conn.send({'type': 'result', 'data': pickle.dumps(result)})

@@ -9,12 +9,12 @@ from ordec.core.rational import R
 @pytest.mark.libngspice
 @pytest.mark.parametrize("backend", ["ffi", "mp"])
 def test_highlevel_async_tran_basic(backend):
-    h = lib_test.ResdivFlatTb()
+    h = lib_test.ResdivFlatTb(backend=backend)
 
     data_points = []
     time_values = []
 
-    for i, result in enumerate(h.sim_tran_async("0.1u", "3u", backend=backend)):
+    for i, result in enumerate(h.sim_tran_async("0.1u", "3u")):
         data_points.append(result)
         time_values.append(result.time)
 
@@ -47,10 +47,10 @@ def test_highlevel_async_tran_with_callback(backend):
             'data': data_point.get('data', {})
         })
 
-    h = lib_test.ResdivFlatTb()
+    h = lib_test.ResdivFlatTb(backend=backend)
 
     data_count = 0
-    for result in h.sim_tran_async("0.1u", "5u", backend=backend,
+    for result in h.sim_tran_async("0.1u", "5u",
                                    callback=progress_callback,
                                    throttle_interval=0.1):
         data_count += 1
@@ -73,7 +73,7 @@ def test_highlevel_async_tran_with_callback(backend):
 @pytest.mark.libngspice
 @pytest.mark.parametrize("backend", ["ffi", "mp"])
 def test_sky130_streaming_without_savecurrents(backend):
-    h = lib_test.InvSkyTb(vin=R(2.5))
+    h = lib_test.InvSkyTb(vin=R(2.5), backend=backend)
 
     callback_count = 0
 
@@ -83,7 +83,6 @@ def test_sky130_streaming_without_savecurrents(backend):
 
     data_points = []
     for i, result in enumerate(h.sim_tran_async("0.01u", "0.5u",
-                                                backend=backend,
                                                 enable_savecurrents=False,
                                                 callback=count_callback,
                                                 throttle_interval=0.05)):
@@ -98,7 +97,7 @@ def test_sky130_streaming_without_savecurrents(backend):
 @pytest.mark.libngspice
 @pytest.mark.parametrize("backend", ["ffi", "mp"])
 def test_sky130_streaming_with_savecurrents(backend):
-    h = lib_test.InvSkyTb(vin=R(2.5))
+    h = lib_test.InvSkyTb(vin=R(2.5), backend=backend)
 
     callback_count = 0
 
@@ -108,7 +107,6 @@ def test_sky130_streaming_with_savecurrents(backend):
 
     data_points = []
     for i, result in enumerate(h.sim_tran_async("0.01u", "0.5u",
-                                                backend=backend,
                                                 enable_savecurrents=True,
                                                 callback=count_callback,
                                                 throttle_interval=0.05)):
@@ -144,10 +142,10 @@ def test_sky130_netlist_savecurrents_option():
 @pytest.mark.parametrize("backend", ["ffi", "mp"])
 def test_highlevel_async_mos_sourcefollower(backend):
     """Test async transient simulation with MOS source follower."""
-    h = lib_test.NmosSourceFollowerTb(vin=R(2.0))
+    h = lib_test.NmosSourceFollowerTb(vin=R(2.0), backend=backend)
 
     data_points = []
-    for i, result in enumerate(h.sim_tran_async("0.1u", "1u", backend=backend)):
+    for i, result in enumerate(h.sim_tran_async("0.1u", "1u")):
         data_points.append(result)
         if i >= 5:
             break
@@ -162,10 +160,10 @@ def test_highlevel_async_mos_sourcefollower(backend):
 @pytest.mark.libngspice
 @pytest.mark.parametrize("backend", ["ffi", "mp"])
 def test_highlevel_async_mos_inverter(backend):
-    h = lib_test.InvTb(vin=R(0))
+    h = lib_test.InvTb(vin=R(0), backend=backend)
 
     data_points = []
-    for i, result in enumerate(h.sim_tran_async("0.1u", "1u", backend=backend)):
+    for i, result in enumerate(h.sim_tran_async("0.1u", "1u")):
         data_points.append(result)
         if i >= 5:
             break
@@ -181,10 +179,10 @@ def test_highlevel_async_mos_inverter(backend):
 @pytest.mark.libngspice
 @pytest.mark.parametrize("backend", ["ffi", "mp"])
 def test_highlevel_async_sky_inverter(backend):
-    h = lib_test.InvSkyTb(vin=R(2.5))
+    h = lib_test.InvSkyTb(vin=R(2.5), backend=backend)
 
     data_points = []
-    for i, result in enumerate(h.sim_tran_async("0.1u", "1u", backend=backend, enable_savecurrents=False)):
+    for i, result in enumerate(h.sim_tran_async("0.1u", "1u", enable_savecurrents=False)):
         data_points.append(result)
         if i >= 5:
             break
@@ -199,12 +197,12 @@ def test_highlevel_async_sky_inverter(backend):
 @pytest.mark.libngspice
 @pytest.mark.parametrize("backend", ["ffi", "mp"])
 def test_highlevel_async_early_termination(backend):
-    h = lib_test.ResdivFlatTb()
+    h = lib_test.ResdivFlatTb(backend=backend)
 
     data_count = 0
     final_time = None
 
-    for result in h.sim_tran_async("0.05u", "10u", backend=backend):
+    for result in h.sim_tran_async("0.05u", "10u"):
         data_count += 1
         final_time = result.time
 
@@ -220,9 +218,9 @@ def test_highlevel_async_early_termination(backend):
 def test_highlevel_async_multiple_circuits(backend):
     """Test running multiple async transient simulations sequentially."""
     # First circuit
-    h1 = lib_test.ResdivFlatTb()
+    h1 = lib_test.ResdivFlatTb(backend=backend)
     results1 = []
-    for i, result in enumerate(h1.sim_tran_async("0.1u", "1u", backend=backend)):
+    for i, result in enumerate(h1.sim_tran_async("0.1u", "1u")):
         results1.append(result)
         if i >= 3:
             break
@@ -232,9 +230,9 @@ def test_highlevel_async_multiple_circuits(backend):
     assert hasattr(results1[0].a, 'voltage')
 
     # Second circuit
-    h2 = lib_test.ResdivHierTb()
+    h2 = lib_test.ResdivHierTb(backend=backend)
     results2 = []
-    for i, result in enumerate(h2.sim_tran_async("0.1u", "1u", backend=backend)):
+    for i, result in enumerate(h2.sim_tran_async("0.1u", "1u")):
         results2.append(result)
         if i >= 3:
             break
@@ -251,10 +249,10 @@ def test_highlevel_async_parameter_sweep(backend):
     results = {}
 
     for vin in input_voltages:
-        h = lib_test.NmosSourceFollowerTb(vin=R(vin))
+        h = lib_test.NmosSourceFollowerTb(vin=R(vin), backend=backend)
 
         async_results = []
-        for i, result in enumerate(h.sim_tran_async("0.1u", "1u", backend=backend)):
+        for i, result in enumerate(h.sim_tran_async("0.1u", "1u")):
             async_results.append(result)
             if i >= 3:
                 break

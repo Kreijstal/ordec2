@@ -342,40 +342,35 @@ class RingoscTb(Cell):
 # ----------------------
 
 class SimBase(Cell):
+    backend = Parameter(str, default='subprocess')
+
     @generate
     def sim_hierarchy(self):
         s = SimHierarchy(cell=self)
         # Build SimHierarchy, but runs no simulations.
-        HighlevelSim(self.schematic, s)
+        HighlevelSim(self.schematic, s, backend=self.backend)
         return s
 
     @generate
     def sim_dc(self):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s)
+        sim = HighlevelSim(self.schematic, s, backend=self.backend)
         sim.op()
         return s
 
-    @generate
-    def sim_dc_ffi(self):
+    def sim_ac(self, *args, **kwargs):
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s, backend='ffi')
-        sim.op()
-        return s
-
-    def sim_ac(self, *args, backend='subprocess', **kwargs):
-        s = SimHierarchy(cell=self)
+        backend = kwargs.pop('backend', self.backend)
         sim = HighlevelSim(self.schematic, s, backend=backend)
         sim.ac(*args, **kwargs)
         return s
 
-    def sim_tran_async(self, tstep, tstop, backend='ffi', callback=None, throttle_interval=0.1, enable_savecurrents=True):
+    def sim_tran_async(self, tstep, tstop, **kwargs):
         """Run async transient simulation.
 
         Args:
             tstep: Time step for the simulation
             tstop: Stop time for the simulation
-            backend: Simulation backend ('ffi' or 'subprocess')
             callback: Optional callback function for data updates
             throttle_interval: Minimum time between callbacks (seconds)
             enable_savecurrents: If True (default), enables .option savecurrents
@@ -384,8 +379,12 @@ class SimBase(Cell):
         from ..sim2.sim_hierarchy import SimHierarchy
         from ..sim2.ngspice import Ngspice
 
+        callback = kwargs.pop('callback', None)
+        throttle_interval = kwargs.pop('throttle_interval', 0.1)
+        enable_savecurrents = kwargs.pop('enable_savecurrents', True)
+
         node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents, backend=backend)
+        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents, backend=self.backend)
 
         # Create result wrapper class
         class TranResult:
@@ -408,7 +407,7 @@ class SimBase(Cell):
                         setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
 
         # Run simulation
-        with Ngspice.launch(backend=backend) as sim:
+        with Ngspice.launch(backend=self.backend) as sim:
             sim.load_netlist(highlevel_sim.netlister.out())
 
             for data_point in sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
@@ -416,7 +415,7 @@ class SimBase(Cell):
                 progress = data_point.get('progress', 0.0)
                 yield TranResult(data, node, highlevel_sim.netlister, progress)
 
-    def sim_tran(self, tstep, tstop, backend='subprocess', enable_savecurrents=True):
+    def sim_tran(self, tstep, tstop, **kwargs):
         """Run sync transient simulation.
 
         Args:
@@ -428,7 +427,8 @@ class SimBase(Cell):
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
         s = SimHierarchy(cell=self)
-        sim = HighlevelSim(self.schematic, s, backend=backend, enable_savecurrents=enable_savecurrents)
+        backend = kwargs.pop('backend', self.backend)
+        sim = HighlevelSim(self.schematic, s, backend=backend, **kwargs)
         sim.tran(tstep, tstop)
         return s
 

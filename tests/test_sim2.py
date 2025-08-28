@@ -11,6 +11,7 @@ from ordec.lib import test as lib_test
 sim2_backends = [
     pytest.param('subprocess', marks=[]),
     pytest.param('ffi', marks=[pytest.mark.libngspice]),
+    pytest.param('mp', marks=[pytest.mark.libngspice]),
 ]
 
 @pytest.mark.parametrize("backend", sim2_backends)
@@ -72,29 +73,27 @@ def test_ngspice_op_no_auto_gnd(backend):
     assert op['a'] == 2.0
     assert op['gnd'] == 1.0
 
-def test_sim_dc_flat():
-    h = lib_test.ResdivFlatTb().sim_dc
-    assert h.a.dc_voltage == 0.3333333
-    assert h.b.dc_voltage == 0.6666667
+@pytest.mark.parametrize("backend,golden_a,golden_b", [
+    ('subprocess', 0.3333333, 0.6666667),
+    pytest.param('ffi', 0.33333333333333337, 0.6666666666666667, marks=pytest.mark.libngspice),
+    pytest.param('mp', 0.33333333333333337, 0.6666666666666667, marks=pytest.mark.libngspice),
+])
+def test_sim_dc_flat(backend, golden_a, golden_b):
+    h = lib_test.ResdivFlatTb(backend=backend).sim_dc
+    # Note: FFI backend has different golden values
+    assert h.a.dc_voltage == golden_a
+    assert h.b.dc_voltage == golden_b
 
-@pytest.mark.libngspice
-def test_sim_dc_flat_ffi():
-    h = lib_test.ResdivFlatTb().sim_dc_ffi
-    # FFI backend golden values
-    assert h.a.dc_voltage == 0.33333333333333337
-    assert h.b.dc_voltage == 0.6666666666666667
-
-def test_sim_dc_hier():
-    h = lib_test.ResdivHierTb().sim_dc
-    assert h.r.dc_voltage == 0.3589744
-    assert h.I0.I1.m.dc_voltage == 0.5897436
-
-@pytest.mark.libngspice
-def test_sim_dc_hier_ffi():
-    h = lib_test.ResdivHierTb().sim_dc_ffi
-    # FFI backend golden values
-    assert h.r.dc_voltage == 0.3589743589743596
-    assert h.I0.I1.m.dc_voltage == 0.5897435897435901
+@pytest.mark.parametrize("backend,golden_r,golden_m", [
+    ('subprocess', 0.3589744, 0.5897436),
+    pytest.param('ffi', 0.3589743589743596, 0.5897435897435901, marks=pytest.mark.libngspice),
+    pytest.param('mp', 0.3589743589743596, 0.5897435897435901, marks=pytest.mark.libngspice),
+])
+def test_sim_dc_hier(backend, golden_r, golden_m):
+    h = lib_test.ResdivHierTb(backend=backend).sim_dc
+    # Note: FFI backend has different golden values
+    assert h.r.dc_voltage == golden_r
+    assert h.I0.I1.m.dc_voltage == golden_m
 
 def test_generic_mos_netlister():
     nl = Netlister()
@@ -104,92 +103,84 @@ def test_generic_mos_netlister():
     assert netlist.count('.model nmosgeneric NMOS level=1') == 1
     assert netlist.count('.model pmosgeneric PMOS level=1') == 1
 
-def test_generic_mos_nmos_sourcefollower():
-    assert lib_test.NmosSourceFollowerTb(vin=R(2)).sim_dc.o.dc_voltage == 0.6837722
-    assert lib_test.NmosSourceFollowerTb(vin=R(3)).sim_dc.o.dc_voltage == 1.683772
+@pytest.mark.parametrize("backend,golden_2,golden_3", [
+    ('subprocess', 0.6837722, 1.683772),
+    pytest.param('ffi', 0.6837722116612965, 1.6837721784225057, marks=pytest.mark.libngspice),
+    pytest.param('mp', 0.6837722116612965, 1.6837721784225057, marks=pytest.mark.libngspice),
+])
+def test_generic_mos_nmos_sourcefollower(backend, golden_2, golden_3):
+    assert lib_test.NmosSourceFollowerTb(vin=R(2), backend=backend).sim_dc.o.dc_voltage == golden_2
+    assert lib_test.NmosSourceFollowerTb(vin=R(3), backend=backend).sim_dc.o.dc_voltage == golden_3
 
-@pytest.mark.libngspice
-def test_generic_mos_nmos_sourcefollower_ffi():
-    # FFI backend golden values
-    assert lib_test.NmosSourceFollowerTb(vin=R(2)).sim_dc_ffi.o.dc_voltage == 0.6837722116612965
-    assert lib_test.NmosSourceFollowerTb(vin=R(3)).sim_dc_ffi.o.dc_voltage == 1.6837721784225057
+@pytest.mark.parametrize("backend,golden_0,golden_2_5,golden_5", [
+    ('subprocess', 5.0, 2.5, 3.13125e-08),
+    pytest.param('ffi', 4.9999999698343345, 2.500000017115547, 3.131249965532494e-08, marks=pytest.mark.libngspice),
+    pytest.param('mp', 4.9999999698343345, 2.500000017115547, 3.131249965532494e-08, marks=pytest.mark.libngspice),
+])
+def test_generic_mos_inv(backend, golden_0, golden_2_5, golden_5):
+    assert lib_test.InvTb(vin=R(0), backend=backend).sim_dc.o.dc_voltage == golden_0
+    assert lib_test.InvTb(vin=R('2.5'), backend=backend).sim_dc.o.dc_voltage == golden_2_5
+    assert lib_test.InvTb(vin=R(5), backend=backend).sim_dc.o.dc_voltage == golden_5
 
-def test_generic_mos_inv():
-    assert lib_test.InvTb(vin=R(0)).sim_dc.o.dc_voltage  == 5.0
-    assert lib_test.InvTb(vin=R('2.5')).sim_dc.o.dc_voltage == 2.5
-    assert lib_test.InvTb(vin=R(5)).sim_dc.o.dc_voltage == 3.13125e-08
+@pytest.mark.parametrize("backend,golden_0,golden_2_5,golden_5", [
+    ('subprocess', 5.0, 1.980606, 0.00012159),
+    pytest.param('ffi', 4.999999973187308, 1.9806063550640076, 0.00012158997833462999, marks=pytest.mark.libngspice),
+    pytest.param('mp', 4.999999973187308, 1.9806063550640076, 0.00012158997833462999, marks=pytest.mark.libngspice),
+])
+def test_sky_mos_inv(backend, golden_0, golden_2_5, golden_5):
+    assert lib_test.InvSkyTb(vin=R(0), backend=backend).sim_dc.o.dc_voltage == golden_0
+    assert lib_test.InvSkyTb(vin=R('2.5'), backend=backend).sim_dc.o.dc_voltage == golden_2_5
+    assert lib_test.InvSkyTb(vin=R(5), backend=backend).sim_dc.o.dc_voltage == golden_5
 
-@pytest.mark.libngspice
-def test_generic_mos_inv_ffi():
-    # FFI backend golden values
-    assert lib_test.InvTb(vin=R(0)).sim_dc_ffi.o.dc_voltage == 4.9999999698343345
-    assert lib_test.InvTb(vin=R('2.5')).sim_dc_ffi.o.dc_voltage == 2.500000017115547
-    assert lib_test.InvTb(vin=R(5)).sim_dc_ffi.o.dc_voltage == 3.131249965532494e-08
-
-def test_sky_mos_inv():
-    assert lib_test.InvSkyTb(vin=R(0)).sim_dc.o.dc_voltage  == 5.0
-    assert lib_test.InvSkyTb(vin=R('2.5')).sim_dc.o.dc_voltage == 1.980606
-    assert lib_test.InvSkyTb(vin=R(5)).sim_dc.o.dc_voltage ==  0.00012159
-
-@pytest.mark.libngspice
-def test_sky_mos_inv_ffi():
-    # FFI backend golden values
-    assert lib_test.InvSkyTb(vin=R(0)).sim_dc_ffi.o.dc_voltage == 4.999999973187308
-    assert lib_test.InvSkyTb(vin=R('2.5')).sim_dc_ffi.o.dc_voltage == 1.9806063550640076
-    assert lib_test.InvSkyTb(vin=R(5)).sim_dc_ffi.o.dc_voltage == 0.00012158997833462999
-
-def test_ihp_mos_inv():
+@pytest.mark.parametrize("backend", [
+    'subprocess',
+    pytest.param('ffi', marks=[pytest.mark.libngspice, pytest.mark.xfail(reason="FFI backend has issues with complex PDKs")]),
+    pytest.param('mp', marks=[pytest.mark.libngspice, pytest.mark.xfail(reason="MP backend has issues with complex PDKs")]),
+])
+def test_ihp_mos_inv(backend):
     # Test IHP inverter DC simulation
-    h = lib_test.InvIhpTb(vin=R(0)).sim_dc
-    assert h.o.dc_voltage > 4.0  # Should be close to 5V
-    h = lib_test.InvIhpTb(vin=R(5)).sim_dc
-    assert h.o.dc_voltage < 1.0  # Should be close to 0V
+    # Note: FFI/MP backends may have state management issues with complex PDK setups
+    h_0 = lib_test.InvIhpTb(vin=R(0), backend=backend).sim_dc
+    assert h_0.o.dc_voltage > 4.0  # Should be close to 5V
+    h_5 = lib_test.InvIhpTb(vin=R(5), backend=backend).sim_dc
+    assert h_5.o.dc_voltage < 1.0  # Should be close to 0V
 
-@pytest.mark.libngspice
-def test_ihp_mos_inv_ffi():
-    # Test IHP inverter DC simulation with subprocess backend
-    # FFI backend has state management issues with complex PDK setups
-    h = lib_test.InvIhpTb(vin=R(0)).sim_dc
-    assert h.o.dc_voltage > 4.0  # Should be close to 5V
-    h = lib_test.InvIhpTb(vin=R(5)).sim_dc
-    assert h.o.dc_voltage < 1.0  # Should be close to 0V
-
-def test_sim_tran_flat():
-    h = lib_test.ResdivFlatTb().sim_tran("0.1u", "1u", backend='subprocess')
+@pytest.mark.parametrize("backend,golden_a,golden_b,atol", [
+    ('subprocess', 0.3333333, 0.6666667, 1e-6),
+    pytest.param('ffi', 0.33333333333333337, 0.6666666666666667, 1e-9, marks=pytest.mark.libngspice),
+    pytest.param('mp', 0.33333333333333337, 0.6666666666666667, 1e-9, marks=pytest.mark.libngspice),
+])
+def test_sim_tran_flat(backend, golden_a, golden_b, atol):
+    h = lib_test.ResdivFlatTb(backend=backend).sim_tran("0.1u", "1u")
     assert len(h.time) > 0
-    assert abs(h.a.trans_voltage[-1] - 0.3333333) < 1e-6
-    assert abs(h.b.trans_voltage[-1] - 0.6666667) < 1e-6
+    assert abs(h.a.trans_voltage[-1] - golden_a) < atol
+    assert abs(h.b.trans_voltage[-1] - golden_b) < atol
 
-@pytest.mark.libngspice
-def test_sim_tran_flat_ffi():
-    h = lib_test.ResdivFlatTb().sim_tran("0.1u", "1u", backend='ffi')
-    assert len(h.time) > 0
-    assert abs(h.a.trans_voltage[-1] - 0.33333333333333337) < 1e-9
-    assert abs(h.b.trans_voltage[-1] - 0.6666666666666667) < 1e-9
-
-def test_webdata():
+@pytest.mark.parametrize("backend", sim2_backends)
+def test_webdata(backend):
     # Test DC webdata
-    h_dc = lib_test.ResdivFlatTb().sim_dc
+    h_dc = lib_test.ResdivFlatTb(backend=backend).sim_dc
     sim_type, data = h_dc.webdata()
     assert sim_type == 'dcsim'
     assert 'dc_voltages' in data
     assert 'dc_currents' in data
 
     # Test transient webdata
-    h_tran = lib_test.ResdivFlatTb().sim_tran("0.1u", "1u")
+    h_tran = lib_test.ResdivFlatTb(backend=backend).sim_tran("0.1u", "1u")
     sim_type, data = h_tran.webdata()
     assert sim_type == 'transim'
     assert 'time' in data
     assert 'voltages' in data
     assert 'currents' in data
 
-def test_sim_ac_rc_filter():
+@pytest.mark.parametrize("backend", sim2_backends)
+def test_sim_ac_rc_filter(backend):
     import math
     import numpy as np
 
     r_val = 1e3
     c_val = 1e-9
-    h = lib_test.RcFilterTb(r=R(r_val), c=R(c_val)).sim_ac('dec', '10', '1', '1G')
+    h = lib_test.RcFilterTb(r=R(r_val), c=R(c_val), backend=backend).sim_ac('dec', '10', '1', '1G')
 
     # Check that we have results
     assert len(h.freq) > 0
@@ -210,7 +201,8 @@ def test_sim_ac_rc_filter():
     # At the -3dB point, the magnitude should be 1/sqrt(2)
     assert np.isclose(vout_mag, 1/math.sqrt(2), atol=1e-2)
 
-def test_sim_ac_rc_filter_wrdata():
+@pytest.mark.parametrize("backend", sim2_backends)
+def test_sim_ac_rc_filter_wrdata(backend):
     import math
     import numpy as np
     import tempfile
@@ -222,7 +214,7 @@ def test_sim_ac_rc_filter_wrdata():
         wrdata_file = tmp.name
         # The HighlevelSim object needs to be created and used within this context
         # so the wrdata_file path is valid.
-        tb = lib_test.RcFilterTb(r=R(r_val), c=R(c_val))
+        tb = lib_test.RcFilterTb(r=R(r_val), c=R(c_val), backend=backend)
         h = tb.sim_ac('dec', '10', '1', '1G', wrdata_file=wrdata_file)
 
         # Check that we have results
@@ -243,31 +235,3 @@ def test_sim_ac_rc_filter_wrdata():
 
         # At the -3dB point, the magnitude should be 1/sqrt(2)
         assert np.isclose(vout_mag, 1/math.sqrt(2), atol=1e-2)
-
-@pytest.mark.libngspice
-def test_sim_ac_rc_filter_ffi():
-    import math
-    import numpy as np
-
-    r_val = 1e3
-    c_val = 1e-9
-    h = lib_test.RcFilterTb(r=R(r_val), c=R(c_val)).sim_ac('dec', '10', '1', '1G', backend='ffi')
-
-    # Check that we have results
-    assert len(h.freq) > 0
-    assert hasattr(h, 'out')
-    assert len(h.out.ac_voltage) > 0
-
-    # Calculate cutoff frequency
-    f_c = 1 / (2 * math.pi * r_val * c_val)
-
-    # Find the frequency in the simulation results closest to the cutoff frequency
-    freq_array = np.array(h.freq)
-    idx = (np.abs(freq_array - f_c)).argmin()
-
-    # Check the voltage magnitude at the cutoff frequency
-    vout_complex = h.out.ac_voltage[idx]
-    vout_mag = np.sqrt(vout_complex[0]**2 + vout_complex[1]**2)
-
-    # At the -3dB point, the magnitude should be 1/sqrt(2)
-    assert np.isclose(vout_mag, 1/math.sqrt(2), atol=1e-2)
