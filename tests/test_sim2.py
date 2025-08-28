@@ -134,7 +134,7 @@ def test_sky_mos_inv(backend, golden_0, golden_2_5, golden_5):
 
 @pytest.mark.parametrize("backend", [
     'subprocess',
-    pytest.param('ffi', marks=[pytest.mark.libngspice, pytest.mark.xfail(reason="This will work in isolation the problem is that dll saves state and there is no clear way of resetting state or unloading a dll... ")]),
+    'ffi',
     'mp',
 ])
 
