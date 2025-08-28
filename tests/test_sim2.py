@@ -132,16 +132,23 @@ def test_sky_mos_inv(backend, golden_0, golden_2_5, golden_5):
     assert lib_test.InvSkyTb(vin=R('2.5'), backend=backend).sim_dc.o.dc_voltage == golden_2_5
     assert lib_test.InvSkyTb(vin=R(5), backend=backend).sim_dc.o.dc_voltage == golden_5
 
-@pytest.mark.parametrize("backend", [
-    'subprocess',
-    'ffi',
-    'mp',
+@pytest.mark.parametrize("backend,golden", [
+    ('subprocess', 4.999573),
+    pytest.param('ffi', 4.9995727, marks=pytest.mark.libngspice),
+    pytest.param('mp', 4.9995727, marks=pytest.mark.libngspice),
 ])
-def test_ihp_mos_inv(backend): #TODO get actual golden values
+def test_ihp_mos_inv_vin0(backend, golden):
     h_0 = lib_test.InvIhpTb(vin=R(0), backend=backend).sim_dc
-    assert h_0.o.dc_voltage > 4.0  # Should be close to 5V
+    assert h_0.o.dc_voltage == pytest.approx(golden)
+
+@pytest.mark.parametrize("backend,golden", [
+    ('subprocess', 0.00024556),
+    pytest.param('ffi', 0.00024556, marks=pytest.mark.libngspice),
+    pytest.param('mp', 0.00024556, marks=pytest.mark.libngspice),
+])
+def test_ihp_mos_inv_vin5(backend, golden):
     h_5 = lib_test.InvIhpTb(vin=R(5), backend=backend).sim_dc
-    assert h_5.o.dc_voltage < 1.0  # Should be close to 0V
+    assert h_5.o.dc_voltage == pytest.approx(golden, abs=1e-5)
 
 @pytest.mark.parametrize("backend,golden_a,golden_b,atol", [
     ('subprocess', 0.3333333, 0.6666667, 1e-6),

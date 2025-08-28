@@ -22,6 +22,7 @@ from .ngspice_common import (
 )
 
 class _FFIBackend:
+    _instance = None
     """FFI backend for ngspice shared library.
 
     - NEVER raise Python exceptions inside C callback functions (_send_char_handler, etc.)
@@ -30,6 +31,11 @@ class _FFIBackend:
     - The ngspice FFI library is NOT thread-safe - use only from single thread
     - Memory management issues exist in ngspice cleanup - avoid calling quit command
     """
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(_FFIBackend, cls).__new__(cls)
+        return cls._instance
+
     class NgComplex(ctypes.Structure):
         _fields_ = [("cx_real", ctypes.c_double), ("cx_imag", ctypes.c_double)]
 
@@ -87,6 +93,10 @@ class _FFIBackend:
     ]
 
     def __init__(self, debug: bool = False):
+        # The __init__ method is called every time, but we only initialize once.
+        if hasattr(self, '_initialized') and self._initialized:
+            return
+
         self.debug = debug
         self.lib = self.find_library()
         self._setup_library_functions()
@@ -121,6 +131,7 @@ class _FFIBackend:
         )
         if init_result != 0:
             raise NgspiceConfigError(f"Failed to initialize NgSpice FFI library (error code: {init_result}).")
+        self._initialized = True
 
     @staticmethod
     @contextmanager
