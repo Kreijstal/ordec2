@@ -139,9 +139,7 @@ def test_sky_mos_inv(backend, golden_0, golden_2_5, golden_5):
 ])
 
 
-def test_ihp_mos_inv(backend):
-    # Test IHP inverter DC simulation
-    # Note: FFI/MP backends may have state management issues with complex PDK setups
+def test_ihp_mos_inv(backend): #TODO get actual golden values
     h_0 = lib_test.InvIhpTb(vin=R(0), backend=backend).sim_dc
     assert h_0.o.dc_voltage > 4.0  # Should be close to 5V
     h_5 = lib_test.InvIhpTb(vin=R(5), backend=backend).sim_dc
