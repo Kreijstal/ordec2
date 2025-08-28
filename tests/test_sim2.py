@@ -134,9 +134,11 @@ def test_sky_mos_inv(backend, golden_0, golden_2_5, golden_5):
 
 @pytest.mark.parametrize("backend", [
     'subprocess',
-    pytest.param('ffi', marks=[pytest.mark.libngspice, pytest.mark.xfail(reason="FFI backend has issues with complex PDKs")]),
-    pytest.param('mp', marks=[pytest.mark.libngspice, pytest.mark.xfail(reason="MP backend has issues with complex PDKs")]),
+    pytest.param('ffi', marks=[pytest.mark.libngspice, pytest.mark.xfail(reason="This will work in isolation the problem is that dll saves state and there is no clear way of resetting state or unloading a dll... ")]),
+    'mp',
 ])
+
+
 def test_ihp_mos_inv(backend):
     # Test IHP inverter DC simulation
     # Note: FFI/MP backends may have state management issues with complex PDK setups
