@@ -32,6 +32,8 @@ class FFIWorkerProcess:
         self._last_async_data = None
         self._current_token = None
         self._async_generator = None
+        self._async_generator_token = None
+        self._async_callbacks = {}
 
     def run(self):
         """Main worker loop"""
@@ -126,33 +128,27 @@ class FFIWorkerProcess:
                     result = output
                     logger.debug(f"Worker: Final result length: {len(result)}")
                 elif cmd in ['tran_async', 'op_async']:
-                    # For async methods with callback support
-                    # We need to wrap the callback to send events to the main process
-                    user_callback = kwargs.pop('callback', None)
+                    # For async methods, we handle callback events ourselves
+                    # Don't pass callback to FFI backend, we'll handle it in the worker
+                    has_callback = kwargs.pop('callback', False)
                     throttle_interval = kwargs.pop('throttle_interval', 0.1)
 
-                    if user_callback:
-                        # Replace with our callback that sends events
-                        def wrapped_callback(data_point):
-                            # Send callback event to main process
-                            logger.debug(f"Worker callback for token {token}, data: {data_point}")
-                            try:
-                                self.event_queue.put({
-                                    'type': 'callback',
-                                    'token': token,
-                                    'data': pickle.dumps(data_point)
-                                })
-                                logger.debug("Worker callback event queued successfully")
-                            except Exception as e:
-                                logger.error(f"Worker callback queue error: {e}")
+                    # Store callback info for this async operation if callback exists
+                    if has_callback:
+                        self._async_callbacks[token] = {
+                            'throttle_interval': throttle_interval
+                        }
+                        logger.debug(f"Worker: Stored callback info for token {token}, callbacks: {list(self._async_callbacks.keys())}")
+                    else:
+                        logger.debug(f"Worker: No callback provided for token {token}")
 
-                        kwargs['callback'] = wrapped_callback
-                        kwargs['throttle_interval'] = throttle_interval
-
+                    # Don't pass callback to FFI backend
+                    kwargs.pop('callback', None)
                     result = method(*args, **kwargs)
 
                     # For async methods, store the generator and return token
                     self._async_generator = result
+                    self._async_generator_token = token
                     result = {'async_started': True, 'method': cmd, 'token': token}
                     logger.debug(f"Async method {cmd} started with token {token}")
                 else:
@@ -188,27 +184,67 @@ class FFIWorkerProcess:
 
     def _get_async_data(self):
         """Get async data for polling"""
-        if self._async_data_queue.empty():
-            # Try to process more data if queue is empty
-            self._process_async_data()
+        # Process any available async data first
+        self._process_async_data()
 
         if not self._async_data_queue.empty():
-            return self._async_data_queue.get_nowait()
+            data = self._async_data_queue.get_nowait()
+            logger.debug(f"Worker returning async data: {data}")
+            return data
         return None
 
     def _has_async_data(self):
         """Check if there's async data available"""
-        return not self._async_data_queue.empty() or self._process_async_data()
+        # Process async data first, then check if queue has data
+        self._process_async_data()
+        return not self._async_data_queue.empty()
 
     def _process_async_data(self):
-        """Process async data from generator"""
+        """Process async data from generator and send callback events"""
         if self._async_generator:
             try:
-                item = next(self._async_generator)
-                self._async_data_queue.put(item)
+                # Process multiple items at once to avoid too many poll requests
+                for _ in range(10):  # Process up to 10 items per poll
+                    item = next(self._async_generator)
+                    self._async_data_queue.put(item)
+                    logger.debug(f"Worker processed async data: {item}")
+
+                    # Send callback event if there's a registered callback for this token
+                    logger.debug(f"Worker checking callback for token {self._async_generator_token}, available tokens: {list(self._async_callbacks.keys())}")
+                    if self._async_generator_token and self._async_generator_token in self._async_callbacks:
+                        logger.debug(f"Worker sending callback event for token {self._async_generator_token}")
+                        try:
+                            self.event_queue.put({
+                                'type': 'callback',
+                                'token': self._async_generator_token,
+                                'data': pickle.dumps(item)
+                            })
+                        except Exception as e:
+                            logger.error(f"Worker callback queue error: {e}")
+
                 return True
             except StopIteration:
+                logger.debug("Worker async generator completed")
                 self._async_generator = None
+                # Put a completion marker in the queue
+                self._async_data_queue.put({'status': 'completed'})
+
+                # Clean up callback registration
+                if self._async_generator_token and self._async_generator_token in self._async_callbacks:
+                    del self._async_callbacks[self._async_generator_token]
+                self._async_generator_token = None
+
+            except Exception as e:
+                logger.error(f"Worker async processing error: {e}")
+                self._async_generator = None
+                # Put an error marker in the queue
+                self._async_data_queue.put({'status': 'error', 'error': str(e)})
+
+                # Clean up callback registration
+                if self._async_generator_token and self._async_generator_token in self._async_callbacks:
+                    del self._async_callbacks[self._async_generator_token]
+                self._async_generator_token = None
+
         return False
 
 
@@ -371,12 +407,16 @@ class IsolatedFFIBackend:
             self._callbacks[token] = callback
             logger.debug(f"Main: Stored callback for token {token}")
 
-        # Send command to worker with token
+        # Send command to worker with token and callback info
         logger.debug(f"Main: Sending async command {msg_type} with token {token}")
         self.conn.send({
             'type': msg_type,
             'args': args,
-            'kwargs': kwargs,
+            'kwargs': {
+                **kwargs,
+                'callback': callback is not None,  # Send flag indicating callback exists
+                'throttle_interval': throttle_interval
+            },
             'token': token
         })
         logger.debug("Main: Waiting for worker response...")
