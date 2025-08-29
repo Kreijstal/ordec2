@@ -444,15 +444,9 @@ class SinusoidalVoltageSource(Cell):
         frequency = self.params['frequency']
 
         # Optional parameters with defaults
-        offset = self.params.get('offset')
-        if offset is None:
-            offset = R(0)
-        delay = self.params.get('delay')
-        if delay is None:
-            delay = R(0)
-        damping = self.params.get('damping_factor')
-        if damping is None:
-            damping = R(0)
+        offset = self.params.get('offset', R(0))
+        delay = self.params.get('delay', R(0))
+        damping = self.params.get('damping_factor', R(0))
 
         tran_spec = f'SIN({offset.compat_str()} {amplitude.compat_str()} {frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
         ac_spec = f'ac {amplitude.compat_str()}'
