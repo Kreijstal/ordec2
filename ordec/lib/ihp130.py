@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import logging
 from pathlib import Path
 from public import public
 
@@ -45,37 +46,37 @@ def setup_ihp_sg13g2_commands(sim):
     try:
         sim.command("set ngbehavior=hsa")
         sim.command("set noinit")
-    except NgspiceError:
-        pass
+    except NgspiceError as e:
+        logging.warning(f"Failed to set ngspice behavior: {e}")
 
     # Set sourcepath (equivalent to setcs sourcepath commands in .spiceinit)
     try:
         cmd = f"setcs sourcepath = ( {models_path} {stdcell_path} {io_path} )"
         sim.command(cmd)
-    except NgspiceError:
-        pass
+    except NgspiceError as e:
+        logging.warning(f"Failed to set sourcepath: {e}")
 
     # Load OSDI models using absolute paths resolved in Python
     psp103_path = osdi_path / "psp103_nqs.osdi"
     if psp103_path.exists():
         try:
             sim.command(f"osdi '{psp103_path.resolve()}'")
-        except NgspiceError:
-            pass
+        except NgspiceError as e:
+            logging.warning(f"Failed to load OSDI model {psp103_path.resolve()}: {e}")
 
     r3_cmc_path = osdi_path / "r3_cmc.osdi"
     if r3_cmc_path.exists():
         try:
             sim.command(f"osdi '{r3_cmc_path.resolve()}'")
-        except NgspiceError:
-            pass
+        except NgspiceError as e:
+            logging.warning(f"Failed to load OSDI model {r3_cmc_path.resolve()}: {e}")
 
     mosvar_path = osdi_path / "mosvar.osdi"
     if mosvar_path.exists():
         try:
             sim.command(f"osdi '{mosvar_path.resolve()}'")
-        except NgspiceError:
-            pass
+        except NgspiceError as e:
+            logging.warning(f"Failed to load OSDI model {mosvar_path.resolve()}: {e}")
 
 def setup_ihp_sg13g2(netlister):
     # Register simulation setup commands

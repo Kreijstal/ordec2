@@ -22,7 +22,6 @@ from .ngspice_common import (
 )
 
 class _FFIBackend:
-    _instance = None
     """FFI backend for ngspice shared library.
 
     - NEVER raise Python exceptions inside C callback functions (_send_char_handler, etc.)
@@ -31,10 +30,6 @@ class _FFIBackend:
     - The ngspice FFI library is NOT thread-safe - use only from single thread
     - Memory management issues exist in ngspice cleanup - avoid calling quit command
     """
-    def __new__(cls, *args, **kwargs):
-        if not cls._instance:
-            cls._instance = super(_FFIBackend, cls).__new__(cls)
-        return cls._instance
 
     class NgComplex(ctypes.Structure):
         _fields_ = [("cx_real", ctypes.c_double), ("cx_imag", ctypes.c_double)]
@@ -92,11 +87,9 @@ class _FFIBackend:
         ("v_compdata", ctypes.POINTER(NgComplex)), ("v_length", ctypes.c_int),
     ]
 
-    def __init__(self, debug: bool = False):
-        # The __init__ method is called every time, but we only initialize once.
-        if hasattr(self, '_initialized') and self._initialized:
-            return
+    _library_initialized = False
 
+    def __init__(self, debug: bool = False):
         self.debug = debug
         self.lib = self.find_library()
         self._setup_library_functions()
@@ -107,7 +100,7 @@ class _FFIBackend:
         # Async simulation state
         self._is_running = False
         self._async_callback = None
-        self._async_throttle_interval = 0.1  # Default 100ms throttle
+        self._async_throttle_interval = 0.1
         self._last_callback_time = 0.0
         self._async_data_queue = queue.Queue()
         self._simulation_info = None
@@ -120,18 +113,19 @@ class _FFIBackend:
         self._send_init_data_cb = self._SendInitData(self._send_init_data_handler)
         self._bg_thread_running_cb = self._BGThreadRunning(self._bg_thread_running_handler)
 
-        init_result = self.lib.ngSpice_Init(
-            self._send_char_cb,
-            self._send_stat_cb,
-            self._exit_cb,
-            self._send_data_cb,
-            self._send_init_data_cb,
-            self._bg_thread_running_cb,
-            None
-        )
-        if init_result != 0:
-            raise NgspiceConfigError(f"Failed to initialize NgSpice FFI library (error code: {init_result}).")
-        self._initialized = True
+        if not _FFIBackend._library_initialized:
+            init_result = self.lib.ngSpice_Init(
+                self._send_char_cb,
+                self._send_stat_cb,
+                self._exit_cb,
+                self._send_data_cb,
+                self._send_init_data_cb,
+                self._bg_thread_running_cb,
+                None
+            )
+            if init_result != 0:
+                raise NgspiceConfigError(f"Failed to initialize NgSpice FFI library (error code: {init_result}).")
+            _FFIBackend._library_initialized = True
 
     @staticmethod
     @contextmanager

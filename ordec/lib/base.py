@@ -439,22 +439,14 @@ class SinusoidalVoltageSource(Cell):
     def netlist_ngspice(self, netlister, inst, schematic):
         pins = [inst.symbol.p, inst.symbol.m]
 
-        cell = inst.symbol.cell
-        offset = cell.params.get('offset')
-        if offset is None:
-            offset = R(0)
-        amplitude = cell.params.get('amplitude')
-        if amplitude is None:
-            amplitude = R(0)
-        frequency = cell.params.get('frequency')
-        if frequency is None:
-            frequency = R(0)
-        delay = cell.params.get('delay')
-        if delay is None:
-            delay = R(0)
-        damping = cell.params.get('damping_factor')
-        if damping is None:
-            damping = R(0)
+        # Required parameters - will raise KeyError if not present
+        amplitude = self.params['amplitude']
+        frequency = self.params['frequency']
+
+        # Optional parameters with defaults
+        offset = self.params.get('offset', R(0))
+        delay = self.params.get('delay', R(0))
+        damping = self.params.get('damping_factor', R(0))
 
         tran_spec = f'SIN({offset.compat_str()} {amplitude.compat_str()} {frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
         ac_spec = f'ac {amplitude.compat_str()}'

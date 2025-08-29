@@ -3,6 +3,7 @@
 
 from enum import Enum
 import math
+import re
 from functools import partial
 from public import public
 
@@ -290,25 +291,8 @@ class SimHierarchy(SubgraphRoot):
             voltages, currents = self._get_sim_data('ac_voltage', 'ac_current')
             return 'acsim', {'freq': self.freq, 'voltages': voltages, 'currents': currents}
         elif self.sim_type == SimType.DC:
-            def fmt_float(val, unit):
-                import re
-                x=str(R(f"{val:.03e}"))+unit
-                x=re.sub(r"([0-9])([a-zA-Z])", r"\1 \2", x)
-                x=x.replace("u", "μ")
-                x=re.sub(r"e([+-]?[0-9]+)", r"×10<sup>\1</sup>", x)
-                return x
-
-            dc_voltages = []
-            for sn in self.all(SimNet):
-                if not sn.dc_voltage:
-                    continue
-                dc_voltages.append([sn.full_path_str(), fmt_float(sn.dc_voltage, "V")])
-            dc_currents = []
-            for si in self.all(SimInstance):
-                if not si.dc_current:
-                    continue
-                dc_currents.append([si.full_path_str(), fmt_float(si.dc_current, "A")])
-            return 'dcsim', {'dc_voltages': dc_voltages, 'dc_currents': dc_currents}
+            voltages, currents = self._get_sim_data('dc_voltage', 'dc_current')
+            return 'dcsim', {'dc_voltages': voltages, 'dc_currents': currents}
         else:
             return 'nosim', {}
 
