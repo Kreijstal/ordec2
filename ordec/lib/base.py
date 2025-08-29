@@ -524,8 +524,8 @@ class PieceWiseLinearCurrentSource(Cell):
 class PulseCurrentSource(Cell):
     """
     Represents a Pulse Current Source.
-    Requires parameters: initial_value, pulsed_value, delay_time,
-                         rise_time, fall_time, pulse_width, period.
+    Requires parameters: initial_value, pulsed_value.
+    Optional parameters: delay_time, rise_time, fall_time, pulse_width, period.
     """
     initial_value = Parameter(R)
     pulsed_value = Parameter(R)
