@@ -379,19 +379,19 @@ class PulseVoltageSource(Cell):
     def netlist_ngspice(self, netlister, inst, schematic):
         pins = [inst.symbol.p, inst.symbol.m]
 
-        initial_value = self.params.get('initial_value') or R(0)
-        pulsed_value = self.params.get('pulsed_value') or R(1)
-        delay_time = self.params.get('delay_time') or R(0)
-        rise_time = self.params.get('rise_time') or R(0)
-        fall_time = self.params.get('fall_time') or R(0)
-        pulse_width = self.params.get('pulse_width') or R(0)
-        period = self.params.get('period') or R(0)
+        pulse_values = (
+            f"PULSE({self.params.get('initial_value', R(0)).compat_str()} {self.params['pulsed_value'].compat_str()} "
+            f"{self.params.get('delay_time', R(0)).compat_str()} "
+            f"{self.params.get('rise_time', R(0)).compat_str()} "
+            f"{self.params.get('fall_time', R(0)).compat_str()} "
+            f"{self.params.get('pulse_width', R(0)).compat_str()} "
+            f"{self.params.get('period', R(0)).compat_str()})"
+        )
 
         netlister.add(
             netlister.name_obj(inst, schematic, prefix="v"),
             netlister.portmap(inst, pins),
-            f'PULSE({initial_value.compat_str()} {pulsed_value.compat_str()} {delay_time.compat_str()} '
-            f'{rise_time.compat_str()} {fall_time.compat_str()} {pulse_width.compat_str()} {period.compat_str()})'
+            pulse_values
         )
 
 @public
@@ -514,7 +514,12 @@ class PieceWiseLinearCurrentSource(Cell):
     def netlist_ngspice(self, netlister, inst, schematic):
         pins = [inst.symbol.p, inst.symbol.m]
 
-        pwl_values = " ".join([f"{t} {v}" for t, v in self.I])
+        I_list = self.params['I']
+        # Coerce values to Rational
+        I_rational = [(R(t), R(v)) for t, v in I_list]
+
+        # Flatten pairs
+        pwl_values = " ".join([f"{val.compat_str()}" for t, v_val in I_rational for val in (t, v_val)])
 
         netlister.add(
             netlister.name_obj(inst, schematic, prefix="i"),
@@ -581,7 +586,7 @@ class PulseCurrentSource(Cell):
         pins = [inst.symbol.p, inst.symbol.m]
 
         pulse_values = (
-            f"PULSE({self.initial_value.compat_str()} {self.pulsed_value.compat_str()} "
+            f"PULSE({self.params['initial_value'].compat_str()} {self.params['pulsed_value'].compat_str()} "
             f"{self.params.get('delay_time', R(0)).compat_str()} "
             f"{self.params.get('rise_time', R(0)).compat_str()} "
             f"{self.params.get('fall_time', R(0)).compat_str()} "

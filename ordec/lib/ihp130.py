@@ -8,6 +8,7 @@ from public import public
 from ..core import *
 from .. import helpers
 from ..ord1.implicit_processing import schematic_routing
+from ..sim2.ngspice_common import NgspiceError
 from . import generic_mos
 
 _MODULE_DIR = Path(__file__).parent
@@ -44,14 +45,14 @@ def setup_ihp_sg13g2_commands(sim):
     try:
         sim.command("set ngbehavior=hsa")
         sim.command("set noinit")
-    except:
+    except NgspiceError:
         pass
 
     # Set sourcepath (equivalent to setcs sourcepath commands in .spiceinit)
     try:
         cmd = f"setcs sourcepath = ( {models_path} {stdcell_path} {io_path} )"
         sim.command(cmd)
-    except:
+    except NgspiceError:
         pass
 
     # Load OSDI models using absolute paths resolved in Python
@@ -59,21 +60,21 @@ def setup_ihp_sg13g2_commands(sim):
     if psp103_path.exists():
         try:
             sim.command(f"osdi '{psp103_path.resolve()}'")
-        except:
+        except NgspiceError:
             pass
 
     r3_cmc_path = osdi_path / "r3_cmc.osdi"
     if r3_cmc_path.exists():
         try:
             sim.command(f"osdi '{r3_cmc_path.resolve()}'")
-        except:
+        except NgspiceError:
             pass
 
     mosvar_path = osdi_path / "mosvar.osdi"
     if mosvar_path.exists():
         try:
             sim.command(f"osdi '{mosvar_path.resolve()}'")
-        except:
+        except NgspiceError:
             pass
 
 def setup_ihp_sg13g2(netlister):

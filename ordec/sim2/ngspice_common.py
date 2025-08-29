@@ -174,7 +174,9 @@ def check_errors(ngspice_out):
 
     for line in ngspice_out.split('\n'):
         if "no such vector" in line:
-            continue # Ignore this error
+            # This error can occur when a simulation (like 'op') is run that doesn't
+            # produce any plot output. It's not a fatal error, so we ignore it.
+            continue
         # Handle both "Error: ..." and "stderr Error: ..." formats
         m = re.match(r"(?:stderr )?Error:\s*(.*)", line)
         if m and first_error_msg is None:

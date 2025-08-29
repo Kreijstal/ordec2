@@ -129,7 +129,15 @@ class HighlevelSim:
                     siminstance = self.str_to_simobj[name]
                     # For now, just save the main current (e.g. 'id' for mosfet, 'branch' for resistor)
                     # The schema only supports one ac_current per instance for now.
-                    main_current = next(iter(currents.values()))
+                    if 'id' in currents:
+                        main_current = currents['id']
+                    elif 'branch' in currents:
+                        main_current = currents['branch']
+                    elif currents:
+                        main_current = next(iter(currents.values()))
+                    else:
+                        continue # No currents available for this instance
+
                     siminstance.ac_current = tuple([(c.real, c.imag) for c in main_current])
                 except (KeyError, StopIteration):
                     continue

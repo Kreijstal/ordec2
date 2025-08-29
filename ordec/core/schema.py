@@ -270,26 +270,24 @@ class SimHierarchy(SubgraphRoot):
     time = Attr(tuple)
     freq = Attr(tuple)
 
+    def _get_sim_data(self, voltage_attr, current_attr):
+        """Helper to extract voltage and current data for different simulation types."""
+        voltages = {}
+        for sn in self.all(SimNet):
+            if voltage_val := getattr(sn, voltage_attr, None):
+                voltages[sn.full_path_str()] = voltage_val
+        currents = {}
+        for si in self.all(SimInstance):
+            if current_val := getattr(si, current_attr, None):
+                currents[si.full_path_str()] = current_val
+        return voltages, currents
+
     def webdata(self):
         if self.sim_type == SimType.TRAN:
-            voltages = {}
-            for sn in self.all(SimNet):
-                if sn.trans_voltage:
-                    voltages[sn.full_path_str()] = sn.trans_voltage
-            currents = {}
-            for si in self.all(SimInstance):
-                if si.trans_current:
-                    currents[si.full_path_str()] = si.trans_current
+            voltages, currents = self._get_sim_data('trans_voltage', 'trans_current')
             return 'transim', {'time': self.time, 'voltages': voltages, 'currents': currents}
         elif self.sim_type == SimType.AC:
-            voltages = {}
-            for sn in self.all(SimNet):
-                if sn.ac_voltage:
-                    voltages[sn.full_path_str()] = sn.ac_voltage
-            currents = {}
-            for si in self.all(SimInstance):
-                if si.ac_current:
-                    currents[si.full_path_str()] = si.ac_current
+            voltages, currents = self._get_sim_data('ac_voltage', 'ac_current')
             return 'acsim', {'freq': self.freq, 'voltages': voltages, 'currents': currents}
         elif self.sim_type == SimType.DC:
             def fmt_float(val, unit):
