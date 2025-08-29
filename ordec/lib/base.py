@@ -655,8 +655,12 @@ class SinusoidalCurrentSource(Cell):
         delay = self.params.get('delay', R(0))
         damping = self.params.get('damping_factor', R(0))
 
+        tran_spec = f'SIN({offset.compat_str()} {amplitude.compat_str()} {frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
+        ac_spec = f'ac {amplitude.compat_str()}'
+        dc_spec = f'dc {offset.compat_str()}'
+
         netlister.add(
             netlister.name_obj(inst, schematic, prefix="i"),
             netlister.portmap(inst, pins),
-            f'SIN({offset.compat_str()} {amplitude.compat_str()} {frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
+            f'{dc_spec} {ac_spec} {tran_spec}'
         )
