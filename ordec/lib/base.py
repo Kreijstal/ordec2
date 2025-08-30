@@ -498,7 +498,7 @@ class PieceWiseLinearCurrentSource(Cell):
     def netlist_ngspice(self, netlister, inst, schematic):
         pins = [inst.symbol.p, inst.symbol.m]
 
-        I_list = self.params['I']
+        I_list = self.I
         # Coerce values to Rational
         I_rational = [(R(t), R(v)) for t, v in I_list]
 
