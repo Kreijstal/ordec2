@@ -616,7 +616,7 @@ class ResdivHierTb(SimBase):
 class NmosSourceFollowerTb(SimBase):
     """Nmos (generic_mos) source follower with optional parameter vin."""
 
-    vin = Parameter(R)
+    vin = Parameter(R, optional=True, default=R(2))
 
     @generate
     def schematic(self):
@@ -626,10 +626,7 @@ class NmosSourceFollowerTb(SimBase):
         s.i = Net()
         s.o = Net()
         s.vss = Net()
-        try:
-            vin = self.vin
-        except AttributeError:
-            vin = R(2)
+        vin = self.vin
 
         s.I0 = SchemInstance(Nmos(w=R('5u'), l=R('1u')).symbol.portmap(d=s.vdd, s=s.o, g=s.i, b=s.vss), pos=Vec2R(11, 12))
 
@@ -645,7 +642,7 @@ class NmosSourceFollowerTb(SimBase):
         return s
 
 class InvTb(SimBase):
-    vin = Parameter(R)
+    vin = Parameter(R, optional=True, default=R(0))
 
     @generate
     def schematic(self):
@@ -654,10 +651,7 @@ class InvTb(SimBase):
         s.i = Net()
         s.o = Net()
         s.vss = Net()
-        try:
-            vin = self.vin
-        except AttributeError:
-            vin = R(0)
+        vin = self.vin
 
         s.I0 = SchemInstance(Inv().symbol.portmap(vdd = s.vdd, vss=s.vss, a=s.i, y=s.o), pos=Vec2R(11, 9))
         s.I1 = SchemInstance(NoConn().symbol.portmap(a=s.o), pos=Vec2R(16, 9))
@@ -672,7 +666,7 @@ class InvTb(SimBase):
         return s
 
 class InvSkyTb(SimBase):
-    vin = Parameter(R)
+    vin = Parameter(R, optional=True, default=R(0))
 
     @generate
     def schematic(self):
@@ -682,10 +676,7 @@ class InvSkyTb(SimBase):
         s.i = Net()
         s.o = Net()
         s.vss = Net()
-        try:
-            vin = self.vin
-        except AttributeError:
-            vin = R(0)
+        vin = self.vin
 
         sym_inv = sky130.Inv().symbol
         sym_nc = NoConn().symbol
@@ -707,7 +698,7 @@ class InvSkyTb(SimBase):
         return s
 
 class InvIhpTb(SimBase):
-    vin = Parameter(R)
+    vin = Parameter(R, optional=True, default=R(0))
 
     @generate
     def schematic(self):
@@ -717,10 +708,7 @@ class InvIhpTb(SimBase):
         s.i = Net()
         s.o = Net()
         s.vss = Net()
-        try:
-            vin = self.vin
-        except AttributeError:
-            vin = R(0)
+        vin = self.vin
 
         sym_inv = ihp130.Inv().symbol
         sym_nc = NoConn().symbol

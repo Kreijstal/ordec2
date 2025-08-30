@@ -337,13 +337,13 @@ class PulseVoltageSource(Cell):
     Required parameters: pulsed_value.
     Optional parameters: initial_value (defaults to 0), delay_time (defaults to 0), rise_time (defaults to 0), fall_time (defaults to 0), pulse_width, period.
     """
-    initial_value = Parameter(R, optional=True)
+    initial_value = Parameter(R, optional=True, default=R(0))
     pulsed_value = Parameter(R)
-    delay_time = Parameter(R, optional=True)
-    rise_time = Parameter(R, optional=True)
-    fall_time = Parameter(R, optional=True)
-    pulse_width = Parameter(R, optional=True)
-    period = Parameter(R, optional=True)
+    delay_time = Parameter(R, optional=True, default=R(0))
+    rise_time = Parameter(R, optional=True, default=R(0))
+    fall_time = Parameter(R, optional=True, default=R(0))
+    pulse_width = Parameter(R, optional=True, default=R(0))
+    period = Parameter(R, optional=True, default=R(0))
 
     @generate
     def symbol(self) -> Symbol:
@@ -381,12 +381,12 @@ class PulseVoltageSource(Cell):
         pins = [inst.symbol.p, inst.symbol.m]
 
         pulse_values = (
-            f"PULSE({self.params.get('initial_value', R(0)).compat_str()} {self.params['pulsed_value'].compat_str()} "
-            f"{self.params.get('delay_time', R(0)).compat_str()} "
-            f"{self.params.get('rise_time', R(0)).compat_str()} "
-            f"{self.params.get('fall_time', R(0)).compat_str()} "
-            f"{self.params.get('pulse_width', R(0)).compat_str()} "
-            f"{self.params.get('period', R(0)).compat_str()})"
+            f"PULSE({self.initial_value.compat_str()} {self.pulsed_value.compat_str()} "
+            f"{self.delay_time.compat_str()} "
+            f"{self.rise_time.compat_str()} "
+            f"{self.fall_time.compat_str()} "
+            f"{self.pulse_width.compat_str()} "
+            f"{self.period.compat_str()})"
         )
 
         netlister.add(
@@ -402,11 +402,11 @@ class SinusoidalVoltageSource(Cell):
     Requires parameters: amplitude, frequency.
     Optional parameters: offset (defaults to 0), delay (defaults to 0), damping_factor (defaults to 0).
     """
-    offset = Parameter(R, optional=True)
+    offset = Parameter(R, optional=True, default=R(0))
     amplitude = Parameter(R)
     frequency = Parameter(R)
-    delay = Parameter(R, optional=True)
-    damping_factor = Parameter(R, optional=True)
+    delay = Parameter(R, optional=True, default=R(0))
+    damping_factor = Parameter(R, optional=True, default=R(0))
 
     @generate
     def symbol(self) -> Symbol:
@@ -439,18 +439,9 @@ class SinusoidalVoltageSource(Cell):
     def netlist_ngspice(self, netlister, inst, schematic):
         pins = [inst.symbol.p, inst.symbol.m]
 
-        # Required parameters - will raise KeyError if not present
-        amplitude = self.params['amplitude']
-        frequency = self.params['frequency']
-
-        # Optional parameters with defaults
-        offset = self.params.get('offset', R(0))
-        delay = self.params.get('delay', R(0))
-        damping = self.params.get('damping_factor', R(0))
-
-        tran_spec = f'SIN({offset.compat_str()} {amplitude.compat_str()} {frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
-        ac_spec = f'ac {amplitude.compat_str()}'
-        dc_spec = f'dc {offset.compat_str()}'
+        tran_spec = f'SIN({self.offset.compat_str()} {self.amplitude.compat_str()} {self.frequency.compat_str()} {self.delay.compat_str()} {self.damping_factor.compat_str()})'
+        ac_spec = f'ac {self.amplitude.compat_str()}'
+        dc_spec = f'dc {self.offset.compat_str()}'
 
         netlister.add(
             netlister.name_obj(inst, schematic, prefix="v"),
@@ -524,16 +515,16 @@ class PieceWiseLinearCurrentSource(Cell):
 class PulseCurrentSource(Cell):
     """
     Represents a Pulse Current Source.
-    Requires parameters: initial_value, pulsed_value.
-    Optional parameters: delay_time, rise_time, fall_time, pulse_width, period.
+    Requires parameters: initial_value, pulsed_value, delay_time,
+                         rise_time, fall_time, pulse_width, period.
     """
-    initial_value = Parameter(R)
+    initial_value = Parameter(R, optional=True, default=R(0))
     pulsed_value = Parameter(R)
-    delay_time = Parameter(R, optional=True)
-    rise_time = Parameter(R, optional=True)
-    fall_time = Parameter(R, optional=True)
-    pulse_width = Parameter(R, optional=True)
-    period = Parameter(R, optional=True)
+    delay_time = Parameter(R, optional=True, default=R(0))
+    rise_time = Parameter(R, optional=True, default=R(0))
+    fall_time = Parameter(R, optional=True, default=R(0))
+    pulse_width = Parameter(R, optional=True, default=R(0))
+    period = Parameter(R, optional=True, default=R(0))
 
     @generate
     def symbol(self) -> Symbol:
@@ -579,12 +570,12 @@ class PulseCurrentSource(Cell):
         pins = [inst.symbol.p, inst.symbol.m]
 
         pulse_values = (
-            f"PULSE({self.params['initial_value'].compat_str()} {self.params['pulsed_value'].compat_str()} "
-            f"{self.params.get('delay_time', R(0)).compat_str()} "
-            f"{self.params.get('rise_time', R(0)).compat_str()} "
-            f"{self.params.get('fall_time', R(0)).compat_str()} "
-            f"{self.params.get('pulse_width', R(0)).compat_str()} "
-            f"{self.params.get('period', R(0)).compat_str()})"
+            f"PULSE({self.initial_value.compat_str()} {self.pulsed_value.compat_str()} "
+            f"{self.delay_time.compat_str()} "
+            f"{self.rise_time.compat_str()} "
+            f"{self.fall_time.compat_str()} "
+            f"{self.pulse_width.compat_str()} "
+            f"{self.period.compat_str()})"
         )
 
         netlister.add(
@@ -600,11 +591,11 @@ class SinusoidalCurrentSource(Cell):
     Requires parameters: offset, amplitude, frequency, delay.
     Optional parameter: damping_factor (defaults to 0).
     """
-    offset = Parameter(R, optional=True)
+    offset = Parameter(R, optional=True, default=R(0))
     amplitude = Parameter(R)
     frequency = Parameter(R)
-    delay = Parameter(R, optional=True)
-    damping_factor = Parameter(R, optional=True)
+    delay = Parameter(R, optional=True, default=R(0))
+    damping_factor = Parameter(R, optional=True, default=R(0))
 
     @generate
     def symbol(self) -> Symbol:
@@ -647,20 +638,8 @@ class SinusoidalCurrentSource(Cell):
     def netlist_ngspice(self, netlister, inst, schematic):
         pins = [inst.symbol.p, inst.symbol.m]
 
-        amplitude = self.params['amplitude']
-        frequency = self.params['frequency']
-
-        # The optional parameters can keep using .get() with a default.
-        offset = self.params.get('offset', R(0))
-        delay = self.params.get('delay', R(0))
-        damping = self.params.get('damping_factor', R(0))
-
-        tran_spec = f'SIN({offset.compat_str()} {amplitude.compat_str()} {frequency.compat_str()} {delay.compat_str()} {damping.compat_str()})'
-        ac_spec = f'ac {amplitude.compat_str()}'
-        dc_spec = f'dc {offset.compat_str()}'
-
         netlister.add(
             netlister.name_obj(inst, schematic, prefix="i"),
             netlister.portmap(inst, pins),
-            f'{dc_spec} {ac_spec} {tran_spec}'
+            f'SIN({self.offset.compat_str()} {self.amplitude.compat_str()} {self.frequency.compat_str()} {self.delay.compat_str()} {self.damping_factor.compat_str()})'
         )
