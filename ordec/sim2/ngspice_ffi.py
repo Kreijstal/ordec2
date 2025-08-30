@@ -93,11 +93,11 @@ class _FFIBackend:
     ]
 
     def __init__(self, debug: bool = False):
+        self.debug = debug
         # The __init__ method is called every time, but we only initialize once.
         if hasattr(self, '_initialized') and self._initialized:
             return
 
-        self.debug = debug
         self.lib = self.find_library()
         self._setup_library_functions()
         self._output_lines = []

@@ -515,8 +515,9 @@ class PieceWiseLinearCurrentSource(Cell):
 class PulseCurrentSource(Cell):
     """
     Represents a Pulse Current Source.
-    Requires parameters: initial_value, pulsed_value, delay_time,
-                         rise_time, fall_time, pulse_width, period.
+    Required parameter: pulsed_value.
+    Optional parameters: initial_value (defaults to 0), delay_time (defaults to 0), rise_time (defaults to 0),
+                         fall_time (defaults to 0), pulse_width (defaults to 0), period (defaults to 0).
     """
     initial_value = Parameter(R, optional=True, default=R(0))
     pulsed_value = Parameter(R)
@@ -588,8 +589,8 @@ class PulseCurrentSource(Cell):
 class SinusoidalCurrentSource(Cell):
     """
     Represents a Sinusoidal Current Source.
-    Requires parameters: offset, amplitude, frequency, delay.
-    Optional parameter: damping_factor (defaults to 0).
+    Requires parameters: amplitude, frequency.
+    Optional parameters: offset (defaults to 0), delay (defaults to 0), damping_factor (defaults to 0).
     """
     offset = Parameter(R, optional=True, default=R(0))
     amplitude = Parameter(R)

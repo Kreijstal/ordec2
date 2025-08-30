@@ -12,16 +12,19 @@ from ..ord1.implicit_processing import schematic_routing
 from ..sim2.ngspice_common import NgspiceError
 from . import generic_mos
 
-_MODULE_DIR = Path(__file__).parent
-_PROJECT_ROOT = _MODULE_DIR.parent.parent
+def _get_ihp_pdk_path():
+    """Helper function to determine the IHP PDK path."""
+    env_var_path = os.getenv("ORDEC_PDK_IHP_SG13G2")
+    if env_var_path:
+        return Path(env_var_path)
+    else:
+        _MODULE_DIR = Path(__file__).parent
+        _PROJECT_ROOT = _MODULE_DIR.parent.parent
+        return _PROJECT_ROOT / "ihp-sg13g2"
+
+_IHP_PDK_PATH = _get_ihp_pdk_path()
 _IHP_SG13G2_RELATIVE_MODEL_PATH = "libs.tech/ngspice/models/cornerMOSlv.lib"
-
-env_var_path = os.getenv("ORDEC_PDK_IHP_SG13G2")
-
-if env_var_path:
-    _IHP_SG13G2_MODEL_FULL_PATH = (Path(env_var_path) / _IHP_SG13G2_RELATIVE_MODEL_PATH).resolve()
-else:
-    _IHP_SG13G2_MODEL_FULL_PATH = (_PROJECT_ROOT / "ihp-sg13g2" / _IHP_SG13G2_RELATIVE_MODEL_PATH).resolve()
+_IHP_SG13G2_MODEL_FULL_PATH = (_IHP_PDK_PATH / _IHP_SG13G2_RELATIVE_MODEL_PATH).resolve()
 
 if not _IHP_SG13G2_MODEL_FULL_PATH.is_file():
     print(f"WARNING: IHP SG13G2 model file not found at expected path: {_IHP_SG13G2_MODEL_FULL_PATH}")
@@ -29,15 +32,9 @@ if not _IHP_SG13G2_MODEL_FULL_PATH.is_file():
 
 def setup_ihp_sg13g2_commands(sim):
     """Execute ngspice commands directly based on .spiceinit content"""
-    import os
-    pdk_path = os.getenv('ORDEC_PDK_IHP_SG13G2')
-    if not pdk_path:
-        # Use fallback path if environment variable is not set
-        _MODULE_DIR = Path(__file__).parent
-        _PROJECT_ROOT = _MODULE_DIR.parent.parent
-        pdk_path = str(_PROJECT_ROOT / "ihp-sg13g2")
+    pdk_path = _IHP_PDK_PATH
 
-    osdi_path = Path(pdk_path) / "libs.tech/ngspice/osdi"
+    osdi_path = pdk_path / "libs.tech/ngspice/osdi"
     models_path = Path(pdk_path) / "libs.tech/ngspice/models"
     stdcell_path = Path(pdk_path) / "libs.ref/sg13g2_stdcell/spice"
     io_path = Path(pdk_path) / "libs.ref/sg13g2_io/spice"
