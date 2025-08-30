@@ -274,7 +274,7 @@ class SimHierarchy(SubgraphRoot):
         """Helper to extract voltage and current data for different simulation types."""
         voltages = {}
         for sn in self.all(SimNet):
-            if voltage_val := getattr(sn, voltage_attr, None):
+            if (voltage_val := getattr(sn, voltage_attr, None)) is not None:
                 voltages[sn.full_path_str()] = voltage_val
         currents = {}
         for si in self.all(SimInstance):
