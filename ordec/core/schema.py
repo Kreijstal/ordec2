@@ -300,7 +300,7 @@ class SimHierarchy(SubgraphRoot):
 
             dc_voltages = []
             for sn in self.all(SimNet):
-                if not sn.dc_voltage:
+                if sn.dc_voltage is None:
                     continue
                 dc_voltages.append([sn.full_path_str(), fmt_float(sn.dc_voltage, "V")])
             dc_currents = []
