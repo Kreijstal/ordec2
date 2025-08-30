@@ -305,7 +305,7 @@ class SimHierarchy(SubgraphRoot):
                 dc_voltages.append([sn.full_path_str(), fmt_float(sn.dc_voltage, "V")])
             dc_currents = []
             for si in self.all(SimInstance):
-                if not si.dc_current:
+                if si.dc_current is None:
                     continue
                 dc_currents.append([si.full_path_str(), fmt_float(si.dc_current, "A")])
             return 'dcsim', {'dc_voltages': dc_voltages, 'dc_currents': dc_currents}
