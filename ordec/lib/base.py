@@ -639,8 +639,12 @@ class SinusoidalCurrentSource(Cell):
     def netlist_ngspice(self, netlister, inst, schematic):
         pins = [inst.symbol.p, inst.symbol.m]
 
+        tran_spec = f'SIN({self.offset.compat_str()} {self.amplitude.compat_str()} {self.frequency.compat_str()} {self.delay.compat_str()} {self.damping_factor.compat_str()})'
+        ac_spec = f'ac {self.amplitude.compat_str()}'
+        dc_spec = f'dc {self.offset.compat_str()}'
+
         netlister.add(
             netlister.name_obj(inst, schematic, prefix="i"),
             netlister.portmap(inst, pins),
-            f'SIN({self.offset.compat_str()} {self.amplitude.compat_str()} {self.frequency.compat_str()} {self.delay.compat_str()} {self.damping_factor.compat_str()})'
+            f'{dc_spec} {ac_spec} {tran_spec}'
         )
