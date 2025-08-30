@@ -314,7 +314,7 @@ class PieceWiseLinearVoltageSource(Cell):
     def netlist_ngspice(self, netlister, inst, schematic):
         pins = [inst.symbol.p, inst.symbol.m]
 
-        V_list = self.params['V']
+        V_list = self.V
         # Coerce values to Rational
         V_rational = [(R(t), R(v)) for t, v in V_list]
 
