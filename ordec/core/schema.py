@@ -278,7 +278,7 @@ class SimHierarchy(SubgraphRoot):
                 voltages[sn.full_path_str()] = voltage_val
         currents = {}
         for si in self.all(SimInstance):
-            if current_val := getattr(si, current_attr, None):
+            if (current_val := getattr(si, current_attr, None)) is not None:
                 currents[si.full_path_str()] = current_val
         return voltages, currents
 
