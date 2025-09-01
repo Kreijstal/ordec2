@@ -14,7 +14,7 @@ FROM debian:bookworm AS ordec-fetch
 RUN useradd -ms /bin/bash app && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        wget ca-certificates zstd git \
+    wget ca-certificates zstd git \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 USER app
 
@@ -63,15 +63,15 @@ ARG ngspice_multibuild="off"
 RUN useradd -ms /bin/bash app && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential \
-        automake \
-        bison \
-        flex \
-        gfortran \
-        libedit-dev \
-        libncurses-dev \
-        libtool \
-        libreadline-dev \
+    build-essential \
+    automake \
+    bison \
+    flex \
+    gfortran \
+    libedit-dev \
+    libncurses-dev \
+    libtool \
+    libreadline-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 USER app
 WORKDIR /home/app
@@ -119,13 +119,13 @@ FROM debian:bookworm AS ordec-base
 RUN useradd -ms /bin/bash app && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        libgomp1 \
-        python3-minimal \
-        python3-venv \
-        chromium-driver \
-        npm \
-        git \
-        binutils \
+    libgomp1 \
+    python3-minimal \
+    python3-venv \
+    chromium-driver \
+    npm \
+    git \
+    binutils \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 USER app
 WORKDIR /home/app
