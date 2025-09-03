@@ -47,7 +47,7 @@
     <g>
       <rect x="0.0" y="6.0" width="4.0" height="4.0" class="symbolOutline" />
       <text transform="matrix(0.045 0 0 -0.045 3.875 9.875)" dominant-baseline="hanging" text-anchor="end" class="cellName">Vdc</text>
-      <text transform="matrix(0.045 0 0 -0.045 3.875 6.125)" dominant-baseline="ideographic" text-anchor="end" class="params">dc=5.</text>
+      <text transform="matrix(0.045 0 0 -0.045 3.875 6.125)" dominant-baseline="ideographic" text-anchor="end" class="params"><tspan x="0" y="-1em">dc=5.</tspan><tspan x="0" y="0em">alt_symbol=False</tspan></text>
       <text transform="matrix(0.045 0 0 -0.045 0.125 9.875)" dominant-baseline="hanging" text-anchor="start" class="instanceName">src_vdd</text>
       <path d="M2.0 3.0 L2.0 4.0" transform="matrix(1 0 0 1 0.0 6.0)" class="symbolPoly" />
       <path d="M2.0 1.0 L2.0 0.0" transform="matrix(1 0 0 1 0.0 6.0)" class="symbolPoly" />
@@ -63,7 +63,7 @@
     <g>
       <rect x="5.0" y="6.0" width="4.0" height="4.0" class="symbolOutline" />
       <text transform="matrix(0.045 0 0 -0.045 8.875 9.875)" dominant-baseline="hanging" text-anchor="end" class="cellName">Vdc</text>
-      <text transform="matrix(0.045 0 0 -0.045 8.875 6.125)" dominant-baseline="ideographic" text-anchor="end" class="params">dc=1.5</text>
+      <text transform="matrix(0.045 0 0 -0.045 8.875 6.125)" dominant-baseline="ideographic" text-anchor="end" class="params"><tspan x="0" y="-1em">dc=1.5</tspan><tspan x="0" y="0em">alt_symbol=False</tspan></text>
       <text transform="matrix(0.045 0 0 -0.045 5.125 9.875)" dominant-baseline="hanging" text-anchor="start" class="instanceName">src_vbias</text>
       <path d="M2.0 3.0 L2.0 4.0" transform="matrix(1 0 0 1 5.0 6.0)" class="symbolPoly" />
       <path d="M2.0 1.0 L2.0 0.0" transform="matrix(1 0 0 1 5.0 6.0)" class="symbolPoly" />
@@ -79,7 +79,7 @@
     <g>
       <rect x="10.0" y="6.0" width="4.0" height="4.0" class="symbolOutline" />
       <text transform="matrix(0.045 0 0 -0.045 13.875 9.875)" dominant-baseline="hanging" text-anchor="end" class="cellName">Vdc</text>
-      <text transform="matrix(0.045 0 0 -0.045 13.875 6.125)" dominant-baseline="ideographic" text-anchor="end" class="params">dc=3.05</text>
+      <text transform="matrix(0.045 0 0 -0.045 13.875 6.125)" dominant-baseline="ideographic" text-anchor="end" class="params"><tspan x="0" y="-1em">dc=3.05</tspan><tspan x="0" y="0em">alt_symbol=False</tspan></text>
       <text transform="matrix(0.045 0 0 -0.045 10.125 9.875)" dominant-baseline="hanging" text-anchor="start" class="instanceName">src_vin2</text>
       <path d="M2.0 3.0 L2.0 4.0" transform="matrix(1 0 0 1 10.0 6.0)" class="symbolPoly" />
       <path d="M2.0 1.0 L2.0 0.0" transform="matrix(1 0 0 1 10.0 6.0)" class="symbolPoly" />
@@ -95,7 +95,7 @@
     <g>
       <rect x="15.0" y="6.0" width="4.0" height="4.0" class="symbolOutline" />
       <text transform="matrix(0.045 0 0 -0.045 18.875 9.875)" dominant-baseline="hanging" text-anchor="end" class="cellName">Vdc</text>
-      <text transform="matrix(0.045 0 0 -0.045 18.875 6.125)" dominant-baseline="ideographic" text-anchor="end" class="params">dc=2.95</text>
+      <text transform="matrix(0.045 0 0 -0.045 18.875 6.125)" dominant-baseline="ideographic" text-anchor="end" class="params"><tspan x="0" y="-1em">dc=2.95</tspan><tspan x="0" y="0em">alt_symbol=False</tspan></text>
       <text transform="matrix(0.045 0 0 -0.045 15.125 9.875)" dominant-baseline="hanging" text-anchor="start" class="instanceName">src_vin1</text>
       <path d="M2.0 3.0 L2.0 4.0" transform="matrix(1 0 0 1 15.0 6.0)" class="symbolPoly" />
       <path d="M2.0 1.0 L2.0 0.0" transform="matrix(1 0 0 1 15.0 6.0)" class="symbolPoly" />
