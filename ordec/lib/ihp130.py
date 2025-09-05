@@ -27,8 +27,8 @@ _IHP_SG13G2_RELATIVE_MODEL_PATH = "libs.tech/ngspice/models/cornerMOSlv.lib"
 _IHP_SG13G2_MODEL_FULL_PATH = (_IHP_PDK_PATH / _IHP_SG13G2_RELATIVE_MODEL_PATH).resolve()
 
 if not _IHP_SG13G2_MODEL_FULL_PATH.is_file():
-    print(f"WARNING: IHP SG13G2 model file not found at expected path: {_IHP_SG13G2_MODEL_FULL_PATH}")
-    print(f"Ensure the files exist, or set the environmental variable ORDEC_PDK_IHP_SG13G2")
+    logging.warning(f"IHP SG13G2 model file not found at expected path: {_IHP_SG13G2_MODEL_FULL_PATH}")
+    logging.warning(f"Ensure the files exist, or set the environmental variable ORDEC_PDK_IHP_SG13G2")
 
 def setup_ihp_sg13g2_commands(sim):
     """Execute ngspice commands directly based on .spiceinit content"""
