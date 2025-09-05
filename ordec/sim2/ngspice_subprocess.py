@@ -243,7 +243,7 @@ class _SubprocessBackend:
                 continue
 
             potential_headers = line.split()
-            is_header = ('time' in [h.lower() for h in potential_headers] or 'index' in [h.lower() for h in potential_headers]) and not self._is_numeric_row(potential_headers)
+            is_header = any(h.lower() in ('time', 'index') for h in potential_headers) and not self._is_numeric_row(potential_headers)
 
             if is_header:
                 current_headers = tuple(potential_headers)
