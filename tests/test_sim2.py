@@ -161,6 +161,71 @@ def test_sim_tran_flat(backend, golden_a, golden_b, atol):
     assert abs(h.a.trans_voltage[-1] - golden_a) < atol
     assert abs(h.b.trans_voltage[-1] - golden_b) < atol
 
+
+@pytest.mark.parametrize("backend", ['ffi', 'mp'])
+@pytest.mark.libngspice
+def test_tran_alter(backend):
+    """Test altering a component value during a transient simulation."""
+    import numpy as np
+
+    netlist = """.title RC circuit
+    V1 in 0 DC 1
+    R1 in out 1k
+    C1 out 0 1uF
+    .end
+    """
+
+    with Ngspice.launch(debug=True, backend=backend) as sim:
+        sim.load_netlist(netlist)
+
+        # Run simulation up to the point of alteration
+        res_before = sim.tran("1us", "0.5ms")
+
+        # Find the voltage at the last time step before alteration
+        time_before = np.array(res_before.time)
+        voltage_before = np.array(res_before.get_voltage('out'))
+
+        # Alter the resistor value
+        sim.alter_device("R1", resistance="2k")
+
+        # Continue the simulation from where it left off
+        res_after = sim.tran("1us", "1ms")
+
+        # Combine the results
+        voltage_after = np.array(res_after.get_voltage('out'))
+
+        # Find the voltage right before the change
+        idx_before_change = np.where(time_before >= 0.5e-3)[0][0] - 1
+        v_at_change = voltage_before[idx_before_change]
+
+        # The voltage should be continuous at the point of change
+        v_after_change_start = voltage_after[0]
+        assert np.isclose(v_at_change, v_after_change_start, atol=1e-5), \
+            f"Voltage should be continuous. Before: {v_at_change}, After: {v_after_change_start}"
+
+        # Check the voltage at the end. With R=1k, tau=1ms, so at 1ms, Vout should be ~0.632V.
+        # With R changing to 2k at 0.5ms, the charging slows down.
+        # The final voltage should be less than if R was 1k for the whole time,
+        # and more than if R was 2k for the whole time.
+
+        # Theoretical voltage at 0.5ms with R=1k
+        v_half_ms_theory_1k = 1 * (1 - np.exp(-0.5e-3 / (1e3 * 1e-6)))
+        assert np.isclose(v_at_change, v_half_ms_theory_1k, atol=1e-3)
+
+        # The simulation continues from the voltage level it reached.
+        # The new time constant is tau = 2k * 1uF = 2ms.
+        # The voltage will rise from v_at_change towards 1V.
+        # V(t) = 1 - (1 - v_at_change) * exp(-(t - 0.5ms) / 2ms)
+        t_end = 1e-3
+        t_change = 0.5e-3
+        tau_after = 2e-3
+        v_final_theory = 1 - (1 - v_at_change) * np.exp(-(t_end - t_change) / tau_after)
+
+        v_final_sim = voltage_after.iloc[-1]
+
+        assert np.isclose(v_final_sim, v_final_theory, atol=1e-3), \
+            f"Final voltage mismatch. Simulation: {v_final_sim}, Theory: {v_final_theory}"
+
 @pytest.mark.parametrize("backend", sim2_backends)
 def test_webdata(backend):
     # Test DC webdata
