@@ -137,3 +137,39 @@ class HighlevelSim:
                     siminstance.ac_current = tuple([(c.real, c.imag) for c in main_current])
                 except (KeyError, StopIteration):
                     continue
+    def alter_device(self, device_ref, **parameters):
+        """Alter device parameters in the simulation hierarchy.
+        
+        Args:
+            device_ref: ORDeC SimInstance/SimNet object or SPICE device name string
+            **parameters: Device parameters to change (e.g., w=10u, l=180n)
+        """
+        with Ngspice.launch(debug=False, backend=self.backend) as sim:
+            # Run simulation setup hooks
+            for hook in self.sim_setup_hooks:
+                hook(sim)
+            
+            # Load the current netlist first
+            sim.load_netlist(self.netlister.out())
+            
+            # Determine device name from reference
+            if isinstance(device_ref, (SimInstance, SimNet)):
+                # Use netlister to get hierarchical SPICE name from ORDeC object
+                device_name = self.netlister.name_hier_simobj(device_ref)
+            else:
+                # Assume it's a SPICE device name string (support both formats)
+                # For hierarchical strings like "top.X1.M1", we could lookup in str_to_simobj
+                # but for simplicity, assume it matches the netlist naming
+                if '.' in device_ref:
+                    # Try to find Sim object by hierarchical path and get name
+                    try:
+                        sim_obj = self.str_to_simobj[device_ref]
+                        device_name = self.netlister.name_hier_simobj(sim_obj)
+                    except KeyError:
+                        # Fallback to the string as-is if not found in mapping
+                        device_name = device_ref
+                else:
+                    device_name = device_ref
+            
+            # Alter the device parameters
+            sim.alter_device(device_name, **parameters)

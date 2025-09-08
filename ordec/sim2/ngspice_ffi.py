@@ -366,6 +366,43 @@ class _FFIBackend:
         if circ_result != 0:
             raise NgspiceFatalError(f"Failed to load circuit into FFI backend. Full output:\n{output}")
 
+    def alter_device(self, device_name: str, **parameters):
+        """Alter device parameters using the alter command.
+        
+        Args:
+            device_name: Name of the device to alter (e.g., 'V1', 'R1')
+            **parameters: Device parameters to change (e.g., dc=5.0, r=1k)
+        """
+        # Clear previous error state
+        self._output_lines.clear()
+        self._error_message = None
+        self._has_fatal_error = False
+
+        commands = []
+        for param_name, param_value in parameters.items():
+            if isinstance(param_value, (list, tuple)):
+                param_str = '[ ' + ' '.join(str(v) for v in param_value) + ' ]'
+            else:
+                param_str = str(param_value)
+            cmd = f"alter {device_name} {param_name}={param_str}"
+            commands.append(cmd)
+
+        # Execute alter commands
+        for cmd in commands:
+            result = self.lib.ngSpice_Command(cmd.encode('utf-8'))
+            if result != 0:
+                output = "\n".join(self._output_lines)
+                raise NgspiceError(f"Failed to execute alter command '{cmd}'. Output:\n{output}")
+
+        # Check for errors from callbacks
+        if self._error_message:
+            if self._has_fatal_error:
+                raise NgspiceFatalError(self._error_message)
+            else:
+                raise NgspiceError(self._error_message)
+        
+        output = "\n".join(self._output_lines)
+        check_errors(output)
     def op(self) -> Iterator[NgspiceValue]:
         self.command("op")
         all_vectors = self._get_all_vectors()

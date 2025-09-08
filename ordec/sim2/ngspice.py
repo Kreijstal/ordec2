@@ -50,6 +50,15 @@ class Ngspice:
     def load_netlist(self, netlist: str, no_auto_gnd: bool = True):
         return self._backend_impl.load_netlist(netlist, no_auto_gnd=no_auto_gnd)
 
+    def alter_device(self, device_name: str, **parameters):
+        """Alter device parameters using the alter command.
+        
+        Args:
+            device_name: Name of the device to alter
+            **parameters: Device parameters to change
+        """
+        return self._backend_impl.alter_device(device_name, **parameters)
+
     def op(self) -> Iterator['NgspiceValue']:
         return self._backend_impl.op()
 

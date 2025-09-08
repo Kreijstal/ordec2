@@ -161,6 +161,7 @@ class IsolatedFFIBackend:
     def op(self): return self._call_worker('op')
     def tran(self, *args): return self._call_worker('tran', *args)
     def ac(self, *args, **kwargs): return self._call_worker('ac', *args, **kwargs)
+    def alter_device(self, device_name: str, **parameters): return self._call_worker('alter_device', device_name, **parameters)
     def is_running(self) -> bool: return self._call_worker('is_running')
     def stop_simulation(self): return self._call_worker('stop_simulation')
     def reset(self): return self._call_worker('reset')
