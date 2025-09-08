@@ -89,6 +89,12 @@ class Ngspice:
         if hasattr(self._backend_impl, 'stop_simulation'):
             self._backend_impl.stop_simulation()
 
+    def get_async_data(self, timeout=0.1):
+        if hasattr(self._backend_impl, 'get_async_data'):
+            return self._backend_impl.get_async_data(timeout=timeout)
+        else:
+            raise NotImplementedError("get_async_data is only available with FFI backend")
+
 RawVariable = namedtuple('RawVariable', ['name', 'unit'])
 
 def parse_raw(fn):

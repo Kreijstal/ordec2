@@ -165,6 +165,14 @@ class IsolatedFFIBackend:
     def is_running(self) -> bool: return self._call_worker('is_running')
     def stop_simulation(self): return self._call_worker('stop_simulation')
     def reset(self): return self._call_worker('reset')
+    def _get_vector_info(self, vector_name: str): return self._call_worker('_get_vector_info', vector_name)
+
+    def get_async_data(self, timeout=0.1):
+        try:
+            return self.async_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
     def cleanup(self): pass
 
     def _create_async_generator(self, cmd, *args, **kwargs):

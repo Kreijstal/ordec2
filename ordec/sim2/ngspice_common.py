@@ -6,6 +6,14 @@ from collections import namedtuple
 
 NgspiceValue = namedtuple('NgspiceValue', ['type', 'name', 'subname', 'value'])
 
+class SimpleVecInfo:
+    def __init__(self, name, length, is_real, real_data, comp_data):
+        self.name = name
+        self.length = length
+        self.is_real = is_real
+        self.real_data = real_data
+        self.comp_data = comp_data
+
 class NgspiceError(Exception):
     pass
 

@@ -126,13 +126,13 @@ def test_sky130_netlist_savecurrents_option():
 
     # Test with savecurrents enabled
     node1 = SimHierarchy()
-    sim_with = HighlevelSim(h.schematic, node1, enable_savecurrents=True)
-    netlist_with = sim_with.netlister.out()
+    with HighlevelSim(h.schematic, node1, enable_savecurrents=True) as sim_with:
+        netlist_with = sim_with.netlister.out()
 
     # Test with savecurrents disabled
     node2 = SimHierarchy()
-    sim_without = HighlevelSim(h.schematic, node2, enable_savecurrents=False)
-    netlist_without = sim_without.netlister.out()
+    with HighlevelSim(h.schematic, node2, enable_savecurrents=False) as sim_without:
+        netlist_without = sim_without.netlister.out()
 
     assert ".option savecurrents" in netlist_with, "Netlist with enable_savecurrents=True should contain .option savecurrents"
     assert ".option savecurrents" not in netlist_without, "Netlist with enable_savecurrents=False should not contain .option savecurrents"

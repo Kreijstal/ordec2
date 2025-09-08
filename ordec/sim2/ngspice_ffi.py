@@ -19,6 +19,7 @@ from .ngspice_common import (
     NgspiceAcResult,
     check_errors,
     NgspiceTable,
+    SimpleVecInfo,
 )
 
 class _FFIBackend:
@@ -409,10 +410,10 @@ class _FFIBackend:
 
         for vec_name in all_vectors:
             vec_info = self._get_vector_info(vec_name)
-            if not vec_info or vec_info.v_length == 0:
+            if not vec_info or vec_info.length == 0:
                 continue
 
-            value = vec_info.v_realdata[0]
+            value = vec_info.real_data[0]
 
             # Match naming conventions from subprocess backend
             if vec_name.startswith('@') and '[' in vec_name:
@@ -438,9 +439,9 @@ class _FFIBackend:
         valid_headers = []
         for vec_name in all_vectors:
             vec_info = self._get_vector_info(vec_name)
-            if vec_info and vec_info.v_length > 0:
-                num_points = max(num_points, vec_info.v_length)
-                data_list = [vec_info.v_realdata[i] for i in range(vec_info.v_length)]
+            if vec_info and vec_info.length > 0:
+                num_points = max(num_points, vec_info.length)
+                data_list = [vec_info.real_data[i] for i in range(vec_info.length)]
                 vector_data_map[vec_name] = data_list
                 valid_headers.append(vec_name)
 
@@ -448,7 +449,7 @@ class _FFIBackend:
 
         # Transpose columns into rows
         for i in range(num_points):
-            row = [vector_data_map[h][i] for h in table.headers]
+            row = [vector_data_map[h][i] if i < len(vector_data_map[h]) else None for h in table.headers]
             table.data.append(row)
 
         result.add_table(table)
@@ -466,12 +467,12 @@ class _FFIBackend:
 
         for vec_name in all_vectors:
             vec_info = self._get_vector_info(vec_name)
-            if vec_info and vec_info.v_length > 0:
-                num_points = max(num_points, vec_info.v_length)
-                if vec_info.v_compdata:
-                    data_list = [complex(vec_info.v_compdata[i].cx_real, vec_info.v_compdata[i].cx_imag) for i in range(vec_info.v_length)]
+            if vec_info and vec_info.length > 0:
+                num_points = max(num_points, vec_info.length)
+                if not vec_info.is_real:
+                    data_list = [vec_info.comp_data[i] for i in range(vec_info.length)]
                 else:
-                    data_list = [vec_info.v_realdata[i] for i in range(vec_info.v_length)]
+                    data_list = [vec_info.real_data[i] for i in range(vec_info.length)]
                 vector_data_map[vec_name] = data_list
                 valid_headers.append(vec_name)
 
@@ -545,9 +546,9 @@ class _FFIBackend:
 
                         for vec_name in all_vectors:
                             vec_info = self._get_vector_info(vec_name)
-                            if vec_info and vec_info.v_length > 0:
+                            if vec_info and vec_info.length > 0:
                                 # Get last value from vector
-                                final_data[vec_name] = vec_info.v_realdata[vec_info.v_length - 1]
+                                final_data[vec_name] = vec_info.real_data[vec_info.length - 1]
 
 
 
@@ -641,6 +642,12 @@ class _FFIBackend:
             while self._is_running and time.time() < timeout:
                 time.sleep(0.01)
 
+    def get_async_data(self, timeout=0.1):
+        try:
+            return self._async_data_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
     def _get_all_vectors(self) -> List[str]:
         plot_name = self.lib.ngSpice_CurPlot()
         if not plot_name:
@@ -654,9 +661,24 @@ class _FFIBackend:
             i += 1
         return vectors
 
-    def _get_vector_info(self, vector_name: str) -> Optional[VectorInfo]:
+    def _get_vector_info(self, vector_name: str) -> Optional['SimpleVecInfo']:
         vec_info_ptr = self.lib.ngGet_Vec_Info(vector_name.encode('utf-8'))
-        return vec_info_ptr.contents if vec_info_ptr else None
+        if not vec_info_ptr:
+            return None
+
+        vec_info = vec_info_ptr.contents
+
+        length = vec_info.v_length
+        is_real = not bool(vec_info.v_compdata)
+
+        if is_real:
+            real_data = [vec_info.v_realdata[i] for i in range(length)]
+            comp_data = None
+        else:
+            real_data = None
+            comp_data = [complex(vec_info.v_compdata[i].cx_real, vec_info.v_compdata[i].cx_imag) for i in range(length)] if vec_info.v_compdata else []
+
+        return SimpleVecInfo(name=vector_name, length=length, is_real=is_real, real_data=real_data, comp_data=comp_data)
 
     @staticmethod
     def find_library() -> ctypes.CDLL:

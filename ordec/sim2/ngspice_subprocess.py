@@ -148,6 +148,11 @@ class _SubprocessBackend:
             self.command("set no_auto_gnd")
         check_errors(self.command(f"source {netlist_fn}"))
 
+    def alter_device(self, device_name, **parameters):
+        param_strs = [f"{key}={value}" for key, value in parameters.items()]
+        param_str = " ".join(param_strs)
+        check_errors(self.command(f"alter {device_name} {param_str}"))
+
     def print_all(self) -> Iterator[str]:
         """
         Tries "print all" first. If it fails due to zero-length vectors, emulate
