@@ -178,38 +178,54 @@ def test_tran_alter(backend):
     with Ngspice.launch(debug=True, backend=backend) as sim:
         sim.load_netlist(netlist)
 
-        sim.command("bg_tran 1us 2s")
+        t_stop = 2.0
+        sim.command(f"bg_tran 1us {t_stop}s")
 
         time.sleep(0.5)
 
         if sim.is_running():
             sim.stop_simulation()
 
-        # Get intermediate voltage
         vec_info = sim._backend_impl._get_vector_info('out')
         v_at_halt = vec_info.real_data[vec_info.length - 1]
+        time_at_halt = sim._backend_impl._get_vector_info('time').real_data[-1]
+
+        print(f"Halted at t={time_at_halt:.4f}s with v(out)={v_at_halt:.4f}V")
 
         sim.alter_device("R1", resistance="2k")
 
-        sim.command("bg_run")
+        if time_at_halt < t_stop:
+            print("Resuming simulation...")
+            sim.command("bg_run")
 
-        # Wait for simulation to finish
-        while sim.is_running():
-            time.sleep(0.1)
+            timeout = time.time() + 5.0
+            log_time = time.time()
+            while sim.is_running() and time.time() < timeout:
+                time.sleep(0.1)
+                if time.time() - log_time > 0.5:
+                    current_time_vec = sim._backend_impl._get_vector_info('time')
+                    if current_time_vec:
+                        current_time = current_time_vec.real_data[-1]
+                        print(f"  ... real time: {time.time():.2f}s, sim time: {current_time:.4f}s")
+                    log_time = time.time()
 
-        # Get final voltage
+            if sim.is_running():
+                sim.stop_simulation()
+                raise TimeoutError("Simulation did not finish within the timeout.")
+
         vec_info_final = sim._backend_impl._get_vector_info('out')
         v_final_sim = vec_info_final.real_data[vec_info_final.length - 1]
 
-        # Theoretical calculation
-        t_halt = 0.5
+        t_halt_actual = time_at_halt
         tau1 = 1e3 * 1e-6
-        v_halt_theory = 1 * (1 - np.exp(-t_halt / tau1))
+        v_halt_theory = 1 * (1 - np.exp(-t_halt_actual / tau1))
+        print(f"Theoretical voltage at halt: {v_halt_theory:.4f}V")
         assert np.isclose(v_at_halt, v_halt_theory, atol=1e-2)
 
-        t_rem = 2.0 - t_halt
+        t_rem = t_stop - t_halt_actual
         tau2 = 2e3 * 1e-6
-        v_final_theory = v_halt_theory + (1 - v_halt_theory) * (1 - np.exp(-t_rem / tau2))
+        v_final_theory = v_at_halt + (1 - v_at_halt) * (1 - np.exp(-t_rem / tau2))
+        print(f"Final voltage: sim={v_final_sim:.4f}V, theory={v_final_theory:.4f}V")
 
         assert np.isclose(v_final_sim, v_final_theory, atol=1e-2)
 
