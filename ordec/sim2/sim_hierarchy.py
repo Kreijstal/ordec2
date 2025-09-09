@@ -168,7 +168,7 @@ class HighlevelSim:
         self.sim.alter_device(device_name, **parameters)
 
     def tran_async(self, *args, **kwargs):
-        yield from self.sim.tran_async(*args, **kwargs)
+        return self.sim.tran_async(*args, **kwargs)
 
     def is_running(self) -> bool:
         return self.sim.is_running()

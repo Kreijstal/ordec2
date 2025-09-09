@@ -35,39 +35,6 @@ def test_highlevel_async_tran_basic(backend):
         assert time_values[i] >= time_values[i-1]
 
 
-@pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
-def test_highlevel_async_tran_with_callback(backend):
-    progress_updates = []
-
-    def progress_callback(data_point):
-        progress_updates.append({
-            'progress': data_point.get('index', 0),
-            'current_time': data_point.get('timestamp', 0),
-            'data': data_point.get('data', {})
-        })
-
-    h = lib_test.ResdivFlatTb(backend=backend)
-
-    data_count = 0
-    for result in h.sim_tran_async("0.1u", "5u",
-                                   callback=progress_callback,
-                                   throttle_interval=0.1):
-        data_count += 1
-
-        # Verify progress information is available
-        assert 0.0 <= result.progress <= 1.0
-        assert result.time >= 0.0
-
-        if data_count >= 8:
-            break
-
-    # Should have received progress updates
-    assert len(progress_updates) > 0
-
-    # Progress should be increasing
-    for i in range(1, len(progress_updates)):
-        assert progress_updates[i]['progress'] >= progress_updates[i-1]['progress']
 
 
 @pytest.mark.libngspice
@@ -75,23 +42,15 @@ def test_highlevel_async_tran_with_callback(backend):
 def test_sky130_streaming_without_savecurrents(backend):
     h = lib_test.InvSkyTb(vin=R(2.5), backend=backend)
 
-    callback_count = 0
-
-    def count_callback(data_point):
-        nonlocal callback_count
-        callback_count += 1
-
     data_points = []
     for i, result in enumerate(h.sim_tran_async("0.01u", "0.5u",
                                                 enable_savecurrents=False,
-                                                callback=count_callback,
                                                 throttle_interval=0.05)):
         data_points.append(result)
         if i >= 5:
             break
 
     assert len(data_points) >= 1, f"Expected at least 1 data point without savecurrents, got {len(data_points)}"
-    assert callback_count >= 1, f"Expected at least 1 callback without savecurrents, got {callback_count}"
 
 
 @pytest.mark.libngspice
@@ -99,23 +58,15 @@ def test_sky130_streaming_without_savecurrents(backend):
 def test_sky130_streaming_with_savecurrents(backend):
     h = lib_test.InvSkyTb(vin=R(2.5), backend=backend)
 
-    callback_count = 0
-
-    def count_callback(data_point):
-        nonlocal callback_count
-        callback_count += 1
-
     data_points = []
     for i, result in enumerate(h.sim_tran_async("0.01u", "0.5u",
                                                 enable_savecurrents=True,
-                                                callback=count_callback,
                                                 throttle_interval=0.05)):
         data_points.append(result)
         if i >= 5:
             break
 
     assert len(data_points) >= 1, f"Expected at least 1 data point with savecurrents, got {len(data_points)}"
-    assert callback_count >= 0, f"Expected non-negative callbacks with savecurrents, got {callback_count}"
 
 
 @pytest.mark.libngspice

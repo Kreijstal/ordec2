@@ -4,6 +4,7 @@
 from .. import helpers
 from ..core import *
 from ..sim2.sim_hierarchy import HighlevelSim
+import queue
 
 from .generic_mos import Or2, Nmos, Pmos, Ringosc, Inv
 from .base import Gnd, NoConn, Res, Vdc, Idc, Cap, SinusoidalVoltageSource
@@ -372,14 +373,12 @@ class SimBase(Cell):
         Args:
             tstep: Time step for the simulation
             tstop: Stop time for the simulation
-            callback: Optional callback function for data updates
             throttle_interval: Minimum time between callbacks (seconds)
             enable_savecurrents: If True (default), enables .option savecurrents
         """
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
 
-        callback = kwargs.pop('callback', None)
         throttle_interval = kwargs.pop('throttle_interval', 0.1)
 
         node = SimHierarchy()
@@ -406,10 +405,19 @@ class SimBase(Cell):
                         if inst_name in data_dict:
                             setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
 
-            for data_point in highlevel_sim.tran_async(tstep, tstop, callback=callback, throttle_interval=throttle_interval):
-                data = data_point.get('data', {})
-                progress = data_point.get('progress', 0.0)
-                yield TranResult(data, node, highlevel_sim.netlister, progress)
+            data_queue = highlevel_sim.tran_async(tstep, tstop, throttle_interval=throttle_interval)
+
+            while highlevel_sim.is_running() or not data_queue.empty():
+                try:
+                    data_point = data_queue.get(timeout=0.1)
+                    if data_point is None:
+                        continue
+                    data = data_point.get('data', {})
+                    progress = data_point.get('index', 0) # Use index for progress
+                    yield TranResult(data, node, highlevel_sim.netlister, progress)
+                except queue.Empty:
+                    if not highlevel_sim.is_running():
+                        break # Simulation is done and queue is empty
 
     def sim_tran(self, tstep, tstop, **kwargs):
         """Run sync transient simulation.
