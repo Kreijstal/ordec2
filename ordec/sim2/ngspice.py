@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import re
+import queue
 from collections import namedtuple
 from contextlib import contextmanager
 from enum import Enum
@@ -68,11 +69,11 @@ class Ngspice:
     def ac(self, *args, **kwargs) -> 'NgspiceAcResult':
         return self._backend_impl.ac(*args, **kwargs)
 
-    def tran_async(self, *args, callback: Optional[Callable] = None, throttle_interval: float = 0.1) -> Generator:
+    def tran_async(self, *args, throttle_interval: float = 0.1) -> 'queue.Queue':
         if hasattr(self._backend_impl, 'tran_async'):
-            yield from self._backend_impl.tran_async(*args, callback=callback, throttle_interval=throttle_interval)
+            return self._backend_impl.tran_async(*args, throttle_interval=throttle_interval)
         else:
-            raise NotImplementedError("Async transient analysis is only available with FFI backend")
+            raise NotImplementedError("Async transient analysis is only available with FFI or MP backends")
 
     def op_async(self, callback: Optional[Callable] = None) -> Generator:
         if hasattr(self._backend_impl, 'op_async'):

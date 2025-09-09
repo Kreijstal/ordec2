@@ -485,104 +485,30 @@ class _FFIBackend:
 
         return result
 
-    def tran_async(self, *args, callback: Optional[Callable] = None, throttle_interval: float = 0.1) -> Generator:
-        self._async_callback = callback
+    def tran_async(self, *args, throttle_interval: float = 0.1):
+        """Starts a background transient analysis. Results will be sent to the async queue."""
         self._async_throttle_interval = throttle_interval
         self._last_callback_time = 0.0
 
-        # Clear any existing data
+        # Clear any existing data from previous runs
         while not self._async_data_queue.empty():
             try:
                 self._async_data_queue.get_nowait()
             except queue.Empty:
                 break
 
-        # Start background simulation using bg_tran
+        # Start background simulation
         self.command(f"bg_tran {' '.join(args)}")
 
-        # Wait for simulation to start
-        timeout = time.time() + 5.0  # 5 second timeout
-        while not self._is_running and time.time() < timeout:
+        # Wait for the simulation to confirm it's running
+        timeout = time.time() + 5.0  # 5-second timeout to start
+        while not self.is_running() and time.time() < timeout:
             time.sleep(0.01)
 
-        if not self._is_running:
-            raise NgspiceError("Background simulation failed to start")
+        if not self.is_running():
+            raise NgspiceError("Background simulation failed to start within the timeout period.")
 
-        # Try streaming first - if no data comes within reasonable time, fall back to polling
-        streaming_timeout = time.time() + 0.5  # 500ms to wait for streaming data
-        got_streaming_data = False
-
-        # Stream data as it becomes available
-        while self._is_running:
-
-
-            try:
-                # Check for data with short timeout
-                data_point = self._async_data_queue.get(timeout=0.01)
-
-                got_streaming_data = True
-                if callback:
-                    callback(data_point)
-
-                yield data_point
-
-            except queue.Empty:
-                # Check if simulation is still running
-                if hasattr(self.lib, 'ngSpice_running'):
-                    is_ngspice_running = self.lib.ngSpice_running()
-                    if not is_ngspice_running:
-                        self._is_running = False
-                        # Don't break yet - handle polling fallback below
-
-                # If no streaming data after timeout OR simulation completed, fall back to polling
-                if not got_streaming_data and (time.time() > streaming_timeout or not self._is_running):
-
-                    # Get final results from completed simulation
-                    try:
-                        # Build result from current simulation vectors
-                        all_vectors = self._get_all_vectors()
-
-                        final_data = {}
-
-                        for vec_name in all_vectors:
-                            vec_info = self._get_vector_info(vec_name)
-                            if vec_info and vec_info.length > 0:
-                                # Get last value from vector
-                                final_data[vec_name] = vec_info.real_data[vec_info.length - 1]
-
-
-
-                        if final_data:
-                            final_data_point = {
-                                'timestamp': time.time(),
-                                'data': final_data,
-                                'progress': 1.0
-                            }
-
-                            if callback:
-                                callback(final_data_point)
-                            yield final_data_point
-                    except Exception as e:
-                        if self.debug:
-                            print(f"[ngspice-ffi] Error in polling fallback: {e}")
-
-                    break
-
-                if not self._is_running:
-                    break
-
-                # Small sleep to prevent busy waiting
-                time.sleep(0.001)
-
-        # Drain any remaining data
-        while not self._async_data_queue.empty():
-            try:
-                data_point = self._async_data_queue.get_nowait()
-                if callback:
-                    callback(data_point)
-                yield data_point
-            except queue.Empty:
-                break
+        return self._async_data_queue
 
     def op_async(self, callback: Optional[Callable] = None) -> Generator:
        self._async_callback = callback

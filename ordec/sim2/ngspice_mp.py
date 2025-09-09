@@ -64,7 +64,15 @@ class FFIWorkerProcess:
             try:
                 method = getattr(self.backend, cmd)
 
-                if cmd in ['tran_async', 'op_async']:
+                if cmd == 'tran_async':
+                    # tran_async now starts the simulation and returns immediately.
+                    # The worker calls it and sends an immediate acknowledgement.
+                    method(*args, **kwargs)
+                    self.conn.send({'type': 'result', 'data': pickle.dumps(None)})
+                    continue
+
+                if cmd == 'op_async':
+                    # op_async still uses the generator pattern for now.
                     try:
                         self.conn.send({'type': 'result', 'data': pickle.dumps({'async_started': True})})
                         ffi_generator = method(*args, **kwargs)
@@ -190,8 +198,14 @@ class IsolatedFFIBackend:
 
         return generator_with_callback()
 
-    def tran_async(self, *args, **kwargs):
-        return self._create_async_generator('tran_async', *args, **kwargs)
+    def tran_async(self, *args, **kwargs) -> queue.Queue:
+        """Starts a background transient analysis and returns a queue for results."""
+        kwargs.pop('callback', None)
+        self._call_worker('tran_async', *args, **kwargs)
+        return self.async_queue
 
-    def op_async(self, *args, **kwargs):
-        return self._create_async_generator('op_async', *args, **kwargs)
+    def tran_async(self, *args, **kwargs) -> queue.Queue:
+        """Starts a background transient analysis and returns a queue for results."""
+        kwargs.pop('callback', None)
+        self._call_worker('tran_async', *args, **kwargs)
+        return self.async_queue
