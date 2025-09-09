@@ -2,8 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from ordec.lib import test as lib_test
+import re
+from contextlib import contextmanager
+from ordec.core import *
+from ordec.lib import test as lib_test, Res, Gnd, Vdc, Cap
 from ordec.core.rational import R
+from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
+from ordec.sim2.ngspice import Ngspice
 
 
 @pytest.mark.libngspice
@@ -42,7 +47,7 @@ def test_highlevel_async_tran_with_callback(backend):
 
     def progress_callback(data_point):
         progress_updates.append({
-            'progress': data_point.get('index', 0),
+            'progress': data_point.get('progress', data_point.get('index', 0)),
             'current_time': data_point.get('timestamp', 0),
             'data': data_point.get('data', {})
         })
@@ -266,3 +271,74 @@ def test_highlevel_async_parameter_sweep(backend):
     for vin in input_voltages:
         assert vin in results
         assert isinstance(results[vin], (int, float))
+
+
+
+
+
+class RCAlterTestbench(Cell):
+    """RC circuit for testing HighlevelSim alter operations"""
+
+    @generate
+    def schematic(self):
+        s = Schematic(cell=self, outline=Rect4R(lx=0, ly=0, ux=10, uy=10))
+
+        s.vin = Net()
+        s.vout = Net()
+        s.gnd = Net()
+
+        s.v1 = SchemInstance(Vdc(dc=R(1)).symbol.portmap(p=s.vin, m=s.gnd), pos=Vec2R(0, 5))
+        s.r1 = SchemInstance(Res(r=R(1000)).symbol.portmap(p=s.vin, m=s.vout), pos=Vec2R(5, 5))
+        s.c1 = SchemInstance(Cap(c=R("1u")).symbol.portmap(p=s.vout, m=s.gnd), pos=Vec2R(8, 3))
+        s.gnd_conn = SchemInstance(Gnd().symbol.portmap(p=s.gnd), pos=Vec2R(0, 0))
+
+        return s
+
+
+@pytest.mark.libngspice
+@pytest.mark.parametrize("backend", ["ffi", "mp"])
+def test_highlevel_alter_multiple_components(backend):
+    """Test comprehensive HighlevelSim alter operations with sequential VDC changes"""
+
+    tb = RCAlterTestbench()
+    node = SimHierarchy()
+    sim = HighlevelSim(tb.schematic, node, backend=backend)
+
+    with sim.alter_session(backend=backend) as alter:
+        # Test sequence of alterations with verification at each step
+        vdc_values = [1.0, 2.0, 5.0, 0.5, 1.0]
+
+        for i, vdc_value in enumerate(vdc_values):
+            # Alter VDC voltage
+            alter.alter_component(tb.schematic.v1, dc=vdc_value)
+
+            # Verify the change took effect
+            v1_show = alter.show_component(tb.schematic.v1)
+            # Handle both integer and float display (ngspice shows 1.0 as 1)
+            expected_dc = str(int(vdc_value)) if vdc_value == int(vdc_value) else str(vdc_value)
+            # Use regex to handle variable spacing in ngspice output
+            dc_pattern = rf"dc\s+{re.escape(expected_dc)}"
+            assert re.search(dc_pattern, v1_show), f"Step {i+1}: Should show dc {expected_dc} in output: {v1_show}"
+
+            # Run operating point to verify circuit behavior
+            alter.op()
+            voltage = node.vout.dc_voltage
+
+            # In this DC circuit, output should equal input voltage
+            assert abs(voltage - vdc_value) < 0.01, f"Step {i+1}: DC output should be ~{vdc_value}V, got {voltage}V"
+
+        # Test altering capacitor capacitance
+        alter.alter_component(tb.schematic.c1, capacitance='2u')
+        c1_show = alter.show_component(tb.schematic.c1)
+        assert "2" in c1_show, "Should show altered capacitance value"
+
+        # Final verification - ensure we can still alter VDC after capacitor change
+        alter.alter_component(tb.schematic.v1, dc=3.0)
+        final_v1_show = alter.show_component(tb.schematic.v1)
+        # Use regex to handle variable spacing in ngspice output
+        assert re.search(r"dc\s+3", final_v1_show), f"Final VDC change should work, output: {final_v1_show}"
+
+        # Run final OP analysis
+        alter.op()
+        final_voltage = node.vout.dc_voltage
+        assert abs(final_voltage - 3.0) < 0.01, f"Final voltage should be ~3V, got {final_voltage}V"

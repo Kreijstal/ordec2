@@ -59,11 +59,27 @@ class Ngspice:
     def ac(self, *args, **kwargs) -> 'NgspiceAcResult':
         return self._backend_impl.ac(*args, **kwargs)
 
-    def tran_async(self, *args, callback: Optional[Callable] = None, throttle_interval: float = 0.1) -> Generator:
+    def tran_async(self, *args, throttle_interval: float = 0.1) -> 'queue.Queue':
+        """
+        Start asynchronous transient analysis and return data queue.
+
+        This replaces the problematic generator-based approach with a queue-based system
+        that allows for better control over halt/alter operations.
+
+        Args:
+            *args: tran arguments (tstep, tstop, etc.)
+            throttle_interval: Minimum time between data updates
+
+        Returns:
+            queue.Queue object containing simulation data points
+
+        Raises:
+            NotImplementedError: If backend doesn't support async
+        """
         if hasattr(self._backend_impl, 'tran_async'):
-            yield from self._backend_impl.tran_async(*args, callback=callback, throttle_interval=throttle_interval)
+            return self._backend_impl.tran_async(*args, throttle_interval=throttle_interval)
         else:
-            raise NotImplementedError("Async transient analysis is only available with FFI backend")
+            raise NotImplementedError("Async transient analysis is only available with FFI or MP backends")
 
     def op_async(self, callback: Optional[Callable] = None) -> Generator:
         if hasattr(self._backend_impl, 'op_async'):
@@ -77,8 +93,104 @@ class Ngspice:
         return False
 
     def stop_simulation(self):
+        """Stop/halt running background simulation"""
         if hasattr(self._backend_impl, 'stop_simulation'):
             self._backend_impl.stop_simulation()
+
+    def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 0.2) -> bool:
+        """
+        Safely halt simulation with retries and verification.
+
+        This method addresses the critical timing issues with ngspice background simulations:
+        - bg_halt is not instantaneous and can fail silently
+        - Multiple attempts may be needed
+        - Must verify halt succeeded before proceeding with alter commands
+
+        Args:
+            max_attempts: Maximum number of halt attempts
+            wait_time: Time to wait between attempts and for verification
+
+        Returns:
+            True if halt succeeded, False otherwise
+        """
+        import time
+
+        if not self.is_running():
+            return True
+
+        for attempt in range(max_attempts):
+            try:
+                # Send halt command
+                if hasattr(self._backend_impl, 'command'):
+                    self._backend_impl.command("bg_halt")
+                else:
+                    self.stop_simulation()
+
+                # CRITICAL: Must yield after halt command before checking state
+                # Use race condition approach instead of fixed sleep
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+
+                    def check_halt_status():
+                        """Check if simulation has halted"""
+                        return not self.is_running()
+
+                    timeout = time.time() + wait_time
+                    while time.time() < timeout:
+                        halt_future = executor.submit(check_halt_status)
+                        try:
+                            if halt_future.result(timeout=min(0.01, wait_time)):
+                                return True
+                        except concurrent.futures.TimeoutError:
+                            pass
+                        finally:
+                            if not halt_future.done():
+                                halt_future.cancel()
+
+            except Exception:
+                pass
+
+            # Wait before retry (except on last attempt)
+            if attempt < max_attempts - 1:
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    def wait_before_retry():
+                        return True
+
+                    wait_future = executor.submit(wait_before_retry)
+                    try:
+                        wait_future.result(timeout=wait_time)
+                    except concurrent.futures.TimeoutError:
+                        pass
+                    finally:
+                        if not wait_future.done():
+                            wait_future.cancel()
+
+        # Fallback attempt with stop_simulation
+        try:
+            self.stop_simulation()
+            # Use race condition approach for final check
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+
+                def check_final_halt():
+                    """Final check if simulation has stopped"""
+                    return not self.is_running()
+
+                timeout = time.time() + wait_time
+                while time.time() < timeout:
+                    final_future = executor.submit(check_final_halt)
+                    try:
+                        return final_future.result(timeout=min(0.01, wait_time))
+                    except concurrent.futures.TimeoutError:
+                        pass
+                    finally:
+                        if not final_future.done():
+                            final_future.cancel()
+
+            return not self.is_running()
+        except:
+            return False
 
 RawVariable = namedtuple('RawVariable', ['name', 'unit'])
 

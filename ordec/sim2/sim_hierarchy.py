@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Optional
+from contextlib import contextmanager
 
 from ..core import *
 from ..core.schema import SimType
@@ -54,6 +55,8 @@ class HighlevelSim:
         self.sim_setup_hooks = []
         if hasattr(self.netlister, '_sim_setup_hooks'):
             self.sim_setup_hooks = list(self.netlister._sim_setup_hooks)
+
+        self._active_sim = None
 
     def op(self):
         self.simhier.sim_type = SimType.DC
@@ -137,3 +140,100 @@ class HighlevelSim:
                     siminstance.ac_current = tuple([(c.real, c.imag) for c in main_current])
                 except (KeyError, StopIteration):
                     continue
+
+    def get_component_netlist_name(self, component_instance):
+        """Get the netlist name for a component instance using existing mapping."""
+        return self.netlister.name_hier_simobj(component_instance)
+
+    def find_component_by_ref_name(self, ref_name):
+        """Find a component instance by its reference name (e.g., 'r1', 'c1')."""
+        for sim_instance in self.simhier.all(SimInstance):
+            if hasattr(sim_instance, 'eref') and hasattr(sim_instance.eref, 'full_path_str'):
+                if sim_instance.eref.full_path_str().endswith(ref_name):
+                    return sim_instance
+        return None
+
+    def find_sim_instance_from_schem_instance(self, schem_instance):
+        """Find a SimInstance that corresponds to a SchemInstance from the schematic."""
+        for sim_instance in self.simhier.all(SimInstance):
+            if hasattr(sim_instance, 'eref') and sim_instance.eref == schem_instance:
+                return sim_instance
+        return None
+
+    @contextmanager
+    def alter_session(self, backend=None):
+        """Context manager for alter operations that maintains ngspice session."""
+        use_backend = backend or self.backend
+
+        class AlterSession:
+            def __init__(self, highlevel_sim, ngspice_sim):
+                self.highlevel_sim = highlevel_sim
+                self.ngspice_sim = ngspice_sim
+                highlevel_sim._active_sim = ngspice_sim
+                ngspice_sim.load_netlist(highlevel_sim.netlister.out())
+
+            def alter_component(self, component_instance, **parameters):
+                """Alter component parameters using component instance."""
+                # If we get a SchemInstance, find the corresponding SimInstance
+                if not hasattr(component_instance, 'eref'):
+                    sim_instance = self.highlevel_sim.find_sim_instance_from_schem_instance(component_instance)
+                    if not sim_instance:
+                        raise ValueError(f"Could not find simulation instance for component {component_instance}")
+                    component_instance = sim_instance
+
+                netlist_name = self.highlevel_sim.get_component_netlist_name(component_instance)
+                for param_name, param_value in parameters.items():
+                    alter_cmd = f"alter {netlist_name} {param_name}={param_value}"
+                    self.ngspice_sim.command(alter_cmd)
+                return True
+
+            def show_component(self, component_instance):
+                """Show component parameters using component instance."""
+                # If we get a SchemInstance, find the corresponding SimInstance
+                if not hasattr(component_instance, 'eref'):
+                    sim_instance = self.highlevel_sim.find_sim_instance_from_schem_instance(component_instance)
+                    if not sim_instance:
+                        raise ValueError(f"Could not find simulation instance for component {component_instance}")
+                    component_instance = sim_instance
+
+                netlist_name = self.highlevel_sim.get_component_netlist_name(component_instance)
+                return self.ngspice_sim.command(f"show {netlist_name}")
+
+            def op(self):
+                """Run operating point analysis and update hierarchy."""
+                self.highlevel_sim.simhier.sim_type = SimType.DC
+                for hook in self.highlevel_sim.sim_setup_hooks:
+                    hook(self.ngspice_sim)
+                for vtype, name, subname, value in self.ngspice_sim.op():
+                    if vtype == 'voltage':
+                        try:
+                            simnet = self.highlevel_sim.str_to_simobj[name]
+                            simnet.dc_voltage = value
+                        except KeyError:
+                            continue
+                    elif vtype == 'current':
+                        if subname not in ('id', 'branch', 'i'):
+                            continue
+                        try:
+                            siminstance = self.highlevel_sim.str_to_simobj[name]
+                            siminstance.dc_current = value
+                        except KeyError:
+                            continue
+
+            def start_async_tran(self, tstep, tstop, **kwargs):
+                """Start async transient simulation."""
+                return self.ngspice_sim.tran_async(tstep, tstop, **kwargs)
+
+            def halt_simulation(self):
+                """Safely halt running simulation."""
+                return self.ngspice_sim.safe_halt_simulation()
+
+            def is_running(self):
+                """Check if simulation is running."""
+                return self.ngspice_sim.is_running()
+
+        with Ngspice.launch(debug=False, backend=use_backend) as ngspice_sim:
+            try:
+                yield AlterSession(self, ngspice_sim)
+            finally:
+                self._active_sim = None
