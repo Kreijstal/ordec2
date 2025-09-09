@@ -9,6 +9,7 @@ from ordec import Rational as R
 from ordec.lib import test as lib_test
 import time
 import numpy as np
+from datetime import datetime
 
 sim2_backends = [
     pytest.param('subprocess', marks=[]),
@@ -178,52 +179,95 @@ def test_tran_alter(backend):
     with Ngspice.launch(debug=True, backend=backend) as sim:
         sim.load_netlist(netlist)
 
-        t_stop = 2.0
-        sim.command(f"bg_tran 1us {t_stop}s")
+        t_stop = 50e-3  # 50ms
+        t_step = t_stop / 1000
+        sim.command(f"bg_tran {t_step}s {t_stop}s")
 
-        time.sleep(0.5)
+        # --- Halt the simulation at a specific time point ---
+        t_halt_target = 10e-3  # 10ms
+        halt_timeout = time.time() + 5.0  # 5s timeout to find the halt point
+        halted = False
+        print(f"[{datetime.now()}] Waiting to halt simulation at ~{t_halt_target * 1000:.1f}ms...")
+        while time.time() < halt_timeout:
+            if not sim.is_running():
+                print(f"[{datetime.now()}] Simulation finished before halt command could be sent.")
+                break
 
-        if sim.is_running():
+            # Use the private _get_vector_info as it's the only way to get full vector data
+            time_vec_info = sim._backend_impl._get_vector_info('time')
+            if time_vec_info and time_vec_info.real_data[-1] >= t_halt_target:
+                sim.stop_simulation()
+                print(f"[{datetime.now()}] Halt command sent at sim_time={time_vec_info.real_data[-1]:.6f}s.")
+                halted = True
+                break
+            time.sleep(0.01)  # Poll every 10ms
+
+        if not halted and sim.is_running():
             sim.stop_simulation()
+            raise TimeoutError("Could not halt the simulation in time.")
 
-        vec_info = sim._backend_impl._get_vector_info('out')
-        v_at_halt = vec_info.real_data[vec_info.length - 1]
-        time_at_halt = sim._backend_impl._get_vector_info('time').real_data[-1]
+        time.sleep(0.1)  # Allow time for halt to settle
 
-        print(f"Halted at t={time_at_halt:.4f}s with v(out)={v_at_halt:.4f}V")
+        # --- Get data at halt point ---
+        vec_info_out = sim._backend_impl._get_vector_info('out')
+        vec_info_time = sim._backend_impl._get_vector_info('time')
+        v_at_halt = vec_info_out.real_data[-1]
+        time_at_halt = vec_info_time.real_data[-1]
 
+        print(f"[{datetime.now()}] Halted at sim_time={time_at_halt:.6f}s with v(out)={v_at_halt:.4f}V")
+
+        # --- Alter device and resume ---
+        print(f"[{datetime.now()}] Altering R1 to 2k")
         sim.alter_device("R1", resistance="2k")
 
         if time_at_halt < t_stop:
-            print("Resuming simulation...")
+            print(f"[{datetime.now()}] Resuming simulation...")
             sim.command("bg_run")
 
-            timeout = time.time() + 5.0
-            log_time = time.time()
-            while sim.is_running() and time.time() < timeout:
+            # --- Wait for simulation to complete with logging ---
+            resume_timeout = time.time() + 5.0  # 5s timeout for the rest of the sim
+            log_interval = 0.5  # seconds
+            last_log_time = time.time()
+
+            while sim.is_running():
+                if time.time() > resume_timeout:
+                    sim.stop_simulation()
+                    current_sim_time = 'N/A'
+                    time_vec_info = sim._backend_impl._get_vector_info('time')
+                    if time_vec_info:
+                        current_sim_time = f"{time_vec_info.real_data[-1]:.6f}"
+                    raise TimeoutError(
+                        f"Simulation timed out after resuming. "
+                        f"real_time={datetime.now()}, sim_time={current_sim_time}s"
+                    )
+
+                if time.time() - last_log_time >= log_interval:
+                    current_sim_time = 'N/A'
+                    time_vec_info = sim._backend_impl._get_vector_info('time')
+                    if time_vec_info:
+                        current_sim_time = f"{time_vec_info.real_data[-1]:.6f}"
+                    print(f"  ... [{datetime.now()}] running ... sim_time: {current_sim_time}s")
+                    last_log_time = time.time()
+
                 time.sleep(0.1)
-                if time.time() - log_time > 0.5:
-                    current_time_vec = sim._backend_impl._get_vector_info('time')
-                    if current_time_vec:
-                        current_time = current_time_vec.real_data[-1]
-                        print(f"  ... real time: {time.time():.2f}s, sim time: {current_time:.4f}s")
-                    log_time = time.time()
 
-            if sim.is_running():
-                sim.stop_simulation()
-                raise TimeoutError("Simulation did not finish within the timeout.")
+            print(f"[{datetime.now()}] Simulation finished.")
 
+        # --- Final checks and assertions ---
         vec_info_final = sim._backend_impl._get_vector_info('out')
-        v_final_sim = vec_info_final.real_data[vec_info_final.length - 1]
+        v_final_sim = vec_info_final.real_data[-1]
 
+        # 1. Check voltage at halt point against theory
         t_halt_actual = time_at_halt
         tau1 = 1e3 * 1e-6
         v_halt_theory = 1 * (1 - np.exp(-t_halt_actual / tau1))
         print(f"Theoretical voltage at halt: {v_halt_theory:.4f}V")
         assert np.isclose(v_at_halt, v_halt_theory, atol=1e-2)
 
+        # 2. Check final voltage against theory
         t_rem = t_stop - t_halt_actual
         tau2 = 2e3 * 1e-6
+        # The voltage continues to rise from v_at_halt towards 1V with the new time constant
         v_final_theory = v_at_halt + (1 - v_at_halt) * (1 - np.exp(-t_rem / tau2))
         print(f"Final voltage: sim={v_final_sim:.4f}V, theory={v_final_theory:.4f}V")
 
