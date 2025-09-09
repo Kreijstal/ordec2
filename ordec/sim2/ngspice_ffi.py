@@ -273,12 +273,12 @@ class _FFIBackend:
 
         return 0
 
-    def _bg_thread_running_handler(self, is_running, ident, user_data) -> int:
+    def _bg_thread_running_handler(self, is_not_running, ident, user_data) -> int:
         """Handle background thread status updates (NEVER raise exceptions!)"""
         try:
-            self._is_running = bool(is_running)
+            self._is_running = not bool(is_not_running)
             if self.debug:
-                status = "started" if is_running else "stopped"
+                status = "stopped" if is_not_running else "started"
                 print(f"[ngspice-ffi] Background thread {status}")
 
         except Exception:
