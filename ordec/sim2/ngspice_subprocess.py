@@ -328,6 +328,7 @@ class _SubprocessBackend:
         self._async_queue = queue.Queue()
         self._async_halt_requested = False
         self._async_running = True
+        self._data_points_sent = 0
 
         # Start background thread for chunked simulation
         self._async_thread = threading.Thread(
@@ -343,7 +344,7 @@ class _SubprocessBackend:
         """Run simulation in chunks to provide async-like behavior with halt support."""
         try:
             # Chunk size should be small enough for responsiveness but large enough for efficiency
-            chunk_time = min(tstop / 10, max(tstep * 50, 1e-6))  # At least 50 steps per chunk
+            chunk_time = min(tstop / 20, max(tstep * 20, 1e-6))  # At least 20 steps per chunk for better responsiveness
             current_time = 0.0
 
             while current_time < tstop and not self._async_halt_requested:
@@ -397,9 +398,12 @@ class _SubprocessBackend:
                                         if current_time <= time_val <= chunk_end:
                                             # Create data point compatible with FFI backend format
                                             data_point = {
+                                                'timestamp': time.time(),
                                                 'data': {
                                                     'time': time_val
-                                                }
+                                                },
+                                                'index': self._data_points_sent,
+                                                'progress': min(1.0, time_val / tstop) if tstop > 0 else 0.0
                                             }
 
                                             # Add voltage/current data (skip index and time columns)
@@ -412,6 +416,7 @@ class _SubprocessBackend:
 
                                             # Add to queue
                                             self._async_queue.put(data_point)
+                                            self._data_points_sent += 1
 
                                     except (ValueError, IndexError):
                                         continue  # Skip malformed data
@@ -419,8 +424,8 @@ class _SubprocessBackend:
                     # Update current time for next chunk
                     current_time = chunk_end
 
-                    # Throttle to avoid overwhelming the queue
-                    time.sleep(throttle_interval)
+                    # Throttle to avoid overwhelming the queue but ensure responsiveness
+                    time.sleep(min(throttle_interval, 0.05))  # Cap at 50ms for better responsiveness
 
                 except Exception as e:
                     # If chunk fails, try to continue with smaller chunks
