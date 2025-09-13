@@ -183,6 +183,15 @@ class FFIWorkerProcess:
                     except Exception as e:
                         self._response_queue.put({'type': 'error', 'data': pickle.dumps(e), 'traceback': traceback.format_exc()})
 
+                elif cmd == 'resume_simulation' and not self._async_active.is_set():
+                    # Handle resume after halt
+                    try:
+                        result = method(*args, **kwargs)
+                        self._async_active.set()
+                        self._response_queue.put({'type': 'result', 'data': pickle.dumps(result)})
+                    except Exception as e:
+                        self._response_queue.put({'type': 'error', 'data': pickle.dumps(e), 'traceback': traceback.format_exc()})
+
                 else:
                     # Handle regular commands
                     try:
@@ -459,6 +468,7 @@ class IsolatedFFIBackend:
             # If worker communication fails, assume not running
             return False
     def stop_simulation(self): return self._call_worker('stop_simulation')
+    def resume_simulation(self, timeout=2.0): return self._call_worker('resume_simulation', timeout=timeout)
     def reset(self): return self._call_worker('reset')
     def cleanup(self): pass
 
