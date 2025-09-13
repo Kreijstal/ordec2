@@ -79,7 +79,7 @@ class Ngspice:
         if hasattr(self._backend_impl, 'tran_async'):
             return self._backend_impl.tran_async(*args, throttle_interval=throttle_interval)
         else:
-            raise NotImplementedError("Async transient analysis is only available with FFI or MP backends")
+            raise NotImplementedError("Async transient analysis not supported by this backend")
 
     def op_async(self, callback: Optional[Callable] = None) -> Generator:
         if hasattr(self._backend_impl, 'op_async'):

@@ -93,6 +93,9 @@ class FFIWorkerProcess:
         # Initialize thread synchronization objects (can't pickle these)
         self._shutdown_event = threading.Event()
         self._progress_lock = threading.Lock()
+        self._command_queue = queue.Queue()
+        self._response_queue = queue.Queue()
+        self._async_active = threading.Event()
 
         msg = self.conn.recv()
         if msg['type'] == 'init':
@@ -105,21 +108,49 @@ class FFIWorkerProcess:
         else:
             return
 
+        # Start command handler thread
+        command_thread = threading.Thread(target=self._command_handler, daemon=True)
+        command_thread.start()
+
+        # Main communication loop
         while True:
             try:
                 msg = self.conn.recv()
             except (EOFError, BrokenPipeError):
                 break
             except Exception as e:
-                # Log unexpected errors but continue
                 if hasattr(self, 'backend') and self.backend and hasattr(self.backend, 'debug') and self.backend.debug:
                     import traceback
                     print(f"[ngspice-mp] Worker recv error: {e}\n{traceback.format_exc()}")
                 break
 
             if msg['type'] == 'quit':
-                if self.backend: self.backend.cleanup()
+                self._shutdown_event.set()
+                if self.backend:
+                    self.backend.cleanup()
                 break
+
+            # Put command in queue for handler thread
+            self._command_queue.put(msg)
+
+            # Wait for response from handler thread
+            try:
+                response = self._response_queue.get(timeout=60)
+                self.conn.send(response)
+            except queue.Empty:
+                self.conn.send({'type': 'error', 'data': pickle.dumps(RuntimeError("Command timeout"))})
+            except (BrokenPipeError, EOFError):
+                break
+
+    def _command_handler(self):
+        """Handle commands in separate thread to allow concurrent async simulation"""
+        import traceback
+
+        while not self._shutdown_event.is_set():
+            try:
+                msg = self._command_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
 
             cmd = msg['type']
             args = msg.get('args', [])
@@ -130,46 +161,40 @@ class FFIWorkerProcess:
 
                 if cmd in ['tran_async', 'op_async']:
                     try:
-                        # Send acknowledgment first
-                        try:
-                            self.conn.send({'type': 'result', 'data': pickle.dumps({'async_started': True})})
-                        except (BrokenPipeError, EOFError):
-                            break  # Parent disconnected
-
+                        # Start async simulation
+                        self._async_active.set()
                         ffi_queue = method(*args, **kwargs)
 
-                        # Start relay thread with proper synchronization
+                        # Start relay thread
                         self._start_relay_thread(ffi_queue)
 
-                        # Wait for the relay thread to finish (simulation complete)
-                        if self._relay_thread:
-                            self._relay_thread.join(timeout=60)  # 60 second timeout
+                        # Send immediate acknowledgment
+                        self._response_queue.put({'type': 'result', 'data': pickle.dumps({'async_started': True})})
 
                     except Exception as e:
-                        try:
-                            self.conn.send({'type': 'error', 'data': pickle.dumps(e), 'traceback': traceback.format_exc()})
-                        except (BrokenPipeError, EOFError):
-                            break  # Parent process disconnected
-                    finally:
-                        try:
-                            self.async_queue.put(_ASYNC_SIM_SENTINEL)
-                        except Exception:
-                            pass  # Queue might be closed
-                    continue
+                        self._response_queue.put({'type': 'error', 'data': pickle.dumps(e), 'traceback': traceback.format_exc()})
 
-                result = method(*args, **kwargs)
-                if hasattr(result, '__iter__') and not isinstance(result, (list, tuple, dict, str, NgspiceTransientResult)):
-                    result = list(result)
+                elif cmd == 'stop_simulation' and self._async_active.is_set():
+                    # Handle halt during async simulation
+                    try:
+                        result = method(*args, **kwargs)
+                        self._async_active.clear()
+                        self._response_queue.put({'type': 'result', 'data': pickle.dumps(result)})
+                    except Exception as e:
+                        self._response_queue.put({'type': 'error', 'data': pickle.dumps(e), 'traceback': traceback.format_exc()})
 
-                try:
-                    self.conn.send({'type': 'result', 'data': pickle.dumps(result)})
-                except (BrokenPipeError, EOFError):
-                    break  # Parent process disconnected
+                else:
+                    # Handle regular commands
+                    try:
+                        result = method(*args, **kwargs)
+                        if hasattr(result, '__iter__') and not isinstance(result, (list, tuple, dict, str, NgspiceTransientResult)):
+                            result = list(result)
+                        self._response_queue.put({'type': 'result', 'data': pickle.dumps(result)})
+                    except Exception as e:
+                        self._response_queue.put({'type': 'error', 'data': pickle.dumps(e), 'traceback': traceback.format_exc()})
+
             except Exception as e:
-                try:
-                    self.conn.send({'type': 'error', 'data': pickle.dumps(e), 'traceback': traceback.format_exc()})
-                except (BrokenPipeError, EOFError):
-                    break  # Parent process disconnected
+                self._response_queue.put({'type': 'error', 'data': pickle.dumps(e), 'traceback': traceback.format_exc()})
 
     def _start_relay_thread(self, ffi_queue):
         """Start a relay thread with proper synchronization"""
@@ -181,7 +206,8 @@ class FFIWorkerProcess:
             start_time = time.time()
 
             try:
-                while not self._shutdown_event.is_set():
+                while not self._shutdown_event.is_set() and self._async_active.is_set():
+
                     try:
                         # Block until data is available with timeout
                         data_point = ffi_queue.get(timeout=0.5)
@@ -214,6 +240,7 @@ class FFIWorkerProcess:
                     except queue_module.Empty:
                         # Check if simulation finished
                         if not self.backend.is_running():
+                            self._async_active.clear()
                             # Implement data fallback mechanism
                             self._handle_data_fallback()
 
@@ -305,6 +332,7 @@ class IsolatedFFIBackend:
         self.conn = conn
         self.process = process
         self.async_queue = async_queue
+        self._async_simulation_running = False
 
     def close(self):
         try:
@@ -397,6 +425,7 @@ class IsolatedFFIBackend:
                 timeout_count = 0  # Reset timeout counter on successful get
 
                 if item == _ASYNC_SIM_SENTINEL:
+                    self._async_simulation_running = False
                     break
                 yield item
             except queue.Empty:
@@ -404,11 +433,13 @@ class IsolatedFFIBackend:
                 if timeout_count > max_timeouts:
                     # Been waiting too long, check if worker is still alive
                     if not self.process.is_alive():
+                        self._async_simulation_running = False
                         break
                     # Reset counter and continue waiting
                     timeout_count = 0
                 continue
             except (EOFError, BrokenPipeError):
+                self._async_simulation_running = False
                 break
             except Exception as e:
                 # Log unexpected errors but continue
@@ -463,11 +494,99 @@ class IsolatedFFIBackend:
 
     def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 1.0):
         """Safely halt running simulation."""
-        return self._call_worker('safe_halt_simulation', max_attempts=max_attempts, wait_time=wait_time)
+        import time
+        import concurrent.futures
+
+        if not self.is_running():
+            return True
+
+        for attempt in range(max_attempts):
+            try:
+                # Send halt command to worker
+                result = self._call_worker('stop_simulation')
+                self._async_simulation_running = False
+
+                # Wait and verify halt succeeded
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    def check_halt_status():
+                        """Check if simulation has halted"""
+                        return not self.is_running()
+
+                    timeout = time.time() + wait_time
+                    while time.time() < timeout:
+                        halt_future = executor.submit(check_halt_status)
+                        try:
+                            if halt_future.result(timeout=min(0.01, wait_time)):
+                                return result
+                        except concurrent.futures.TimeoutError:
+                            pass
+                        finally:
+                            if not halt_future.done():
+                                halt_future.cancel()
+
+            except Exception:
+                pass
+
+            # Wait before retry (except on last attempt)
+            if attempt < max_attempts - 1:
+                time.sleep(wait_time)
+
+        # Final check - use actual worker state, not our flag
+        try:
+            return self._call_worker('is_running') == False
+        except:
+            return False
 
     def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 2.0):
         """Resume a halted simulation."""
-        return self._call_worker('safe_resume_simulation', max_attempts=max_attempts, wait_time=wait_time)
+        import time
+        import concurrent.futures
+
+        if self.is_running():
+            return True
+
+        for attempt in range(max_attempts):
+            try:
+                # Send resume command to worker
+                result = self._call_worker('resume_simulation', timeout=wait_time)
+                if result:
+                    self._async_simulation_running = True
+                    return True
+
+                # Verify resume succeeded
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    def check_resume_status():
+                        """Check if simulation has resumed"""
+                        return self.is_running()
+
+                    timeout = time.time() + wait_time
+                    while time.time() < timeout:
+                        resume_future = executor.submit(check_resume_status)
+                        try:
+                            if resume_future.result(timeout=min(0.01, wait_time)):
+                                self._async_simulation_running = True
+                                return True
+                        except concurrent.futures.TimeoutError:
+                            pass
+                        finally:
+                            if not resume_future.done():
+                                resume_future.cancel()
+
+            except Exception:
+                pass
+
+            # Wait before retry (except on last attempt)
+            if attempt < max_attempts - 1:
+                time.sleep(wait_time)
+
+        return False
+
+    def tran_async(self, *args, **kwargs):
+        self._async_simulation_running = True
+        self._call_worker('tran_async', *args, **kwargs)
+        return self.async_queue
 
     def op_async(self, *args, **kwargs):
-        return self._create_async_generator('op_async', *args, **kwargs)
+        self._async_simulation_running = True
+        self._call_worker('op_async', *args, **kwargs)
+        return self.async_queue

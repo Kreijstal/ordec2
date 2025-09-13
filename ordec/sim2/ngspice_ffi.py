@@ -732,12 +732,18 @@ class _FFIBackend:
                     stop_future = executor.submit(check_stop_status)
                     try:
                         if stop_future.result(timeout=0.05):
-                            break
+                            return True  # Successfully stopped
                     except concurrent.futures.TimeoutError:
                         pass
                     finally:
                         if not stop_future.done():
                             stop_future.cancel()
+
+            # If we reach here, stopping timed out but we tried
+            return not self._is_running
+        else:
+            # Already stopped
+            return True
 
     def resume_simulation(self, timeout=2.0):
         """Resume a halted simulation using bg_resume command.
@@ -754,17 +760,22 @@ class _FFIBackend:
         # Send bg_resume command
         result = self.command("bg_resume")
 
-        # Wait for simulation to start with timeout
-        start_time = time.time()
-
+        # Check if ngspice is actually running using the library function
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
 
             def check_resume_status():
-                """Check if simulation has resumed"""
-                return self._is_running
+                """Check if simulation has resumed using ngspice library"""
+                try:
+                    is_running = self.lib.ngSpice_running()
+                    if is_running:
+                        self._is_running = True  # Update our state
+                    return is_running
+                except:
+                    return False
 
             # Wait for resume to complete
+            start_time = time.time()
             while time.time() - start_time < timeout:
                 resume_future = executor.submit(check_resume_status)
                 try:

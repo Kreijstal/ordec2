@@ -822,3 +822,22 @@ class InvIhpTb(SimBase):
         helpers.schem_check(s, add_conn_points=True, add_terminal_taps=True)
 
         return s
+
+
+class RCAlterTestbench(Cell):
+    """RC circuit for testing HighlevelSim alter operations"""
+
+    @generate
+    def schematic(self):
+        s = Schematic(cell=self, outline=Rect4R(lx=0, ly=0, ux=10, uy=10))
+
+        s.vin = Net()
+        s.vout = Net()
+        s.gnd = Net()
+
+        s.v1 = SchemInstance(Vdc(dc=R(1)).symbol.portmap(p=s.vin, m=s.gnd), pos=Vec2R(0, 5))
+        s.r1 = SchemInstance(Res(r=R(1000)).symbol.portmap(p=s.vin, m=s.vout), pos=Vec2R(5, 5))
+        s.c1 = SchemInstance(Cap(c=R("1u")).symbol.portmap(p=s.vout, m=s.gnd), pos=Vec2R(8, 3))
+        s.gnd_conn = SchemInstance(Gnd().symbol.portmap(p=s.gnd), pos=Vec2R(0, 0))
+
+        return s

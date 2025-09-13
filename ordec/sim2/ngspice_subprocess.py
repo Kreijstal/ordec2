@@ -6,6 +6,9 @@ import signal
 import sys
 import tempfile
 import shutil
+import threading
+import time
+import queue
 from collections import namedtuple
 from contextlib import contextmanager
 from pathlib import Path
@@ -68,6 +71,11 @@ class _SubprocessBackend:
         self.p = p
         self.debug = debug
         self.cwd = cwd
+        self._async_running = False
+        self._async_thread = None
+        self._async_queue = None
+        self._async_halt_requested = False
+        self._async_lock = threading.Lock()
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -264,6 +272,209 @@ class _SubprocessBackend:
                 result.add_table(table)
 
         return result
+
+    def tran_async(self, *args, throttle_interval: float = 0.1) -> 'queue.Queue':
+        """
+        Start asynchronous transient analysis using chunked simulation.
+
+        This provides async-like behavior for the subprocess backend by running
+        transient analysis in small time chunks and supporting halt/resume operations.
+
+        Args:
+            *args: tran arguments (tstep, tstop, etc.)
+            throttle_interval: Minimum time between data updates
+
+        Returns:
+            queue.Queue object containing simulation data points
+        """
+        if self._async_running:
+            raise RuntimeError("Async simulation is already running")
+
+        # Parse arguments
+        if len(args) < 2:
+            raise ValueError("tran_async requires at least tstep and tstop arguments")
+
+        tstep_str, tstop_str = str(args[0]), str(args[1])
+
+        # Parse time values with unit support
+        def parse_time(time_str):
+            time_str = time_str.strip()
+            if time_str.endswith('us'):
+                return float(time_str[:-2]) * 1e-6
+            elif time_str.endswith('ns'):
+                return float(time_str[:-2]) * 1e-9
+            elif time_str.endswith('ms'):
+                return float(time_str[:-2]) * 1e-3
+            elif time_str.endswith('ps'):
+                return float(time_str[:-2]) * 1e-12
+            elif time_str.endswith('u'):
+                return float(time_str[:-1]) * 1e-6
+            elif time_str.endswith('n'):
+                return float(time_str[:-1]) * 1e-9
+            elif time_str.endswith('m'):
+                return float(time_str[:-1]) * 1e-3
+            elif time_str.endswith('p'):
+                return float(time_str[:-1]) * 1e-12
+            else:
+                return float(time_str)
+
+        try:
+            tstep = parse_time(tstep_str)
+            tstop = parse_time(tstop_str)
+        except ValueError as e:
+            raise ValueError(f"Invalid time format: {e}")
+
+        # Create queue for results
+        self._async_queue = queue.Queue()
+        self._async_halt_requested = False
+        self._async_running = True
+
+        # Start background thread for chunked simulation
+        self._async_thread = threading.Thread(
+            target=self._run_chunked_simulation,
+            args=(tstep, tstop, tstep_str, throttle_interval),
+            daemon=True
+        )
+        self._async_thread.start()
+
+        return self._async_queue
+
+    def _run_chunked_simulation(self, tstep: float, tstop: float, tstep_str: str, throttle_interval: float):
+        """Run simulation in chunks to provide async-like behavior with halt support."""
+        try:
+            # Chunk size should be small enough for responsiveness but large enough for efficiency
+            chunk_time = min(tstop / 10, max(tstep * 50, 1e-6))  # At least 50 steps per chunk
+            current_time = 0.0
+
+            while current_time < tstop and not self._async_halt_requested:
+                # Calculate chunk end time
+                chunk_end = min(current_time + chunk_time, tstop)
+
+                # Run transient analysis for this chunk using tstart parameter
+                if current_time == 0:
+                    # First chunk - normal tran command
+                    tran_cmd = f"tran {tstep_str} {chunk_end}"
+                else:
+                    # Subsequent chunks - use tstart parameter
+                    tran_cmd = f"tran {tstep_str} {chunk_end} {current_time}"
+
+                try:
+                    # Run the chunk and get results
+                    self.command(tran_cmd)
+                    print_all_res = "\n".join(self.print_all())
+                    lines = print_all_res.split('\n')
+
+                    tables = {}  # map from header tuple to list of data rows
+                    current_headers = None
+
+                    for line in lines:
+                        with self._async_lock:
+                            if self._async_halt_requested:
+                                break
+
+                        line = line.strip()
+                        if not line or re.match(r"^-+$", line) or "Transient Analysis" in line or line == "print all":
+                            continue
+
+                        # Check if this is a header line (contains "Index" and "time")
+                        if "Index" in line and "time" in line:
+                            current_headers = tuple(line.split())
+                            if current_headers not in tables:
+                                tables[current_headers] = []
+                            continue
+                        elif current_headers:
+                            # Parse tab-separated data
+                            row_data = line.split('\t')
+                            if len(row_data) >= 2 and self._is_numeric_row(row_data):
+                                # Ensure data row has a compatible number of columns
+                                if len(row_data) <= len(current_headers):
+                                    tables[current_headers].append(row_data)
+
+                                    # Create data point for this row
+                                    try:
+                                        time_val = float(row_data[1])  # time is in second column
+                                        # Only include points in our time range
+                                        if current_time <= time_val <= chunk_end:
+                                            # Create data point compatible with FFI backend format
+                                            data_point = {
+                                                'data': {
+                                                    'time': time_val
+                                                }
+                                            }
+
+                                            # Add voltage/current data (skip index and time columns)
+                                            for i, header in enumerate(current_headers[2:], 2):
+                                                if i < len(row_data) and row_data[i].strip():
+                                                    try:
+                                                        data_point['data'][header] = float(row_data[i])
+                                                    except ValueError:
+                                                        pass  # Skip non-numeric values
+
+                                            # Add to queue
+                                            self._async_queue.put(data_point)
+
+                                    except (ValueError, IndexError):
+                                        continue  # Skip malformed data
+
+                    # Update current time for next chunk
+                    current_time = chunk_end
+
+                    # Throttle to avoid overwhelming the queue
+                    time.sleep(throttle_interval)
+
+                except Exception as e:
+                    # If chunk fails, try to continue with smaller chunks
+                    if chunk_time > tstep * 10:
+                        chunk_time = chunk_time / 2
+                        continue
+                    else:
+                        # If we can't make progress, abort
+                        error_data = {'error': f"Simulation failed: {str(e)}"}
+                        self._async_queue.put(error_data)
+                        break
+
+            if not self._async_halt_requested:
+                # Signal completion if not halted
+                self._async_queue.put({'status': 'completed'})
+            else:
+                # Signal halt
+                self._async_queue.put({'status': 'halted'})
+
+        except Exception as e:
+            # Put error in queue
+            error_data = {'error': f"Async simulation failed: {str(e)}"}
+            self._async_queue.put(error_data)
+        finally:
+            self._async_running = False
+
+    def is_running(self) -> bool:
+        """Check if async simulation is running."""
+        return self._async_running and (self._async_thread is not None and self._async_thread.is_alive())
+
+    def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 0.2) -> bool:
+        """Halt async simulation safely."""
+        if not self._async_running:
+            return True
+
+        with self._async_lock:
+            self._async_halt_requested = True
+
+        # Wait for thread to finish
+        for attempt in range(max_attempts):
+            if self._async_thread and self._async_thread.is_alive():
+                self._async_thread.join(timeout=wait_time)
+
+            if not self.is_running():
+                with self._async_lock:
+                    self._async_running = False
+                return True
+
+            time.sleep(wait_time)
+
+        # Force stop if it didn't stop gracefully
+        with self._async_lock:
+            self._async_running = False
+        return not self.is_running()
 
     def _is_header_line(self, line, expected_headers):
         """Check if a line looks like a header line."""

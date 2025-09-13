@@ -3,9 +3,12 @@
 
 import pytest
 import re
+import time
+import queue
 from contextlib import contextmanager
 from ordec.core import *
-from ordec.lib import test as lib_test, Res, Gnd, Vdc, Cap
+from ordec.lib import test as lib_test
+from ordec.lib.test import RCAlterTestbench
 from ordec.core.rational import R
 from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 from ordec.sim2.ngspice import Ngspice
@@ -276,69 +279,122 @@ def test_highlevel_async_parameter_sweep(backend):
 
 
 
-class RCAlterTestbench(Cell):
-    """RC circuit for testing HighlevelSim alter operations"""
 
-    @generate
-    def schematic(self):
-        s = Schematic(cell=self, outline=Rect4R(lx=0, ly=0, ux=10, uy=10))
 
-        s.vin = Net()
-        s.vout = Net()
-        s.gnd = Net()
 
-        s.v1 = SchemInstance(Vdc(dc=R(1)).symbol.portmap(p=s.vin, m=s.gnd), pos=Vec2R(0, 5))
-        s.r1 = SchemInstance(Res(r=R(1000)).symbol.portmap(p=s.vin, m=s.vout), pos=Vec2R(5, 5))
-        s.c1 = SchemInstance(Cap(c=R("1u")).symbol.portmap(p=s.vout, m=s.gnd), pos=Vec2R(8, 3))
-        s.gnd_conn = SchemInstance(Gnd().symbol.portmap(p=s.gnd), pos=Vec2R(0, 0))
 
-        return s
 
 
 @pytest.mark.libngspice
 @pytest.mark.parametrize("backend", ["ffi", "mp"])
-def test_highlevel_alter_multiple_components(backend):
-    """Test comprehensive HighlevelSim alter operations with sequential VDC changes"""
+def test_async_alter_resume(backend):
 
-    tb = RCAlterTestbench()
+    circuit = RCAlterTestbench()
     node = SimHierarchy()
-    sim = HighlevelSim(tb.schematic, node, backend=backend)
+    sim = HighlevelSim(circuit.schematic, node, backend=backend)
 
-    with sim.alter_session(backend=backend) as alter:
-        # Test sequence of alterations with verification at each step
-        vdc_values = [1.0, 2.0, 5.0, 0.5, 1.0]
+    async def run_comprehensive_test():
+        """Test multiple aspects of async alter functionality"""
+        with sim.alter_session(backend=backend) as alter:
 
-        for i, vdc_value in enumerate(vdc_values):
-            # Alter VDC voltage
-            alter.alter_component(tb.schematic.v1, dc=vdc_value)
+            # Start async transient simulation
+            data_queue = alter.start_async_tran("10u", "100m")  # 10us steps, 100ms total
 
-            # Verify the change took effect
-            v1_show = alter.show_component(tb.schematic.v1)
-            # Handle both integer and float display (ngspice shows 1.0 as 1)
-            expected_dc = str(int(vdc_value)) if vdc_value == int(vdc_value) else str(vdc_value)
-            # Use regex to handle variable spacing in ngspice output
-            dc_pattern = rf"dc\s+{re.escape(expected_dc)}"
-            assert re.search(dc_pattern, v1_show), f"Step {i+1}: Should show dc {expected_dc} in output: {v1_show}"
+            # Phase 1: Initial data collection and signal mapping
+            initial_data = []
+            found_signals = set()
+            mapped_signals = {}
+            start_time = time.time()
+            timeout = 10.0
 
-            # Run operating point to verify circuit behavior
-            alter.op()
-            voltage = node.vout.dc_voltage
+            while (time.time() - start_time) < timeout and len(initial_data) < 20:
+                try:
+                    data_point = data_queue.get(timeout=0.1)
+                    if isinstance(data_point, dict) and 'data' in data_point:
+                        sim_time = data_point['data'].get('time', 0)
+                        data_dict = data_point['data']
+                        initial_data.append((sim_time, data_dict))
 
-            # In this DC circuit, output should equal input voltage
-            assert abs(voltage - vdc_value) < 0.01, f"Step {i+1}: DC output should be ~{vdc_value}V, got {voltage}V"
+                        # Collect signal mapping information
+                        for signal_name in data_dict.keys():
+                            if signal_name != 'time':
+                                found_signals.add(signal_name)
+                                if signal_name in sim.str_to_simobj:
+                                    simnet = sim.str_to_simobj[signal_name]
+                                    net_name = simnet.eref.full_path_str().split('.')[-1]
+                                    mapped_signals[signal_name] = net_name
 
-        # Test altering capacitor capacitance
-        alter.alter_component(tb.schematic.c1, capacitance='2u')
-        c1_show = alter.show_component(tb.schematic.c1)
-        assert "2" in c1_show, "Should show altered capacitance value"
+                        # Stop collecting at 5ms simulation time
+                        if sim_time >= 0.005:
+                            break
 
-        # Final verification - ensure we can still alter VDC after capacitor change
-        alter.alter_component(tb.schematic.v1, dc=3.0)
-        final_v1_show = alter.show_component(tb.schematic.v1)
-        # Use regex to handle variable spacing in ngspice output
-        assert re.search(r"dc\s+3", final_v1_show), f"Final VDC change should work, output: {final_v1_show}"
+                except queue.Empty:
+                    continue
 
-        # Run final OP analysis
-        alter.op()
-        final_voltage = node.vout.dc_voltage
-        assert abs(final_voltage - 3.0) < 0.01, f"Final voltage should be ~3V, got {final_voltage}V"
+            assert len(initial_data) > 0, "Should collect initial simulation data"
+
+            # Phase 2: Multiple halt/alter/resume cycles with different voltages
+            voltage_sequence = [2.0, 1.5, 3.0, 1.0]
+            alter_data = []
+
+            for i, voltage in enumerate(voltage_sequence):
+                # Test halt simulation
+                halt_success = alter.halt_simulation(timeout=2.0)
+                assert halt_success, f"Should successfully halt simulation at step {i+1}"
+
+                # Test parameter alteration
+                alter.alter_component(circuit.schematic.v1, dc=voltage)
+
+                # Verify the alteration
+                vdc_info = alter.show_component(circuit.schematic.v1)
+                expected = str(int(voltage)) if voltage == int(voltage) else str(voltage)
+                assert expected in vdc_info, f"Step {i+1}: VDC should show {expected}V after alter: {vdc_info}"
+
+                # Test resume simulation
+                resume_success = alter.resume_simulation(timeout=3.0)
+                assert resume_success, f"Should successfully resume simulation at step {i+1}"
+
+                # Collect some data after each alter
+                step_data = []
+                step_start = time.time()
+                while (time.time() - step_start) < 1.0 and len(step_data) < 10:
+                    try:
+                        data_point = data_queue.get(timeout=0.1)
+                        if isinstance(data_point, dict) and 'data' in data_point:
+                            sim_time = data_point['data'].get('time', 0)
+                            step_data.append((sim_time, data_point['data']))
+                    except queue.Empty:
+                        continue
+
+                alter_data.extend(step_data)
+                assert len(step_data) > 0, f"Should collect data after alter step {i+1}"
+
+            # Phase 3: Final data collection
+            final_data = []
+            start_time = time.time()
+            while (time.time() - start_time) < 2.0 and len(final_data) < 10:
+                try:
+                    data_point = data_queue.get(timeout=0.1)
+                    if isinstance(data_point, dict) and 'data' in data_point:
+                        sim_time = data_point['data'].get('time', 0)
+                        final_data.append((sim_time, data_point['data']))
+                except queue.Empty:
+                    continue
+
+            return {
+                'initial_points': len(initial_data),
+                'alter_points': len(alter_data),
+                'final_points': len(final_data),
+                'signal_count': len(found_signals),
+                'mapped_count': len(mapped_signals),
+                'voltage_steps': len(voltage_sequence)
+            }
+
+
+    import asyncio
+    result = asyncio.run(run_comprehensive_test())
+    assert result['initial_points'] > 0, "Should collect initial data points"
+    assert result['alter_points'] > 0, "Should collect data after alterations"
+    assert result['signal_count'] >= 2, "Should detect multiple signals"
+    assert result['mapped_count'] >= 2, "Should map signal names correctly"
+    assert result['voltage_steps'] == 4, "Should complete all voltage alteration steps"

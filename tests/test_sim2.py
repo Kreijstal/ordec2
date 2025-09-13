@@ -7,6 +7,9 @@ from ordec.sim2.ngspice import Ngspice, Netlister
 from ordec.sim2.ngspice_common import NgspiceError, NgspiceFatalError
 from ordec import Rational as R
 from ordec.lib import test as lib_test
+from ordec.core import *
+from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
+from ordec.lib.test import RCAlterTestbench
 
 sim2_backends = [
     pytest.param('subprocess', marks=[]),
@@ -265,6 +268,52 @@ def test_sim_ac_rc_filter(backend):
 
     # At the -3dB point, the magnitude should be 1/sqrt(2)
     assert np.isclose(vout_mag, 1/math.sqrt(2), atol=1e-2)
+
+
+@pytest.mark.parametrize("backend", sim2_backends)
+def test_highlevel_alter_op(backend):
+    """Test alter with op"""
+
+    tb = RCAlterTestbench()
+    node = SimHierarchy()
+    sim = HighlevelSim(tb.schematic, node, backend=backend)
+
+    with sim.alter_session(backend=backend) as alter:
+        vdc_values = [1.0, 2.0, 5.0, 0.5, 1.0]
+
+        for i, vdc_value in enumerate(vdc_values):
+            # Alter VDC voltage
+            alter.alter_component(tb.schematic.v1, dc=vdc_value)
+
+            # Verify the change took effect
+            v1_show = alter.show_component(tb.schematic.v1)
+            # Handle both integer and float display (ngspice shows 1.0 as 1)
+            expected_dc = str(int(vdc_value)) if vdc_value == int(vdc_value) else str(vdc_value)
+            # Use regex to handle variable spacing in ngspice output
+            dc_pattern = rf"dc\s+{re.escape(expected_dc)}"
+            assert re.search(dc_pattern, v1_show), f"Step {i+1}: Should show dc {expected_dc} in output: {v1_show}"
+
+            # Run operating point to verify circuit behavior
+            alter.op()
+            voltage = node.vout.dc_voltage
+
+            # In this DC circuit, output should equal input voltage
+            assert abs(voltage - vdc_value) < 0.01, f"Step {i+1}: DC output should be ~{vdc_value}V, got {voltage}V"
+
+        # Test altering capacitor capacitance
+        alter.alter_component(tb.schematic.c1, capacitance='2u')
+        c1_show = alter.show_component(tb.schematic.c1)
+        assert "2" in c1_show, "Should show altered capacitance value"
+
+        # Final verification - ensure we can still alter VDC after capacitor change
+        alter.alter_component(tb.schematic.v1, dc=3.0)
+        final_v1_show = alter.show_component(tb.schematic.v1)
+        # Use regex to handle variable spacing in ngspice output
+        assert re.search(r"dc\s+3", final_v1_show), f"Final VDC change should work, output: {final_v1_show}"
+
+        alter.op()
+        final_voltage = node.vout.dc_voltage
+        assert abs(final_voltage - 3.0) < 0.01, f"Final voltage should be ~3V, got {final_voltage}V"
 
 @pytest.mark.parametrize("backend", sim2_backends)
 def test_sim_ac_rc_filter_wrdata(backend):
