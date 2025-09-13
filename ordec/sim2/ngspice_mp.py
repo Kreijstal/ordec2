@@ -461,5 +461,13 @@ class IsolatedFFIBackend:
         self._call_worker('tran_async', *args, throttle_interval=throttle_interval)
         return self.async_queue
 
+    def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 1.0):
+        """Safely halt running simulation."""
+        return self._call_worker('safe_halt_simulation', max_attempts=max_attempts, wait_time=wait_time)
+
+    def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 2.0):
+        """Resume a halted simulation."""
+        return self._call_worker('safe_resume_simulation', max_attempts=max_attempts, wait_time=wait_time)
+
     def op_async(self, *args, **kwargs):
         return self._create_async_generator('op_async', *args, **kwargs)
