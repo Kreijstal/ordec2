@@ -13,12 +13,7 @@ from ordec.lib.base import PulseVoltageSource, Res, Cap, Gnd
 from ordec.sim2.ngspice import Ngspice, NgspiceBackend
 from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 
-# --- Sixel Plotting Function ---
 def plot_sixel(time_data, voltage_in, voltage_out, title="RC Circuit Response"):
-    """
-    Generate and display a Sixel plot showing both input and output voltages.
-    Returns True on success, False on failure.
-    """
     try:
         import matplotlib
         import matplotlib.pyplot as plt
@@ -49,7 +44,6 @@ def plot_sixel(time_data, voltage_in, voltage_out, title="RC Circuit Response"):
         print(f"\n--- Sixel plotting failed ---\n  Error: {e}\n  Ensure 'matplotlib-backend-sixel' and 'imagemagick' are installed.\n--------------------------\n", file=sys.stderr)
         return False
 
-# --- ASCII Plotting Fallback ---
 def plot_ascii(time_data, voltage_in, voltage_out, width=80, height=20, title="RC Circuit Response"):
     """Create ASCII art plot showing both input (I) and output (O) waveforms."""
     if not time_data or not voltage_in or not voltage_out: return "No data to plot"
@@ -89,7 +83,6 @@ def plot_ascii(time_data, voltage_in, voltage_out, width=80, height=20, title="R
     result = [f"{title:^{width}}", *lines, f"Time: {min_t:.2e} to {max_t:.2e} s", f"Voltage: {min_v:.3f} to {max_v:.3f} V | (I)nput, (O)utput"]
     return '\n'.join(result)
 
-# --- Terminal Sixel Support Detection ---
 def _query_sixel_support_from_terminal():
     if not sys.stdout.isatty() or not sys.stdin.isatty():
         return False
