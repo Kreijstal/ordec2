@@ -344,12 +344,19 @@ class _SubprocessBackend:
         """Run simulation in chunks to provide async-like behavior with halt support."""
         try:
             # Chunk size should be small enough for responsiveness but large enough for efficiency
-            chunk_time = min(tstop / 20, max(tstep * 20, 1e-6))  # At least 20 steps per chunk for better responsiveness
-            current_time = 0.0
+            chunk_time = min(tstop / 100, max(tstep * 5, 1e-9))  # Much smaller chunks for better halt responsiveness
+            if self.debug:
+                print(f"DEBUG: Chunked simulation starting: tstep={tstep}, tstop={tstop}, chunk_time={chunk_time}")
+            # Use stored current_time if available (for resume), otherwise start from 0
+            current_time = getattr(self, '_async_current_time', 0.0)
 
             while current_time < tstop and not self._async_halt_requested:
+                # Store current time for resume functionality
+                self._async_current_time = current_time
                 # Calculate chunk end time
                 chunk_end = min(current_time + chunk_time, tstop)
+                if self.debug:
+                    print(f"DEBUG: Running chunk {current_time}-{chunk_end}, halt_requested={self._async_halt_requested}")
 
                 # Run transient analysis for this chunk using tstart parameter
                 if current_time == 0:
@@ -361,9 +368,49 @@ class _SubprocessBackend:
 
                 try:
                     # Run the chunk and get results
+                    if self.debug:
+                        print(f"DEBUG: Sending command: {tran_cmd}")
                     self.command(tran_cmd)
                     print_all_res = "\n".join(self.print_all())
                     lines = print_all_res.split('\n')
+
+                    # Debug: print raw output to understand format
+                    if self.debug:
+                        print(f"DEBUG: print_all output for chunk {current_time}-{chunk_end}:")
+                        for i, line in enumerate(lines):
+                            print(f"DEBUG: line {i}: '{line}'")
+
+                    # Get voltage data explicitly since print all may not include it
+                    voltage_data = {}
+                    try:
+                        # Get node voltages using display command to find available nodes
+                        display_output = self.command("display")
+                        for line in display_output.split('\n'):
+                            # Look for node voltage vectors (not starting with @ and not ending with #branch)
+                            if ':' in line and not line.strip().startswith('@') and not line.strip().endswith('#branch'):
+                                parts = line.split(':')
+                                vec_name = parts[0].strip()
+                                if vec_name and not vec_name.startswith('@') and not vec_name.endswith('#branch'):
+                                    # Try to get voltage data for this node
+                                    try:
+                                        vec_print = self.command(f"print {vec_name}")
+                                        for vec_line in vec_print.split('\n'):
+                                            if vec_line.strip() and not any(x in vec_line for x in ['Index', 'time', '---', 'print']):
+                                                values = vec_line.split()
+                                                if len(values) >= 2:
+                                                    try:
+                                                        time_val = float(values[1])
+                                                        voltage_val = float(values[2]) if len(values) > 2 else 0.0
+                                                        if time_val not in voltage_data:
+                                                            voltage_data[time_val] = {}
+                                                        voltage_data[time_val][vec_name] = voltage_val
+                                                    except (ValueError, IndexError):
+                                                        continue
+                                    except:
+                                        continue
+                    except:
+                        # If voltage data collection fails, continue without it
+                        pass
 
                     tables = {}  # map from header tuple to list of data rows
                     current_headers = None
@@ -371,6 +418,8 @@ class _SubprocessBackend:
                     for line in lines:
                         with self._async_lock:
                             if self._async_halt_requested:
+                                if self.debug:
+                                    print(f"DEBUG: Breaking due to halt request at time {time_val}")
                                 break
 
                         line = line.strip()
@@ -380,15 +429,24 @@ class _SubprocessBackend:
                         # Check if this is a header line (contains "Index" and "time")
                         if "Index" in line and "time" in line:
                             current_headers = tuple(line.split())
+                            if self.debug:
+                                print(f"DEBUG: Found headers: {current_headers}")
                             if current_headers not in tables:
                                 tables[current_headers] = []
                             continue
                         elif current_headers:
-                            # Parse tab-separated data
+                            # Parse data - try both tab and space separation
+                            # First try tab separation (ngspice default)
                             row_data = line.split('\t')
+                            if len(row_data) < 2 or not self._is_numeric_row(row_data):
+                                # Fallback to space separation
+                                row_data = line.split()
+
                             if len(row_data) >= 2 and self._is_numeric_row(row_data):
                                 # Ensure data row has a compatible number of columns
                                 if len(row_data) <= len(current_headers):
+                                    if self.debug and len(tables[current_headers]) < 3:  # Only print first few rows
+                                        print(f"DEBUG: Adding row data: {row_data}")
                                     tables[current_headers].append(row_data)
 
                                     # Create data point for this row
@@ -414,6 +472,15 @@ class _SubprocessBackend:
                                                     except ValueError:
                                                         pass  # Skip non-numeric values
 
+                                            # Add voltage data if available for this time point
+                                            if time_val in voltage_data:
+                                                for node_name, voltage_val in voltage_data[time_val].items():
+                                                    data_point['data'][node_name] = voltage_val
+
+                                            # Debug: print data point structure
+                                            if self.debug and self._data_points_sent < 3:  # Only print first few points
+                                                print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")
+
                                             # Add to queue
                                             self._async_queue.put(data_point)
                                             self._data_points_sent += 1
@@ -423,6 +490,8 @@ class _SubprocessBackend:
 
                     # Update current time for next chunk
                     current_time = chunk_end
+                    # Store current time for resume functionality
+                    self._async_current_time = current_time
 
                     # Throttle to avoid overwhelming the queue but ensure responsiveness
                     time.sleep(min(throttle_interval, 0.05))  # Cap at 50ms for better responsiveness
@@ -440,9 +509,13 @@ class _SubprocessBackend:
 
             if not self._async_halt_requested:
                 # Signal completion if not halted
+                if self.debug:
+                    print("DEBUG: Simulation completed normally")
                 self._async_queue.put({'status': 'completed'})
             else:
                 # Signal halt
+                if self.debug:
+                    print("DEBUG: Simulation halted by request")
                 self._async_queue.put({'status': 'halted'})
 
         except Exception as e:
@@ -458,11 +531,15 @@ class _SubprocessBackend:
 
     def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 0.2) -> bool:
         """Halt async simulation safely."""
+        if self.debug:
+            print(f"DEBUG: safe_halt_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}, thread_alive={self._async_thread and self._async_thread.is_alive() if self._async_thread else False}")
         if not self._async_running:
             return True
 
         with self._async_lock:
             self._async_halt_requested = True
+            if self.debug:
+                print(f"DEBUG: Set async_halt_requested=True")
 
         # Wait for thread to finish
         for attempt in range(max_attempts):
@@ -472,14 +549,62 @@ class _SubprocessBackend:
             if not self.is_running():
                 with self._async_lock:
                     self._async_running = False
+                if self.debug:
+                    print(f"DEBUG: Simulation halted successfully")
                 return True
 
+            if self.debug:
+                print(f"DEBUG: Attempt {attempt+1}/{max_attempts}: thread still alive={self._async_thread and self._async_thread.is_alive()}, is_running()={self.is_running()}")
             time.sleep(wait_time)
 
         # Force stop if it didn't stop gracefully
         with self._async_lock:
             self._async_running = False
+        if self.debug:
+            print(f"DEBUG: Simulation force stopped, is_running()={self.is_running()}")
         return not self.is_running()
+
+    def resume_simulation(self, timeout: float = 3.0) -> bool:
+        """Resume async simulation after halt."""
+        if not self._async_halt_requested:
+            return True  # Not halted, so already "running"
+
+        with self._async_lock:
+            self._async_halt_requested = False
+
+        # For subprocess backend, resuming means continuing chunked simulation
+        # The _run_chunked_simulation method will naturally continue from current_time
+        # stored in self._async_current_time
+        return True
+
+    def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 2.0) -> bool:
+        """Resume a halted simulation safely."""
+        if self.debug:
+            print(f"DEBUG: safe_resume_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}")
+
+        if not self._async_halt_requested:
+            return True  # Not halted, so already "running"
+
+        with self._async_lock:
+            self._async_halt_requested = False
+            if self.debug:
+                print(f"DEBUG: Set async_halt_requested=False")
+
+        # For subprocess backend, resuming means continuing chunked simulation
+        # The _run_chunked_simulation method will naturally continue from current_time
+        # stored in self._async_current_time
+        return True
+
+
+
+    def halt_simulation(self, timeout: float = 2.0) -> bool:
+        """Halt async simulation (alias for safe_halt_simulation for API compatibility)."""
+        if self.debug:
+            print(f"DEBUG: halt_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}")
+        result = self.safe_halt_simulation(max_attempts=int(timeout / 0.2), wait_time=0.2)
+        if self.debug:
+            print(f"DEBUG: halt_simulation result={result}, async_running={self._async_running}")
+        return result
 
     def _is_header_line(self, line, expected_headers):
         """Check if a line looks like a header line."""
@@ -624,3 +749,21 @@ class _SubprocessBackend:
 
         # Consider it numeric if at least 80% of values are numbers
         return numeric_count >= len(row_data) * 0.8
+
+    def _categorize_signal_name(self, signal_name):
+        """Categorize signal names into voltages, currents, and branches.
+
+        This mimics the categorization logic from NgspiceTransientResult._categorize_signal
+        to ensure consistent signal naming across backends.
+        """
+        if signal_name.startswith('@') and '[' in signal_name:
+            # Device current like "@m.xi0.mpd[id]"
+            device_part = signal_name.split('[')[0][1:]  # Remove @ and get device part
+            current_type = signal_name.split('[')[1].rstrip(']')  # Get current type
+            return f"{device_part}.{current_type}"
+        elif signal_name.endswith('#branch'):
+            # Branch current like "vi3#branch"
+            return signal_name.replace('#branch', '')
+        else:
+            # Regular node voltage - use as is
+            return signal_name

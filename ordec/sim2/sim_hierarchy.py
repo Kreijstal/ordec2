@@ -161,7 +161,7 @@ class HighlevelSim:
         return None
 
     @contextmanager
-    def alter_session(self, backend=None):
+    def alter_session(self, backend=None, debug=False):
         """Context manager for alter operations that maintains ngspice session."""
         use_backend = backend or self.backend
 
@@ -251,7 +251,7 @@ class HighlevelSim:
                 """Check if simulation is running."""
                 return self.ngspice_sim.is_running()
 
-        with Ngspice.launch(debug=False, backend=use_backend) as ngspice_sim:
+        with Ngspice.launch(debug=debug, backend=use_backend) as ngspice_sim:
             try:
                 yield AlterSession(self, ngspice_sim)
             finally:

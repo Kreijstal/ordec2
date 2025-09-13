@@ -14,8 +14,7 @@ from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 from ordec.sim2.ngspice import Ngspice
 
 
-@pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_tran_basic(backend):
     h = lib_test.ResdivFlatTb(backend=backend)
 
@@ -44,7 +43,7 @@ def test_highlevel_async_tran_basic(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_tran_with_callback(backend):
     progress_updates = []
 
@@ -79,7 +78,7 @@ def test_highlevel_async_tran_with_callback(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_sky130_streaming_without_savecurrents(backend):
     h = lib_test.InvSkyTb(vin=R(2.5), backend=backend)
 
@@ -103,7 +102,7 @@ def test_sky130_streaming_without_savecurrents(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_sky130_streaming_with_savecurrents(backend):
     h = lib_test.InvSkyTb(vin=R(2.5), backend=backend)
 
@@ -147,7 +146,7 @@ def test_sky130_netlist_savecurrents_option():
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_mos_sourcefollower(backend):
     """Test async transient simulation with MOS source follower."""
     h = lib_test.NmosSourceFollowerTb(vin=R(2.0), backend=backend)
@@ -166,7 +165,7 @@ def test_highlevel_async_mos_sourcefollower(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_mos_inverter(backend):
     h = lib_test.InvTb(vin=R(0), backend=backend)
 
@@ -185,7 +184,7 @@ def test_highlevel_async_mos_inverter(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_sky_inverter(backend):
     h = lib_test.InvSkyTb(vin=R(2.5), backend=backend)
 
@@ -203,7 +202,7 @@ def test_highlevel_async_sky_inverter(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_early_termination(backend):
     h = lib_test.ResdivFlatTb(backend=backend)
 
@@ -222,7 +221,7 @@ def test_highlevel_async_early_termination(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_multiple_circuits(backend):
     """Test running multiple async transient simulations sequentially."""
     # First circuit
@@ -251,7 +250,7 @@ def test_highlevel_async_multiple_circuits(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_parameter_sweep(backend):
     input_voltages = [2.0, 3.0, 4.0]
     results = {}
@@ -286,7 +285,7 @@ def test_highlevel_async_parameter_sweep(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_async_alter_resume(backend):
 
     circuit = RCAlterTestbench()
