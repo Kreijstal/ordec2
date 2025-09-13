@@ -192,6 +192,77 @@ class Ngspice:
         except:
             return False
 
+    def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 0.2) -> bool:
+        """
+        Safely resume a halted simulation with retries and verification.
+
+        This method addresses the critical timing issues with ngspice background simulations:
+        - bg_resume is not instantaneous and can fail silently
+        - Multiple attempts may be needed
+        - Must verify resume succeeded before proceeding
+
+        Args:
+            max_attempts: Maximum number of resume attempts
+            wait_time: Time to wait between attempts and for verification
+
+        Returns:
+            True if resume succeeded, False otherwise
+        """
+        import time
+
+        if self.is_running():
+            return True
+
+        for attempt in range(max_attempts):
+            try:
+                # Send resume command
+                if hasattr(self._backend_impl, 'command'):
+                    self._backend_impl.command("bg_resume")
+                elif hasattr(self._backend_impl, 'resume_simulation'):
+                    self._backend_impl.resume_simulation()
+
+                # CRITICAL: Must yield after resume command before checking state
+                # Use race condition approach instead of fixed sleep
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+
+                    def check_resume_status():
+                        """Check if simulation has resumed"""
+                        return self.is_running()
+
+                    timeout = time.time() + wait_time
+                    while time.time() < timeout:
+                        resume_future = executor.submit(check_resume_status)
+                        try:
+                            if resume_future.result(timeout=min(0.01, wait_time)):
+                                return True
+                        except concurrent.futures.TimeoutError:
+                            pass
+                        finally:
+                            if not resume_future.done():
+                                resume_future.cancel()
+
+            except Exception:
+                pass
+
+            # Wait before retry (except on last attempt)
+            if attempt < max_attempts - 1:
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    def wait_before_retry():
+                        return True
+
+                    wait_future = executor.submit(wait_before_retry)
+                    try:
+                        wait_future.result(timeout=wait_time)
+                    except concurrent.futures.TimeoutError:
+                        pass
+                    finally:
+                        if not wait_future.done():
+                            wait_future.cancel()
+
+        return False
+
 RawVariable = namedtuple('RawVariable', ['name', 'unit'])
 
 def parse_raw(fn):

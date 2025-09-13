@@ -727,6 +727,7 @@ class _FFIBackend:
                     """Check if simulation has stopped"""
                     return not self._is_running
 
+                # Race condition approach: check status with timeout
                 while time.time() < timeout:
                     stop_future = executor.submit(check_stop_status)
                     try:
@@ -737,6 +738,45 @@ class _FFIBackend:
                     finally:
                         if not stop_future.done():
                             stop_future.cancel()
+
+    def resume_simulation(self, timeout=2.0):
+        """Resume a halted simulation using bg_resume command.
+
+        Args:
+            timeout: Maximum time to wait for resume to complete
+
+        Returns:
+            bool: True if resume succeeded, False otherwise
+        """
+        if self._is_running:
+            return True  # Already running
+
+        # Send bg_resume command
+        result = self.command("bg_resume")
+
+        # Wait for simulation to start with timeout
+        start_time = time.time()
+
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+
+            def check_resume_status():
+                """Check if simulation has resumed"""
+                return self._is_running
+
+            # Wait for resume to complete
+            while time.time() - start_time < timeout:
+                resume_future = executor.submit(check_resume_status)
+                try:
+                    if resume_future.result(timeout=0.05):
+                        return True
+                except concurrent.futures.TimeoutError:
+                    pass
+                finally:
+                    if not resume_future.done():
+                        resume_future.cancel()
+
+        return False  # Resume failed or timed out
 
     def _get_all_vectors(self) -> List[str]:
         plot_name = self.lib.ngSpice_CurPlot()
