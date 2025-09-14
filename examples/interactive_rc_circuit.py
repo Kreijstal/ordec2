@@ -1,8 +1,12 @@
+# SPDX-FileCopyrightText: 2025 ORDeC contributors
+# SPDX-License-Identifier: Apache-2.0
+
 import asyncio
 import time
 import anywidget
 import traitlets
 from IPython.display import display
+import os
 
 from ordec.core import *
 from ordec import Rational as R
@@ -58,6 +62,13 @@ class InteractiveSimulation:
         self._pending_voltage = None
         self._debounce_task = None
         self._last_update_time = 0
+        self._vcd_signals_initialized = False
+        self._vcd_recording = False
+        self._vcd_file = None
+        self._vcd_signals = set()
+        self._vcd_signal_chars = {}
+        self._vcd_header_buffer = []
+        self._vcd_initial_values = []
 
         from ordec.sim2.ngspice import _FFIBackend
         _FFIBackend.find_library()
@@ -215,6 +226,10 @@ class InteractiveSimulation:
 
                     await asyncio.sleep(0.01)
 
+                    # Record data for VCD if recording is enabled
+                    if self._vcd_recording and self._vcd_file:
+                        self._record_vcd_data(filtered_data)
+
                 self.alter_session = None
 
         except Exception as e:
@@ -268,10 +283,145 @@ class InteractiveSimulation:
     def stop_simulation(self):
         self.is_running = False
 
+    def start_vcd_recording(self, filename="interactive_simulation.vcd", timescale="1us"):
+        """
+        Start recording simulation data for VCD export with streaming to file.
+
+        Args:
+            filename: Output VCD filename
+            timescale: VCD timescale (e.g., "1us", "1ns")
+        """
+        try:
+            self._vcd_file = open(filename, 'w')
+            self._vcd_recording = True
+            self._vcd_signals = set()
+            self._vcd_signal_chars = {}
+            self._vcd_header_buffer = []
+            self._vcd_initial_values = []
+            self._vcd_header_written = False
+
+            # Buffer VCD header until all signals are discovered
+            import time
+            self._vcd_header_buffer = [
+                "$date\n",
+                f"   {time.strftime('%Y-%m-%d %H:%M:%S')}\n",
+                "$end\n",
+                "$version\n",
+                "   ORDeC Interactive VCD Generator\n",
+                "$end\n",
+                f"$timescale {timescale} $end\n",
+                "$scope module top $end\n"
+            ]
+            self._vcd_initial_values = []
+
+            print(f"VCD recording started: {filename}")
+            return True
+
+        except Exception as e:
+            print(f"Error starting VCD recording: {e}")
+            self._vcd_recording = False
+            if self._vcd_file:
+                self._vcd_file.close()
+                self._vcd_file = None
+            return False
+
+    def stop_vcd_recording(self):
+        """Stop VCD recording and close the VCD file."""
+        self._vcd_recording = False
+        if self._vcd_file:
+            self._vcd_file.close()
+            self._vcd_file = None
+        print("VCD recording stopped")
+        return True
+
+    def _record_vcd_data(self, data_point):
+        """Record a data point for VCD export with streaming to file."""
+        if not self._vcd_file or not self._vcd_recording:
+            return
+
+        time_val = data_point.get('time', 0)
+
+        # Process each signal
+        for signal_name, value in data_point.items():
+            if signal_name == 'time':
+                continue
+
+            # Add signal to tracking if new
+            if signal_name not in self._vcd_signals:
+                self._vcd_signals.add(signal_name)
+
+                # Assign a character for this signal
+                signal_chars = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+                if len(self._vcd_signal_chars) < len(signal_chars):
+                    char = signal_chars[len(self._vcd_signal_chars)]
+                    self._vcd_signal_chars[signal_name] = char
+
+                    # Buffer variable definition for header
+                    if signal_name.startswith('@'):
+                        clean_name = signal_name[1:]  # Remove @ for current
+                        var_def = f"$var real 64 {char} I({clean_name}) $end\n"
+                    else:
+                        var_def = f"$var real 64 {char} V({signal_name}) $end\n"
+
+                    self._vcd_header_buffer.append(var_def)
+                    self._vcd_initial_values.append(f"r{value} {char}\n")
+                else:
+                    print(f"Warning: Too many signals for VCD format, skipping {signal_name}")
+                    continue
+
+        # Write header and initial values when we have signals but haven't written header yet
+        if self._vcd_signals and not self._vcd_header_written:
+            # Complete the header
+            self._vcd_header_buffer.extend([
+                "$upscope $end\n",
+                "$enddefinitions $end\n"
+            ])
+
+            # Write the complete header
+            for line in self._vcd_header_buffer:
+                self._vcd_file.write(line)
+
+            # Write initial values at time 0
+            self._vcd_file.write("#0\n")
+            for initial_value in self._vcd_initial_values:
+                self._vcd_file.write(initial_value)
+
+            self._vcd_header_written = True
+
+        # Write value changes for existing signals (after header is written)
+        if self._vcd_header_written:
+            for signal_name, value in data_point.items():
+                if signal_name == 'time':
+                    continue
+
+                char = self._vcd_signal_chars.get(signal_name)
+                if char:
+                    # Write time stamp if this is a new time point
+                    if time_val > 0:
+                        time_units = int(time_val * 1e6)  # Convert to microseconds
+                        self._vcd_file.write(f"#{time_units}\n")
+
+                    self._vcd_file.write(f"r{value} {char}\n")
+
+    def export_to_vcd(self, filename="interactive_simulation.vcd", timescale="1us"):
+        """
+        Export recorded simulation data to VCD format.
+        This method is kept for backward compatibility but streaming is preferred.
+
+        Args:
+            filename: Output VCD filename
+            timescale: VCD timescale (e.g., "1us", "1ns")
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        print("Warning: export_to_vcd() is for backward compatibility. Use start_vcd_recording() with streaming for better performance.")
+        return self.start_vcd_recording(filename, timescale)
+
 def main(plot_all_signals=False):
     circuit = InteractiveRCCircuit(vdc_initial=1.0, resistance=1000, capacitance=1e-6)
 
-    vdc_slider = VdcSliderWidget(value=1.0, min=-2.0, max=5.0, step=0.1)
+    vdc_slider = VdcSliderWidget(value=1.0, min=-5.0, max=5.0, step=0.1)
 
     plot_widget = AnimatedFnWidget(
         update_interval_ms=50,
@@ -302,3 +452,9 @@ def main(plot_all_signals=False):
 if __name__ == "__main__":
     # Set plot_all_signals=True to plot all voltages and currents
     interactive_sim, plot_widget, task = main(plot_all_signals=False)
+
+    # Example usage for VCD recording:
+    # interactive_sim.start_vcd_recording()  # Call this to start recording
+    # # Run simulation...
+    # interactive_sim.stop_vcd_recording()   # Call this to stop recording
+    # interactive_sim.export_to_vcd("my_simulation.vcd")  # Export to VCD

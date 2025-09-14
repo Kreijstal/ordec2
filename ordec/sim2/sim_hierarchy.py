@@ -141,6 +141,90 @@ class HighlevelSim:
                 except (KeyError, StopIteration):
                     continue
 
+    def export_to_vcd(self, filename="simulation.vcd", signal_names=None, timescale="1us"):
+        """
+        Export simulation results to VCD (Value Change Dump) format.
+
+        Args:
+            filename: Output VCD filename
+            signal_names: List of signal names to export (None for all signals)
+            timescale: VCD timescale (e.g., "1us", "1ns")
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        import time
+
+        if self.simhier.sim_type is None:
+            raise ValueError("No simulation results available. Run a simulation first.")
+
+        if self.simhier.sim_type != SimType.TRAN:
+            raise ValueError(f"VCD export only supported for transient simulations. Current simulation type: {self.simhier.sim_type}")
+
+        if not hasattr(self.simhier, 'time') or not self.simhier.time:
+            raise ValueError("No time data available for VCD export")
+
+        try:
+            with open(filename, 'w') as vcd_file:
+                # VCD header
+                vcd_file.write("$date\n")
+                vcd_file.write(f"   {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                vcd_file.write("$end\n")
+                vcd_file.write("$version\n")
+                vcd_file.write("   ORDeC VCD Generator\n")
+                vcd_file.write("$end\n")
+                vcd_file.write(f"$timescale {timescale} $end\n")
+
+                # Collect signals to export
+                signals_to_export = []
+                signal_chars = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"  # VCD variable characters
+
+                for i, simnet in enumerate(self.simhier.all(SimNet)):
+                    signal_name = simnet.full_path_str().split('.')[-1]  # Get base name
+
+                    # Filter by signal_names if provided
+                    if signal_names is not None and signal_name not in signal_names:
+                        continue
+
+                    if hasattr(simnet, 'trans_voltage') and simnet.trans_voltage is not None:
+                        if i < len(signal_chars):
+                            char = signal_chars[i]
+                            signals_to_export.append((signal_name, char, simnet.trans_voltage))
+                        else:
+                            # Fallback for many signals - use extended character set
+                            char = f"signal{i}"
+                            signals_to_export.append((signal_name, char, simnet.trans_voltage))
+
+                if not signals_to_export:
+                    raise ValueError("No signals with transient voltage data found for VCD export")
+
+                # Variable definitions
+                vcd_file.write("$scope module top $end\n")
+                for signal_name, char, _ in signals_to_export:
+                    vcd_file.write(f"$var real 64 {char} {signal_name} $end\n")
+                vcd_file.write("$upscope $end\n")
+                vcd_file.write("$enddefinitions $end\n")
+
+                # Initial values at time 0
+                vcd_file.write("#0\n")
+                for signal_name, char, voltage_data in signals_to_export:
+                    if voltage_data and len(voltage_data) > 0:
+                        vcd_file.write(f"r{voltage_data[0]} {char}\n")
+
+                # Value changes at each time point
+                time_data = self.simhier.time
+                for time_idx in range(1, len(time_data)):
+                    time_units = int(time_data[time_idx] * 1e6)  # Convert to microseconds
+                    vcd_file.write(f"#{time_units}\n")
+                    for signal_name, char, voltage_data in signals_to_export:
+                        if len(voltage_data) > time_idx:
+                            vcd_file.write(f"r{voltage_data[time_idx]} {char}\n")
+
+            return True
+
+        except Exception as e:
+            raise ValueError(f"Error generating VCD file: {e}")
+
     def get_component_netlist_name(self, component_instance):
         """Get the netlist name for a component instance using existing mapping."""
         return self.netlister.name_hier_simobj(component_instance)
@@ -161,7 +245,7 @@ class HighlevelSim:
         return None
 
     @contextmanager
-    def alter_session(self, backend=None):
+    def alter_session(self, backend=None, debug=False):
         """Context manager for alter operations that maintains ngspice session."""
         use_backend = backend or self.backend
 
@@ -251,7 +335,7 @@ class HighlevelSim:
                 """Check if simulation is running."""
                 return self.ngspice_sim.is_running()
 
-        with Ngspice.launch(debug=False, backend=use_backend) as ngspice_sim:
+        with Ngspice.launch(debug=debug, backend=use_backend) as ngspice_sim:
             try:
                 yield AlterSession(self, ngspice_sim)
             finally:

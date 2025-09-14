@@ -407,7 +407,7 @@ class SimBase(Cell):
                         setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
 
         # Run simulation
-        with Ngspice.launch(backend=self.backend) as sim:
+        with Ngspice.launch(backend=self.backend, debug=kwargs.get('debug', False)) as sim:
             sim.load_netlist(highlevel_sim.netlister.out())
 
             # Get the queue from the new queue-based tran_async
@@ -508,6 +508,8 @@ class SimBase(Cell):
                         elif not sim.is_running():
                             # Just finished, start grace period
                             completion_time = time.time()
+
+
 
     def sim_tran(self, tstep, tstop, **kwargs):
         """Run sync transient simulation.

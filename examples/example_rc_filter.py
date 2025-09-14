@@ -13,12 +13,7 @@ from ordec.lib.base import PulseVoltageSource, Res, Cap, Gnd
 from ordec.sim2.ngspice import Ngspice, NgspiceBackend
 from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 
-# --- Sixel Plotting Function ---
 def plot_sixel(time_data, voltage_in, voltage_out, title="RC Circuit Response"):
-    """
-    Generate and display a Sixel plot showing both input and output voltages.
-    Returns True on success, False on failure.
-    """
     try:
         import matplotlib
         import matplotlib.pyplot as plt
@@ -49,7 +44,6 @@ def plot_sixel(time_data, voltage_in, voltage_out, title="RC Circuit Response"):
         print(f"\n--- Sixel plotting failed ---\n  Error: {e}\n  Ensure 'matplotlib-backend-sixel' and 'imagemagick' are installed.\n--------------------------\n", file=sys.stderr)
         return False
 
-# --- ASCII Plotting Fallback ---
 def plot_ascii(time_data, voltage_in, voltage_out, width=80, height=20, title="RC Circuit Response"):
     """Create ASCII art plot showing both input (I) and output (O) waveforms."""
     if not time_data or not voltage_in or not voltage_out: return "No data to plot"
@@ -89,7 +83,6 @@ def plot_ascii(time_data, voltage_in, voltage_out, width=80, height=20, title="R
     result = [f"{title:^{width}}", *lines, f"Time: {min_t:.2e} to {max_t:.2e} s", f"Voltage: {min_v:.3f} to {max_v:.3f} V | (I)nput, (O)utput"]
     return '\n'.join(result)
 
-# --- Terminal Sixel Support Detection ---
 def _query_sixel_support_from_terminal():
     if not sys.stdout.isatty() or not sys.stdin.isatty():
         return False
@@ -181,60 +174,15 @@ class RCSquareWaveTb(Cell):
         s.outline = Rect4R(lx=0, ly=0, ux=18, uy=10)
         return s
 
-# --- VCD Generation Function ---
-def generate_vcd_file(time_data, vin_data, vout_data, filename="rc_simulation.vcd"):
-    """
-    Generate a VCD file from simulation data.
-
-    VCD format supports analog signals using real-valued variables.
-    This creates a VCD file that can be viewed in waveform viewers.
-    """
-    try:
-        with open(filename, 'w') as vcd_file:
-            # VCD header
-            vcd_file.write("$date\n")
-            vcd_file.write(f"   {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-            vcd_file.write("$end\n")
-            vcd_file.write("$version\n")
-            vcd_file.write("   ORDeC VCD Generator\n")
-            vcd_file.write("$end\n")
-            vcd_file.write("$timescale 1us $end\n")
-
-            # Variable definitions
-            vcd_file.write("$scope module top $end\n")
-            vcd_file.write("$var real 64 ! vin $end\n")  # 64-bit real for input voltage
-            vcd_file.write("$var real 64 \" vout $end\n") # 64-bit real for output voltage
-            vcd_file.write("$upscope $end\n")
-            vcd_file.write("$enddefinitions $end\n")
-
-            # Initial values
-            vcd_file.write("#0\n")
-            vcd_file.write(f"r{vin_data[0]} !\n")
-            vcd_file.write(f"r{vout_data[0]} \"\n")
-
-            # Value changes
-            for i in range(1, len(time_data)):
-                time_units = int(time_data[i] * 1e6)  # Convert to microseconds
-                vcd_file.write(f"#{time_units}\n")
-                vcd_file.write(f"r{vin_data[i]} !\n")
-                vcd_file.write(f"r{vout_data[i]} \"\n")
-
-        print(f"VCD file generated: {filename}")
-        return True
-
-    except Exception as e:
-        print(f"Error generating VCD file: {e}")
-        return False
-
-# --- Main Simulation Function ---
-def run_rc_square_wave_simulation():
-    """Run RC circuit simulation with square wave input and plot results."""
+# --- Main Simulation Function with VCD Export ---
+def run_rc_square_wave_simulation_with_vcd():
+    """Run RC circuit simulation with square wave input, plot results, and export VCD using HighLevelSim method."""
 
     print("=== ORDeC RC Circuit with Square Wave Input ===")
     print("Creating RC circuit with R=1kΩ, C=1μF...")
     print("Square wave: 1kHz, 0-1V, 50% duty cycle")
 
-    # Create testbench
+    # Create testbench and simulation hierarchy
     tb = RCSquareWaveTb()
     s = SimHierarchy(cell=tb)
     sim = HighlevelSim(tb.schematic, s)
@@ -249,65 +197,66 @@ def run_rc_square_wave_simulation():
     except (ImportError, OSError):
         print("Using subprocess backend")
 
-    with Ngspice.launch(backend=backend_to_use, debug=False) as ngspice_sim:
-        netlist = sim.netlister.out()
-        ngspice_sim.load_netlist(netlist)
+    # Set backend for HighLevelSim
+    sim.backend = backend_to_use
 
-        # Simulate for 5 periods to see the integration curve clearly
-        print("Running transient simulation for 5ms...")
-        result = ngspice_sim.tran("10u", "5m")
+    # Simulate for 5 periods to see the integration curve clearly
+    print("Running transient simulation for 5ms using HighLevelSim...")
+    sim.tran("10u", "5m")
 
-    if result and result.time:
-        vin = result.get_signal('vin')
-        vout = result.get_signal('vout')
+    # Extract data from SimHierarchy for plotting
+    time_data = s.time
+    vin_data = s.vin.trans_voltage
+    vout_data = s.vout.trans_voltage
 
-        if not vin or not vout:
-            print("Error: Could not find 'vin' or 'vout' signals")
-            return False
-
-        print(f"\nSimulation completed successfully!")
-        print(f"Time points: {len(result.time)}")
-        print(f"Final time: {result.time[-1]:.6f} s")
-
-        # Detect terminal capabilities
-        capabilities = detect_terminal_capabilities()
-        print(f"Terminal capabilities: {capabilities}")
-
-        # Plot results
-        if capabilities['sixel']:
-            print("\nDisplaying Sixel plot...")
-            success = plot_sixel(result.time, vin, vout,
-                               title="RC Circuit - Square Wave Response")
-            if success:
-                # Generate VCD file after successful plotting
-                vcd_success = generate_vcd_file(result.time, vin, vout, "rc_simulation.vcd")
-                if vcd_success:
-                    print("\nVCD file also generated: rc_simulation.vcd")
-                return True
-
-        # Fallback to ASCII plot
-        print("\nDisplaying ASCII plot (Sixel not available)...")
-        ascii_plot = plot_ascii(result.time, vin, vout,
-                               title="RC Circuit - Square Wave Response",
-                               width=80, height=20)
-        print(ascii_plot)
-
-        # Generate VCD file
-        vcd_success = generate_vcd_file(result.time, vin, vout, "rc_simulation.vcd")
-        if vcd_success:
-            print("\nVCD file generated: rc_simulation.vcd")
-            print("You can view it with: gtkwave rc_simulation.vcd")
-
-        return True
-    else:
-        print("Simulation failed to produce results")
+    if not time_data or not vin_data or not vout_data:
+        print("Error: Simulation completed but no data available")
         return False
+
+    print(f"\nSimulation completed successfully!")
+    print(f"Time points: {len(time_data)}")
+    print(f"Final time: {time_data[-1]:.6f} s")
+
+    # Export to VCD using the new HighLevelSim method
+    print("\nExporting simulation results to VCD format...")
+    try:
+        vcd_success = sim.export_to_vcd("rc_simulation.vcd", timescale="1us")
+        if vcd_success:
+            print("✅ VCD file generated: rc_simulation.vcd")
+            print("   You can view it with: gtkwave rc_simulation.vcd")
+        else:
+            print("❌ VCD export failed")
+            return False
+    except Exception as e:
+        print(f"❌ Error during VCD export: {e}")
+        return False
+
+    # Detect terminal capabilities
+    capabilities = detect_terminal_capabilities()
+    print(f"Terminal capabilities: {capabilities}")
+
+    # Plot results
+    if capabilities['sixel']:
+        print("\nDisplaying Sixel plot...")
+        success = plot_sixel(time_data, vin_data, vout_data,
+                           title="RC Circuit - Square Wave Response")
+        if success:
+            return True
+
+    # Fallback to ASCII plot
+    print("\nDisplaying ASCII plot (Sixel not available)...")
+    ascii_plot = plot_ascii(time_data, vin_data, vout_data,
+                           title="RC Circuit - Square Wave Response",
+                           width=80, height=20)
+    print(ascii_plot)
+
+    return True
 
 if __name__ == "__main__":
     try:
-        success = run_rc_square_wave_simulation()
+        success = run_rc_square_wave_simulation_with_vcd()
         if success:
-            print("\n✅ Simulation and plotting completed successfully!")
+            print("\n✅ Simulation, VCD export, and plotting completed successfully!")
         else:
             print("\n❌ Simulation failed!")
             sys.exit(1)

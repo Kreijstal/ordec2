@@ -113,6 +113,10 @@ class Ngspice:
         Returns:
             True if halt succeeded, False otherwise
         """
+        # Delegate to backend implementation if it has its own safe_halt_simulation method
+        if hasattr(self._backend_impl, 'safe_halt_simulation'):
+            return self._backend_impl.safe_halt_simulation(max_attempts, wait_time)
+
         import time
 
         if not self.is_running():
@@ -208,6 +212,10 @@ class Ngspice:
         Returns:
             True if resume succeeded, False otherwise
         """
+        # Delegate to backend implementation if it has its own safe_resume_simulation method
+        if hasattr(self._backend_impl, 'safe_resume_simulation'):
+            return self._backend_impl.safe_resume_simulation(max_attempts, wait_time)
+
         import time
 
         if self.is_running():
