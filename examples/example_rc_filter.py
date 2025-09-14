@@ -254,8 +254,7 @@ def run_rc_square_wave_simulation_with_vcd():
 
 if __name__ == "__main__":
     try:
-        success = run_rc_square_wave_simulation_with_vcd()
-        if success:
+        if success := run_rc_square_wave_simulation_with_vcd():
             print("\n✅ Simulation, VCD export, and plotting completed successfully!")
         else:
             print("\n❌ Simulation failed!")
