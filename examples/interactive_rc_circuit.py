@@ -228,7 +228,7 @@ class InteractiveSimulation:
 
                     # Record data for VCD if recording is enabled
                     if self._vcd_recording and self._vcd_file:
-                        self._record_vcd_data(filtered_data)
+                        self._record_vcd_data(data)
 
                 self.alter_session = None
 
