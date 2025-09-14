@@ -274,7 +274,7 @@ class InteractiveSimulation:
 def main(plot_all_signals=False):
     circuit = InteractiveRCCircuit(vdc_initial=1.0, resistance=1000, capacitance=1e-6)
 
-    vdc_slider = VdcSliderWidget(value=1.0, min=-2.0, max=5.0, step=0.1)
+    vdc_slider = VdcSliderWidget(value=1.0, min=-5.0, max=5.0, step=0.1)
 
     plot_widget = AnimatedFnWidget(
         update_interval_ms=50,
@@ -305,3 +305,5 @@ def main(plot_all_signals=False):
 if __name__ == "__main__":
     # Set plot_all_signals=True to plot all voltages and currents
     interactive_sim, plot_widget, task = main(plot_all_signals=False)
+
+

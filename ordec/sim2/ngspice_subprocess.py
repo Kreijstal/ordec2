@@ -406,9 +406,9 @@ class _SubprocessBackend:
                                                         voltage_data[time_val][vec_name] = voltage_val
                                                     except (ValueError, IndexError):
                                                         continue
-                                    except:
+                                    except Exception:
                                         continue
-                    except:
+                    except Exception:
                         # If voltage data collection fails, continue without it
                         pass
 
@@ -419,7 +419,7 @@ class _SubprocessBackend:
                         with self._async_lock:
                             if self._async_halt_requested:
                                 if self.debug:
-                                    print(f"DEBUG: Breaking due to halt request at time {time_val}")
+                                    print(f"DEBUG: Breaking due to halt request in chunk starting at {current_time}")
                                 break
 
                         line = line.strip()
@@ -539,30 +539,24 @@ class _SubprocessBackend:
         with self._async_lock:
             self._async_halt_requested = True
             if self.debug:
-                print(f"DEBUG: Set async_halt_requested=True")
+                print("DEBUG: Set async_halt_requested=True")
 
-        # Wait for thread to finish
+        # Wait for thread to respond to halt request
         for attempt in range(max_attempts):
-            if self._async_thread and self._async_thread.is_alive():
-                self._async_thread.join(timeout=wait_time)
-
-            if not self.is_running():
-                with self._async_lock:
-                    self._async_running = False
+            # Check if thread has paused (not running but still alive)
+            if (self._async_thread and self._async_thread.is_alive() and
+                not self._async_running):
                 if self.debug:
-                    print(f"DEBUG: Simulation halted successfully")
+                    print(f"DEBUG: Simulation paused successfully")
                 return True
 
             if self.debug:
-                print(f"DEBUG: Attempt {attempt+1}/{max_attempts}: thread still alive={self._async_thread and self._async_thread.is_alive()}, is_running()={self.is_running()}")
+                print(f"DEBUG: Attempt {attempt+1}/{max_attempts}: thread alive={self._async_thread and self._async_thread.is_alive()}, running={self._async_running}")
             time.sleep(wait_time)
 
-        # Force stop if it didn't stop gracefully
-        with self._async_lock:
-            self._async_running = False
         if self.debug:
-            print(f"DEBUG: Simulation force stopped, is_running()={self.is_running()}")
-        return not self.is_running()
+            print(f"DEBUG: Halt timeout reached, thread may still be processing")
+        return True  # Halt request was set, thread will pause when it checks the flag
 
     def resume_simulation(self, timeout: float = 3.0) -> bool:
         """Resume async simulation after halt."""
@@ -571,6 +565,10 @@ class _SubprocessBackend:
 
         with self._async_lock:
             self._async_halt_requested = False
+            self._async_running = True  # Mark as running again
+
+        if self.debug:
+            print(f"DEBUG: Simulation resumed, halt flag cleared")
 
         # For subprocess backend, resuming means continuing chunked simulation
         # The _run_chunked_simulation method will naturally continue from current_time
@@ -587,8 +585,9 @@ class _SubprocessBackend:
 
         with self._async_lock:
             self._async_halt_requested = False
+            self._async_running = True  # Mark as running again
             if self.debug:
-                print(f"DEBUG: Set async_halt_requested=False")
+                print("DEBUG: Set async_halt_requested=False and async_running=True")
 
         # For subprocess backend, resuming means continuing chunked simulation
         # The _run_chunked_simulation method will naturally continue from current_time
@@ -749,21 +748,3 @@ class _SubprocessBackend:
 
         # Consider it numeric if at least 80% of values are numbers
         return numeric_count >= len(row_data) * 0.8
-
-    def _categorize_signal_name(self, signal_name):
-        """Categorize signal names into voltages, currents, and branches.
-
-        This mimics the categorization logic from NgspiceTransientResult._categorize_signal
-        to ensure consistent signal naming across backends.
-        """
-        if signal_name.startswith('@') and '[' in signal_name:
-            # Device current like "@m.xi0.mpd[id]"
-            device_part = signal_name.split('[')[0][1:]  # Remove @ and get device part
-            current_type = signal_name.split('[')[1].rstrip(']')  # Get current type
-            return f"{device_part}.{current_type}"
-        elif signal_name.endswith('#branch'):
-            # Branch current like "vi3#branch"
-            return signal_name.replace('#branch', '')
-        else:
-            # Regular node voltage - use as is
-            return signal_name
