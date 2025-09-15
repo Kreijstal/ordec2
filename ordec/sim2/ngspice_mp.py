@@ -344,14 +344,63 @@ class IsolatedFFIBackend:
         self._async_simulation_running = False
 
     def close(self):
+        """Cleanup multiprocessing backend with proper error handling."""
+        cleanup_errors = []
+        
         try:
+            # Stop any running simulation first
+            if self._async_simulation_running:
+                try:
+                    self.safe_halt_simulation(max_attempts=2, wait_time=0.5)
+                except Exception as e:
+                    cleanup_errors.append(f"Failed to halt simulation during cleanup: {e}")
+        except Exception as e:
+            cleanup_errors.append(f"Error checking simulation state during cleanup: {e}")
+        
+        try:
+            # Close connection gracefully
             if not self.conn.closed:
-                self.conn.send({'type': 'quit'})
-        except BrokenPipeError:
-            pass
-        finally:
+                try:
+                    self.conn.send({'type': 'quit'})
+                    # Give worker a moment to shutdown gracefully
+                    if self.process.is_alive():
+                        self.process.join(timeout=1.0)
+                except BrokenPipeError:
+                    pass  # Expected if worker already closed
+                except Exception as e:
+                    cleanup_errors.append(f"Error sending quit message: {e}")
+        except Exception as e:
+            cleanup_errors.append(f"Error during connection cleanup: {e}")
+        
+        try:
+            # Force close connection
             if not self.conn.closed:
                 self.conn.close()
+        except Exception as e:
+            cleanup_errors.append(f"Error closing connection: {e}")
+        
+        try:
+            # Terminate process if still alive
+            if self.process.is_alive():
+                self.process.terminate()
+                self.process.join(timeout=2.0)
+                
+                # Force kill if terminate didn't work
+                if self.process.is_alive():
+                    self.process.kill()
+                    self.process.join(timeout=1.0)
+        except Exception as e:
+            cleanup_errors.append(f"Error terminating worker process: {e}")
+        
+        # Clear state
+        self._async_simulation_running = False
+        
+        # Report cleanup errors if any occurred
+        if cleanup_errors:
+            error_msg = "; ".join(cleanup_errors)
+            print(f"Warning: Cleanup errors in multiprocessing backend: {error_msg}")
+            
+        return len(cleanup_errors) == 0
 
     def _call_worker(self, msg_type, *args, **kwargs):
         if self.conn.closed:
@@ -514,37 +563,51 @@ class IsolatedFFIBackend:
             try:
                 # Send halt command to worker
                 result = self._call_worker('stop_simulation')
-                self._async_simulation_running = False
-
+                
+                # Don't set local flag until we verify halt succeeded
                 # Wait and verify halt succeeded
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     def check_halt_status():
                         """Check if simulation has halted"""
-                        return not self.is_running()
+                        try:
+                            return not self._call_worker('is_running')
+                        except:
+                            return False
 
                     timeout = time.time() + wait_time
                     while time.time() < timeout:
                         halt_future = executor.submit(check_halt_status)
                         try:
-                            if halt_future.result(timeout=min(0.01, wait_time)):
-                                return result
+                            if halt_future.result(timeout=min(0.1, wait_time)):
+                                # Only set flag after confirming halt
+                                self._async_simulation_running = False
+                                return True
                         except concurrent.futures.TimeoutError:
                             pass
                         finally:
                             if not halt_future.done():
                                 halt_future.cancel()
+                        
+                        # Small sleep to avoid busy waiting
+                        time.sleep(0.01)
 
-            except Exception:
-                pass
+            except Exception as e:
+                if attempt == max_attempts - 1:
+                    # Log error on final attempt
+                    print(f"Warning: Exception during halt attempt {attempt + 1}: {e}")
 
             # Wait before retry (except on last attempt)
             if attempt < max_attempts - 1:
-                time.sleep(wait_time)
+                time.sleep(wait_time / 2)
 
         # Final check - use actual worker state, not our flag
         try:
-            return self._call_worker('is_running') == False
-        except:
+            worker_stopped = self._call_worker('is_running') == False
+            if worker_stopped:
+                self._async_simulation_running = False
+            return worker_stopped
+        except Exception as e:
+            print(f"Warning: Exception during final halt check: {e}")
             return False
 
     def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 2.0):
@@ -559,21 +622,24 @@ class IsolatedFFIBackend:
             try:
                 # Send resume command to worker
                 result = self._call_worker('resume_simulation', timeout=wait_time)
-                if result:
-                    self._async_simulation_running = True
-                    return True
-
-                # Verify resume succeeded
+                if not result:
+                    continue
+                
+                # Verify resume succeeded before setting local flag
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     def check_resume_status():
                         """Check if simulation has resumed"""
-                        return self.is_running()
+                        try:
+                            return self._call_worker('is_running')
+                        except:
+                            return False
 
-                    timeout = time.time() + wait_time
-                    while time.time() < timeout:
+                    timeout_time = time.time() + wait_time
+                    while time.time() < timeout_time:
                         resume_future = executor.submit(check_resume_status)
                         try:
-                            if resume_future.result(timeout=min(0.01, wait_time)):
+                            if resume_future.result(timeout=min(0.1, wait_time)):
+                                # Only set flag after confirming resume
                                 self._async_simulation_running = True
                                 return True
                         except concurrent.futures.TimeoutError:
@@ -581,13 +647,28 @@ class IsolatedFFIBackend:
                         finally:
                             if not resume_future.done():
                                 resume_future.cancel()
+                        
+                        # Small sleep to avoid busy waiting
+                        time.sleep(0.01)
 
-            except Exception:
-                pass
+            except Exception as e:
+                if attempt == max_attempts - 1:
+                    # Log error on final attempt
+                    print(f"Warning: Exception during resume attempt {attempt + 1}: {e}")
 
             # Wait before retry (except on last attempt)
             if attempt < max_attempts - 1:
-                time.sleep(wait_time)
+                time.sleep(wait_time / 2)
+
+        # Final check - use actual worker state
+        try:
+            worker_running = self._call_worker('is_running')
+            if worker_running:
+                self._async_simulation_running = True
+            return worker_running
+        except Exception as e:
+            print(f"Warning: Exception during final resume check: {e}")
+            return False
 
         return False
 

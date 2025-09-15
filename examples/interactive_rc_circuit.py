@@ -102,19 +102,33 @@ class InteractiveSimulation:
 
         self._is_updating = True
         try:
+            # Check if simulation is running and halt if needed
             if self.alter_session.is_running():
-                self.alter_session.halt_simulation(timeout=1.0)
+                halt_result = self.alter_session.halt_simulation(timeout=1.0)
+                if not halt_result:
+                    print("Warning: Failed to halt simulation for voltage update")
+                    return
 
+            # Alter the component
             self.alter_session.alter_component(
                 self.circuit.schematic.vdc,
                 dc=new_voltage
             )
 
+            # Resume if not running
             if not self.alter_session.is_running():
-                self.alter_session.resume_simulation(timeout=2.0)
+                resume_result = self.alter_session.resume_simulation(timeout=2.0)
+                if not resume_result:
+                    print("Warning: Failed to resume simulation after voltage update")
 
         except Exception as e:
-            pass
+            print(f"Error updating voltage: {e}")
+            # Try to resume simulation if it was halted
+            try:
+                if self.alter_session and not self.alter_session.is_running():
+                    self.alter_session.resume_simulation(timeout=2.0)
+            except Exception as resume_error:
+                print(f"Error resuming simulation after failed voltage update: {resume_error}")
         finally:
             self._is_updating = False
 
@@ -271,6 +285,16 @@ class InteractiveSimulation:
 
                     if 'time' in filtered_data:
                         yield filtered_data
+                elif isinstance(data_point, dict):
+                    # Handle case where data_point doesn't have 'data' key but might be direct data
+                    if self.plot_all_signals:
+                        filtered_data = {k: v for k, v in data_point.items() if '#branch' not in k}
+                    else:
+                        filtered_data = {k: v for k, v in data_point.items()
+                                       if not k.startswith('@') and '#branch' not in k}
+                    
+                    if 'time' in filtered_data:
+                        yield filtered_data
 
             except queue.Empty:
                 await asyncio.sleep(0.01)
@@ -340,10 +364,28 @@ class InteractiveSimulation:
             return
 
         time_val = data_point.get('time', 0)
+        if time_val is None or time_val < 0:
+            print(f"Warning: Invalid time value in VCD data: {time_val}")
+            return
 
-        # Process each signal
+        # Validate data_point structure
+        if not isinstance(data_point, dict):
+            print(f"Warning: Invalid data point format for VCD: {type(data_point)}")
+            return
+
+        # Process each signal with validation
         for signal_name, value in data_point.items():
             if signal_name == 'time':
+                continue
+            
+            # Validate signal value
+            try:
+                float_value = float(value)
+                if not (float('-inf') < float_value < float('inf')):  # Check for NaN/inf
+                    print(f"Warning: Invalid signal value for {signal_name}: {value}")
+                    continue
+            except (ValueError, TypeError):
+                print(f"Warning: Cannot convert signal value to float for {signal_name}: {value}")
                 continue
 
             # Add signal to tracking if new
@@ -356,52 +398,85 @@ class InteractiveSimulation:
                     char = signal_chars[len(self._vcd_signal_chars)]
                     self._vcd_signal_chars[signal_name] = char
 
-                    # Buffer variable definition for header
-                    if signal_name.startswith('@'):
-                        clean_name = signal_name[1:]  # Remove @ for current
-                        var_def = f"$var real 64 {char} I({clean_name}) $end\n"
-                    else:
-                        var_def = f"$var real 64 {char} V({signal_name}) $end\n"
+                    # Buffer variable definition for header with validation
+                    try:
+                        if signal_name.startswith('@'):
+                            clean_name = signal_name[1:]  # Remove @ for current
+                            # Validate clean name doesn't contain invalid VCD characters
+                            if any(c in clean_name for c in ' \t\n\r'):
+                                clean_name = clean_name.replace(' ', '_').replace('\t', '_').replace('\n', '_').replace('\r', '_')
+                            var_def = f"$var real 64 {char} I({clean_name}) $end\n"
+                        else:
+                            # Validate signal name doesn't contain invalid VCD characters
+                            clean_signal_name = signal_name
+                            if any(c in clean_signal_name for c in ' \t\n\r'):
+                                clean_signal_name = clean_signal_name.replace(' ', '_').replace('\t', '_').replace('\n', '_').replace('\r', '_')
+                            var_def = f"$var real 64 {char} V({clean_signal_name}) $end\n"
 
-                    self._vcd_header_buffer.append(var_def)
-                    self._vcd_initial_values.append(f"r{value} {char}\n")
+                        self._vcd_header_buffer.append(var_def)
+                        self._vcd_initial_values.append(f"r{float_value} {char}\n")
+                    except Exception as e:
+                        print(f"Warning: Error creating VCD variable definition for {signal_name}: {e}")
+                        continue
                 else:
                     print(f"Warning: Too many signals for VCD format, skipping {signal_name}")
                     continue
 
         # Write header and initial values when we have signals but haven't written header yet
         if self._vcd_signals and not self._vcd_header_written:
-            # Complete the header
-            self._vcd_header_buffer.extend([
-                "$upscope $end\n",
-                "$enddefinitions $end\n"
-            ])
+            try:
+                # Complete the header
+                self._vcd_header_buffer.extend([
+                    "$upscope $end\n",
+                    "$enddefinitions $end\n"
+                ])
 
-            # Write the complete header
-            for line in self._vcd_header_buffer:
-                self._vcd_file.write(line)
+                # Write the complete header
+                for line in self._vcd_header_buffer:
+                    self._vcd_file.write(line)
 
-            # Write initial values at time 0
-            self._vcd_file.write("#0\n")
-            for initial_value in self._vcd_initial_values:
-                self._vcd_file.write(initial_value)
+                # Write initial values at time 0
+                self._vcd_file.write("#0\n")
+                for initial_value in self._vcd_initial_values:
+                    self._vcd_file.write(initial_value)
 
-            self._vcd_header_written = True
+                self._vcd_header_written = True
+            except Exception as e:
+                print(f"Error writing VCD header: {e}")
+                self._vcd_recording = False
+                return
 
         # Write value changes for existing signals (after header is written)
         if self._vcd_header_written:
-            for signal_name, value in data_point.items():
-                if signal_name == 'time':
-                    continue
+            try:
+                # Track if we've written the timestamp for this data point
+                timestamp_written = False
+                
+                for signal_name, value in data_point.items():
+                    if signal_name == 'time':
+                        continue
 
-                char = self._vcd_signal_chars.get(signal_name)
-                if char:
-                    # Write time stamp if this is a new time point
-                    if time_val > 0:
-                        time_units = int(time_val * 1e6)  # Convert to microseconds
-                        self._vcd_file.write(f"#{time_units}\n")
+                    char = self._vcd_signal_chars.get(signal_name)
+                    if char:
+                        try:
+                            float_value = float(value)
+                            
+                            # Write time stamp only once per data point and only if time > 0
+                            if not timestamp_written and time_val > 0:
+                                time_units = int(time_val * 1e6)  # Convert to microseconds
+                                self._vcd_file.write(f"#{time_units}\n")
+                                timestamp_written = True
 
-                    self._vcd_file.write(f"r{value} {char}\n")
+                            self._vcd_file.write(f"r{float_value} {char}\n")
+                        except (ValueError, TypeError) as e:
+                            print(f"Warning: Error writing VCD value for {signal_name}: {e}")
+                            continue
+                
+                # Flush to ensure data is written
+                self._vcd_file.flush()
+                
+            except Exception as e:
+                print(f"Error writing VCD data: {e}")
 
     def export_to_vcd(self, filename="interactive_simulation.vcd", timescale="1us"):
         """

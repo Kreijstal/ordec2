@@ -258,18 +258,34 @@ class HighlevelSim:
 
             def alter_component(self, component_instance, **parameters):
                 """Alter component parameters using component instance."""
-                # If we get a SchemInstance, find the corresponding SimInstance
-                if not hasattr(component_instance, 'eref'):
-                    sim_instance = self.highlevel_sim.find_sim_instance_from_schem_instance(component_instance)
-                    if not sim_instance:
-                        raise ValueError(f"Could not find simulation instance for component {component_instance}")
-                    component_instance = sim_instance
+                try:
+                    # If we get a SchemInstance, find the corresponding SimInstance
+                    if not hasattr(component_instance, 'eref'):
+                        sim_instance = self.highlevel_sim.find_sim_instance_from_schem_instance(component_instance)
+                        if not sim_instance:
+                            raise ValueError(f"Could not find simulation instance for component {component_instance}")
+                        component_instance = sim_instance
 
-                netlist_name = self.highlevel_sim.get_component_netlist_name(component_instance)
-                for param_name, param_value in parameters.items():
-                    alter_cmd = f"alter {netlist_name} {param_name}={param_value}"
-                    self.ngspice_sim.command(alter_cmd)
-                return True
+                    netlist_name = self.highlevel_sim.get_component_netlist_name(component_instance)
+                    if not netlist_name:
+                        raise ValueError(f"Could not determine netlist name for component {component_instance}")
+                    
+                    for param_name, param_value in parameters.items():
+                        alter_cmd = f"alter {netlist_name} {param_name}={param_value}"
+                        try:
+                            result = self.ngspice_sim.command(alter_cmd)
+                            # Check if ngspice reported an error
+                            if result and ('error' in result.lower() or 'invalid' in result.lower()):
+                                print(f"Warning: NGSpice may have reported an issue with alter command '{alter_cmd}': {result}")
+                        except Exception as cmd_error:
+                            print(f"Error executing alter command '{alter_cmd}': {cmd_error}")
+                            raise
+                    
+                    return True
+                    
+                except Exception as e:
+                    print(f"Error altering component {component_instance}: {e}")
+                    raise
 
             def show_component(self, component_instance):
                 """Show component parameters using component instance."""
@@ -310,11 +326,18 @@ class HighlevelSim:
 
             def halt_simulation(self, timeout=1.0):
                 """Safely halt running simulation."""
-                if hasattr(self.ngspice_sim, 'safe_halt_simulation'):
-                    return self.ngspice_sim.safe_halt_simulation(wait_time=timeout)
-                else:
-                    # Fallback for backends without safe_halt_simulation
-                    raise NotImplementedError(f"Backend {type(self.ngspice_sim).__name__} does not support safe_halt_simulation")
+                try:
+                    if hasattr(self.ngspice_sim, 'safe_halt_simulation'):
+                        result = self.ngspice_sim.safe_halt_simulation(wait_time=timeout)
+                        if not result:
+                            print(f"Warning: Failed to halt simulation within {timeout}s timeout")
+                        return result
+                    else:
+                        # Fallback for backends without safe_halt_simulation
+                        raise NotImplementedError(f"Backend {type(self.ngspice_sim).__name__} does not support safe_halt_simulation")
+                except Exception as e:
+                    print(f"Error during simulation halt: {e}")
+                    return False
 
             def resume_simulation(self, timeout=2.0):
                 """Resume a halted simulation.
@@ -325,11 +348,18 @@ class HighlevelSim:
                 Returns:
                     bool: True if resume succeeded, False otherwise
                 """
-                if hasattr(self.ngspice_sim, 'safe_resume_simulation'):
-                    return self.ngspice_sim.safe_resume_simulation(wait_time=timeout)
-                else:
-                    # Fallback for backends without safe_resume_simulation
-                    raise NotImplementedError(f"Backend {type(self.ngspice_sim).__name__} does not support safe_resume_simulation")
+                try:
+                    if hasattr(self.ngspice_sim, 'safe_resume_simulation'):
+                        result = self.ngspice_sim.safe_resume_simulation(wait_time=timeout)
+                        if not result:
+                            print(f"Warning: Failed to resume simulation within {timeout}s timeout")
+                        return result
+                    else:
+                        # Fallback for backends without safe_resume_simulation
+                        raise NotImplementedError(f"Backend {type(self.ngspice_sim).__name__} does not support safe_resume_simulation")
+                except Exception as e:
+                    print(f"Error during simulation resume: {e}")
+                    return False
 
             def is_running(self):
                 """Check if simulation is running."""

@@ -77,6 +77,91 @@ class _SubprocessBackend:
         self._async_halt_requested = False
         self._async_lock = threading.Lock()
 
+    def cleanup(self):
+        """Cleanup subprocess backend with proper thread and process cleanup."""
+        cleanup_errors = []
+        
+        try:
+            # First, stop any running async simulation
+            if self._async_running:
+                try:
+                    self.safe_halt_simulation(max_attempts=2, wait_time=0.5)
+                except Exception as e:
+                    cleanup_errors.append(f"Failed to halt async simulation: {e}")
+        except Exception as e:
+            cleanup_errors.append(f"Error checking async simulation state: {e}")
+        
+        try:
+            # Clean up async thread
+            if self._async_thread and self._async_thread.is_alive():
+                # Set halt flag and wait for thread to finish
+                with self._async_lock:
+                    self._async_halt_requested = True
+                    self._async_running = False
+                
+                # Wait for thread to finish gracefully
+                self._async_thread.join(timeout=2.0)
+                
+                # Log if thread didn't finish cleanly
+                if self._async_thread.is_alive():
+                    cleanup_errors.append("Async thread did not finish within timeout")
+                
+                self._async_thread = None
+        except Exception as e:
+            cleanup_errors.append(f"Error cleaning up async thread: {e}")
+        
+        try:
+            # Clean up queue
+            if self._async_queue:
+                try:
+                    # Clear any remaining items
+                    while not self._async_queue.empty():
+                        try:
+                            self._async_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                except Exception as e:
+                    cleanup_errors.append(f"Error clearing async queue: {e}")
+                finally:
+                    self._async_queue = None
+        except Exception as e:
+            cleanup_errors.append(f"Error cleaning up async queue: {e}")
+        
+        try:
+            # Clean up subprocess
+            if self.p and self.p.poll() is None:
+                try:
+                    # Send quit command
+                    self.command("quit")
+                except Exception as e:
+                    cleanup_errors.append(f"Error sending quit command: {e}")
+                
+                # Wait for process to terminate
+                try:
+                    self.p.wait(timeout=1.0)
+                except Exception as e:
+                    cleanup_errors.append(f"Process did not terminate gracefully: {e}")
+                    # Force terminate
+                    try:
+                        self.p.terminate()
+                        self.p.wait(timeout=1.0)
+                    except Exception as term_e:
+                        cleanup_errors.append(f"Error terminating process: {term_e}")
+        except Exception as e:
+            cleanup_errors.append(f"Error during subprocess cleanup: {e}")
+        
+        # Reset state
+        self._async_running = False
+        self._async_halt_requested = False
+        
+        # Report cleanup errors if any occurred
+        if cleanup_errors:
+            error_msg = "; ".join(cleanup_errors)
+            if self.debug:
+                print(f"Warning: Cleanup errors in subprocess backend: {error_msg}")
+        
+        return len(cleanup_errors) == 0
+
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
         if self.p.poll() is not None:
@@ -531,8 +616,11 @@ class _SubprocessBackend:
 
     def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 0.2) -> bool:
         """Halt async simulation safely."""
+        import time
+        
         if self.debug:
             print(f"DEBUG: safe_halt_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}, thread_alive={self._async_thread and self._async_thread.is_alive() if self._async_thread else False}")
+        
         if not self._async_running:
             return True
 
@@ -541,22 +629,33 @@ class _SubprocessBackend:
             if self.debug:
                 print("DEBUG: Set async_halt_requested=True")
 
-        # Wait for thread to respond to halt request
+        # Wait for thread to respond to halt request with proper verification
         for attempt in range(max_attempts):
-            # Check if thread has paused (not running but still alive)
+            # Check if thread has properly paused (halt requested and not running)
+            with self._async_lock:
+                halt_requested = self._async_halt_requested
+                is_running = self._async_running
+                
             if (self._async_thread and self._async_thread.is_alive() and
-                not self._async_running):
+                halt_requested and not is_running):
                 if self.debug:
-                    print(f"DEBUG: Simulation paused successfully")
+                    print(f"DEBUG: Simulation paused successfully on attempt {attempt + 1}")
                 return True
 
             if self.debug:
-                print(f"DEBUG: Attempt {attempt+1}/{max_attempts}: thread alive={self._async_thread and self._async_thread.is_alive()}, running={self._async_running}")
+                print(f"DEBUG: Attempt {attempt+1}/{max_attempts}: thread alive={self._async_thread and self._async_thread.is_alive()}, running={is_running}, halt_requested={halt_requested}")
             time.sleep(wait_time)
 
+        # Final verification - check actual state
+        with self._async_lock:
+            final_running = self._async_running
+            final_halt_requested = self._async_halt_requested
+            
         if self.debug:
-            print(f"DEBUG: Halt timeout reached, thread may still be processing")
-        return True  # Halt request was set, thread will pause when it checks the flag
+            print(f"DEBUG: Final state - running={final_running}, halt_requested={final_halt_requested}")
+            
+        # Return success if halt was requested (thread will pause when it checks)
+        return final_halt_requested and not final_running
 
     def resume_simulation(self, timeout: float = 3.0) -> bool:
         """Resume async simulation after halt."""
@@ -577,17 +676,71 @@ class _SubprocessBackend:
 
     def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 2.0) -> bool:
         """Resume a halted simulation safely."""
+        import time
+        
         if self.debug:
             print(f"DEBUG: safe_resume_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}")
+            
+        # If not halted, consider it already running
+        with self._async_lock:
+            if not self._async_halt_requested:
+                return True
 
+        for attempt in range(max_attempts):
+            try:
+                with self._async_lock:
+                    self._async_halt_requested = False
+                    self._async_running = True  # Mark as running again
+
+                if self.debug:
+                    print(f"DEBUG: Resume attempt {attempt + 1}, halt flag cleared")
+
+                # Verify resume succeeded by checking state after a brief moment
+                time.sleep(wait_time / max_attempts)
+                
+                with self._async_lock:
+                    is_running = self._async_running
+                    halt_requested = self._async_halt_requested
+                    
+                # Success if we're running and not halted
+                if is_running and not halt_requested:
+                    if self.debug:
+                        print(f"DEBUG: Resume verified successful on attempt {attempt + 1}")
+                    return True
+                    
+                if self.debug:
+                    print(f"DEBUG: Resume attempt {attempt + 1} failed - running={is_running}, halt_requested={halt_requested}")
+                    
+            except Exception as e:
+                if self.debug:
+                    print(f"DEBUG: Exception during resume attempt {attempt + 1}: {e}")
+                    
+                # Restore state on exception
+                with self._async_lock:
+                    self._async_halt_requested = True
+                    self._async_running = False
+
+        # Final verification
+        with self._async_lock:
+            final_running = self._async_running
+            final_halt_requested = self._async_halt_requested
+            
+        if self.debug:
+            print(f"DEBUG: Final resume state - running={final_running}, halt_requested={final_halt_requested}")
+            
+        return final_running and not final_halt_requested
+
+    def resume_simulation(self, timeout: float = 3.0) -> bool:
+        """Resume async simulation after halt."""
         if not self._async_halt_requested:
             return True  # Not halted, so already "running"
 
         with self._async_lock:
             self._async_halt_requested = False
             self._async_running = True  # Mark as running again
-            if self.debug:
-                print("DEBUG: Set async_halt_requested=False and async_running=True")
+
+        if self.debug:
+            print(f"DEBUG: Simulation resumed, halt flag cleared")
 
         # For subprocess backend, resuming means continuing chunked simulation
         # The _run_chunked_simulation method will naturally continue from current_time
