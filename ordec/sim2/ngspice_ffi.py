@@ -745,6 +745,70 @@ class _FFIBackend:
             # Already stopped
             return True
 
+    def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 0.2) -> bool:
+        """Halt async simulation safely."""
+        if not self._is_running:
+            return True
+
+        for attempt in range(max_attempts):
+            self.command("bg_halt")
+            self._is_running = False
+
+            # Check if simulation has stopped
+            time.sleep(wait_time)
+            if not self._is_running:
+                return True
+
+        # If we reach here, stopping timed out but we tried
+        return not self._is_running
+
+    def halt_simulation(self, timeout: float = 2.0) -> bool:
+        """Halt async simulation (alias for safe_halt_simulation for API compatibility)."""
+        result = self.safe_halt_simulation(max_attempts=int(timeout / 0.2), wait_time=0.2)
+        return result
+
+    def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 2.0) -> bool:
+        """Resume a halted simulation safely."""
+        if self._is_running:
+            return True  # Already running
+
+        for attempt in range(max_attempts):
+            # Send bg_resume command
+            result = self.command("bg_resume")
+
+            # Check if ngspice is actually running using the library function
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+
+                def check_resume_status():
+                    """Check if simulation has resumed using ngspice library"""
+                    try:
+                        is_running = self.lib.ngSpice_running()
+                        if is_running:
+                            self._is_running = True  # Update our state
+                        return is_running
+                    except:
+                        return False
+
+                # Wait for resume to complete
+                start_time = time.time()
+                while time.time() - start_time < wait_time:
+                    resume_future = executor.submit(check_resume_status)
+                    try:
+                        if resume_future.result(timeout=0.05):
+                            return True
+                    except concurrent.futures.TimeoutError:
+                        pass
+                    finally:
+                        if not resume_future.done():
+                            resume_future.cancel()
+
+            # Wait before retry (except on last attempt)
+            if attempt < max_attempts - 1:
+                time.sleep(wait_time / 2)
+
+        return False  # Resume failed or timed out after all attempts
+
     def resume_simulation(self, timeout=2.0):
         """Resume a halted simulation using bg_resume command.
 

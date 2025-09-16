@@ -41,7 +41,7 @@ def plot_sixel(time_data, voltage_in, voltage_out, title="RC Circuit Response"):
         plt.close()
         return True
     except Exception as e:
-        print(f"\n--- Sixel plotting failed ---\n  Error: {e}\n  Ensure 'matplotlib-backend-sixel' and 'imagemagick' are installed.\n--------------------------\n", file=sys.stderr)
+        print(f"Error: {e}\n  Ensure 'matplotlib-backend-sixel' and 'imagemagick' are installed.", file=sys.stderr)
         return False
 
 def plot_ascii(time_data, voltage_in, voltage_out, width=80, height=20, title="RC Circuit Response"):
@@ -91,7 +91,6 @@ def _query_sixel_support_from_terminal():
         old_settings = termios.tcgetattr(sys.stdin)
         tty.setraw(sys.stdin.fileno())
 
-        # First query with timeout
         sys.stdout.write('\x1b[c')
         sys.stdout.flush()
         ready, _, _ = select.select([sys.stdin], [], [], 0.2)  # 200ms timeout
@@ -109,12 +108,10 @@ def _query_sixel_support_from_terminal():
             if b'4' in response:
                 return True
 
-        # Second query with timeout
         sys.stdout.write('\x1b[>0c')
         sys.stdout.flush()
         ready, _, _ = select.select([sys.stdin], [], [], 0.2)  # 200ms timeout
         if ready:
-            # Read with timeout to prevent hanging
             response = b''
             start_time = time.time()
             while time.time() - start_time < 0.2 and len(response) < 10:
@@ -138,12 +135,7 @@ def detect_terminal_capabilities():
     sixel_support = _query_sixel_support_from_terminal()
     return {'sixel': sixel_support, 'ascii': True}
 
-# --- RC Testbench with Square Wave Source ---
 class RCSquareWaveTb(Cell):
-    """
-    RC circuit testbench with square wave voltage source.
-    Shows the classic RC integration curve.
-    """
 
     @generate
     def schematic(self):
@@ -174,15 +166,9 @@ class RCSquareWaveTb(Cell):
         s.outline = Rect4R(lx=0, ly=0, ux=18, uy=10)
         return s
 
-# --- Main Simulation Function with VCD Export ---
+
 def run_rc_square_wave_simulation_with_vcd():
-    """Run RC circuit simulation with square wave input, plot results, and export VCD using HighLevelSim method."""
 
-    print("=== ORDeC RC Circuit with Square Wave Input ===")
-    print("Creating RC circuit with R=1kΩ, C=1μF...")
-    print("Square wave: 1kHz, 0-1V, 50% duty cycle")
-
-    # Create testbench and simulation hierarchy
     tb = RCSquareWaveTb()
     s = SimHierarchy(cell=tb)
     sim = HighlevelSim(tb.schematic, s)
@@ -204,7 +190,6 @@ def run_rc_square_wave_simulation_with_vcd():
     print("Running transient simulation for 5ms using HighLevelSim...")
     sim.tran("10u", "5m")
 
-    # Extract data from SimHierarchy for plotting
     time_data = s.time
     vin_data = s.vin.trans_voltage
     vout_data = s.vout.trans_voltage
@@ -221,30 +206,17 @@ def run_rc_square_wave_simulation_with_vcd():
     print("\nExporting simulation results to VCD format...")
     try:
         vcd_success = sim.export_to_vcd("rc_simulation.vcd", timescale="1us")
-        if vcd_success:
-            print("✅ VCD file generated: rc_simulation.vcd")
-            print("   You can view it with: gtkwave rc_simulation.vcd")
-        else:
-            print("❌ VCD export failed")
-            return False
     except Exception as e:
-        print(f"❌ Error during VCD export: {e}")
+        print(f"Error during VCD export: {e}")
         return False
 
-    # Detect terminal capabilities
     capabilities = detect_terminal_capabilities()
-    print(f"Terminal capabilities: {capabilities}")
-
-    # Plot results
     if capabilities['sixel']:
-        print("\nDisplaying Sixel plot...")
         success = plot_sixel(time_data, vin_data, vout_data,
                            title="RC Circuit - Square Wave Response")
         if success:
             return True
 
-    # Fallback to ASCII plot
-    print("\nDisplaying ASCII plot (Sixel not available)...")
     ascii_plot = plot_ascii(time_data, vin_data, vout_data,
                            title="RC Circuit - Square Wave Response",
                            width=80, height=20)
@@ -254,11 +226,7 @@ def run_rc_square_wave_simulation_with_vcd():
 
 if __name__ == "__main__":
     try:
-        if success := run_rc_square_wave_simulation_with_vcd():
-            print("\n✅ Simulation, VCD export, and plotting completed successfully!")
-        else:
-            print("\n❌ Simulation failed!")
-            sys.exit(1)
+        success = run_rc_square_wave_simulation_with_vcd()
     except Exception as e:
         print(f"\n❌ Error during simulation: {e}")
         import traceback

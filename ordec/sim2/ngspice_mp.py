@@ -503,7 +503,6 @@ class IsolatedFFIBackend:
         return self.async_queue
 
     def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 1.0):
-        """Safely halt running simulation."""
         import time
         import concurrent.futures
 
@@ -512,14 +511,10 @@ class IsolatedFFIBackend:
 
         for attempt in range(max_attempts):
             try:
-                # Send halt command to worker
                 result = self._call_worker('stop_simulation')
                 self._async_simulation_running = False
-
-                # Wait and verify halt succeeded
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     def check_halt_status():
-                        """Check if simulation has halted"""
                         return not self.is_running()
 
                     timeout = time.time() + wait_time
@@ -541,14 +536,13 @@ class IsolatedFFIBackend:
             if attempt < max_attempts - 1:
                 time.sleep(wait_time)
 
-        # Final check - use actual worker state, not our flag
+        # use actual worker state, not our flag
         try:
             return self._call_worker('is_running') == False
         except:
             return False
 
     def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 2.0):
-        """Resume a halted simulation."""
         import time
         import concurrent.futures
 

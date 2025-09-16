@@ -309,30 +309,18 @@ class HighlevelSim:
                 return self.ngspice_sim.tran_async(tstep, tstop, **kwargs)
 
             def halt_simulation(self, timeout=1.0):
-                """Safely halt running simulation."""
                 if hasattr(self.ngspice_sim, 'safe_halt_simulation'):
                     return self.ngspice_sim.safe_halt_simulation(wait_time=timeout)
                 else:
-                    # Fallback for backends without safe_halt_simulation
                     raise NotImplementedError(f"Backend {type(self.ngspice_sim).__name__} does not support safe_halt_simulation")
 
             def resume_simulation(self, timeout=2.0):
-                """Resume a halted simulation.
-
-                Args:
-                    timeout: Maximum time to wait for resume to complete
-
-                Returns:
-                    bool: True if resume succeeded, False otherwise
-                """
                 if hasattr(self.ngspice_sim, 'safe_resume_simulation'):
                     return self.ngspice_sim.safe_resume_simulation(wait_time=timeout)
                 else:
-                    # Fallback for backends without safe_resume_simulation
                     raise NotImplementedError(f"Backend {type(self.ngspice_sim).__name__} does not support safe_resume_simulation")
 
             def is_running(self):
-                """Check if simulation is running."""
                 return self.ngspice_sim.is_running()
 
         with Ngspice.launch(debug=debug, backend=use_backend) as ngspice_sim:

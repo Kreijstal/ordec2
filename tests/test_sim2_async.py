@@ -265,10 +265,8 @@ def test_highlevel_async_parameter_sweep(backend):
                 break
 
         assert len(async_results) >= 1
-        # Store the final voltage value for comparison
         results[vin] = async_results[-1].o.voltage
 
-    # Verify we got results for all input voltages
     assert len(results) == 3
     for vin in input_voltages:
         assert vin in results
@@ -298,8 +296,6 @@ def test_async_alter_resume(backend):
 
             # Start async transient simulation
             data_queue = alter.start_async_tran("10u", "100m")  # 10us steps, 100ms total
-
-            # Phase 1: Initial data collection and signal mapping
             initial_data = []
             found_signals = set()
             mapped_signals = {}
@@ -313,8 +309,6 @@ def test_async_alter_resume(backend):
                         sim_time = data_point['data'].get('time', 0)
                         data_dict = data_point['data']
                         initial_data.append((sim_time, data_dict))
-
-                        # Collect signal mapping information
                         for signal_name in data_dict.keys():
                             if signal_name != 'time':
                                 found_signals.add(signal_name)
@@ -322,8 +316,6 @@ def test_async_alter_resume(backend):
                                     simnet = sim.str_to_simobj[signal_name]
                                     net_name = simnet.eref.full_path_str().split('.')[-1]
                                     mapped_signals[signal_name] = net_name
-
-                        # Stop collecting at 5ms simulation time
                         if sim_time >= 0.005:
                             break
 
@@ -332,28 +324,19 @@ def test_async_alter_resume(backend):
 
             assert len(initial_data) > 0, "Should collect initial simulation data"
 
-            # Phase 2: Multiple halt/alter/resume cycles with different voltages
+            # Multiple halt/alter/resume cycles with different voltages
             voltage_sequence = [2.0, 1.5, 3.0, 1.0]
             alter_data = []
 
             for i, voltage in enumerate(voltage_sequence):
-                # Test halt simulation
                 halt_success = alter.halt_simulation(timeout=2.0)
                 assert halt_success, f"Should successfully halt simulation at step {i+1}"
-
-                # Test parameter alteration
                 alter.alter_component(circuit.schematic.v1, dc=voltage)
-
-                # Verify the alteration
                 vdc_info = alter.show_component(circuit.schematic.v1)
                 expected = str(int(voltage)) if voltage == int(voltage) else str(voltage)
                 assert expected in vdc_info, f"Step {i+1}: VDC should show {expected}V after alter: {vdc_info}"
-
-                # Test resume simulation
                 resume_success = alter.resume_simulation(timeout=3.0)
                 assert resume_success, f"Should successfully resume simulation at step {i+1}"
-
-                # Collect some data after each alter
                 step_data = []
                 step_start = time.time()
                 while (time.time() - step_start) < 1.0 and len(step_data) < 10:
@@ -368,7 +351,6 @@ def test_async_alter_resume(backend):
                 alter_data.extend(step_data)
                 assert len(step_data) > 0, f"Should collect data after alter step {i+1}"
 
-            # Phase 3: Final data collection
             final_data = []
             start_time = time.time()
             while (time.time() - start_time) < 2.0 and len(final_data) < 10:

@@ -99,13 +99,6 @@ class Ngspice:
 
     def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 0.2) -> bool:
         """
-        Safely halt simulation with retries and verification.
-
-        This method addresses the critical timing issues with ngspice background simulations:
-        - bg_halt is not instantaneous and can fail silently
-        - Multiple attempts may be needed
-        - Must verify halt succeeded before proceeding with alter commands
-
         Args:
             max_attempts: Maximum number of halt attempts
             wait_time: Time to wait between attempts and for verification
@@ -113,98 +106,10 @@ class Ngspice:
         Returns:
             True if halt succeeded, False otherwise
         """
-        # Delegate to backend implementation if it has its own safe_halt_simulation method
-        if hasattr(self._backend_impl, 'safe_halt_simulation'):
-            return self._backend_impl.safe_halt_simulation(max_attempts, wait_time)
-
-        import time
-
-        if not self.is_running():
-            return True
-
-        for attempt in range(max_attempts):
-            try:
-                # Send halt command
-                if hasattr(self._backend_impl, 'command'):
-                    self._backend_impl.command("bg_halt")
-                else:
-                    self.stop_simulation()
-
-                # CRITICAL: Must yield after halt command before checking state
-                # Use race condition approach instead of fixed sleep
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-
-                    def check_halt_status():
-                        """Check if simulation has halted"""
-                        return not self.is_running()
-
-                    timeout = time.time() + wait_time
-                    while time.time() < timeout:
-                        halt_future = executor.submit(check_halt_status)
-                        try:
-                            if halt_future.result(timeout=min(0.01, wait_time)):
-                                return True
-                        except concurrent.futures.TimeoutError:
-                            pass
-                        finally:
-                            if not halt_future.done():
-                                halt_future.cancel()
-
-            except Exception:
-                pass
-
-            # Wait before retry (except on last attempt)
-            if attempt < max_attempts - 1:
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    def wait_before_retry():
-                        return True
-
-                    wait_future = executor.submit(wait_before_retry)
-                    try:
-                        wait_future.result(timeout=wait_time)
-                    except concurrent.futures.TimeoutError:
-                        pass
-                    finally:
-                        if not wait_future.done():
-                            wait_future.cancel()
-
-        # Fallback attempt with stop_simulation
-        try:
-            self.stop_simulation()
-            # Use race condition approach for final check
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-
-                def check_final_halt():
-                    """Final check if simulation has stopped"""
-                    return not self.is_running()
-
-                timeout = time.time() + wait_time
-                while time.time() < timeout:
-                    final_future = executor.submit(check_final_halt)
-                    try:
-                        return final_future.result(timeout=min(0.01, wait_time))
-                    except concurrent.futures.TimeoutError:
-                        pass
-                    finally:
-                        if not final_future.done():
-                            final_future.cancel()
-
-            return not self.is_running()
-        except:
-            return False
+        return self._backend_impl.safe_halt_simulation(max_attempts, wait_time)
 
     def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 0.2) -> bool:
         """
-        Safely resume a halted simulation with retries and verification.
-
-        This method addresses the critical timing issues with ngspice background simulations:
-        - bg_resume is not instantaneous and can fail silently
-        - Multiple attempts may be needed
-        - Must verify resume succeeded before proceeding
-
         Args:
             max_attempts: Maximum number of resume attempts
             wait_time: Time to wait between attempts and for verification
@@ -212,64 +117,7 @@ class Ngspice:
         Returns:
             True if resume succeeded, False otherwise
         """
-        # Delegate to backend implementation if it has its own safe_resume_simulation method
-        if hasattr(self._backend_impl, 'safe_resume_simulation'):
-            return self._backend_impl.safe_resume_simulation(max_attempts, wait_time)
-
-        import time
-
-        if self.is_running():
-            return True
-
-        for attempt in range(max_attempts):
-            try:
-                # Send resume command
-                if hasattr(self._backend_impl, 'command'):
-                    self._backend_impl.command("bg_resume")
-                elif hasattr(self._backend_impl, 'resume_simulation'):
-                    self._backend_impl.resume_simulation()
-
-                # CRITICAL: Must yield after resume command before checking state
-                # Use race condition approach instead of fixed sleep
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-
-                    def check_resume_status():
-                        """Check if simulation has resumed"""
-                        return self.is_running()
-
-                    timeout = time.time() + wait_time
-                    while time.time() < timeout:
-                        resume_future = executor.submit(check_resume_status)
-                        try:
-                            if resume_future.result(timeout=min(0.01, wait_time)):
-                                return True
-                        except concurrent.futures.TimeoutError:
-                            pass
-                        finally:
-                            if not resume_future.done():
-                                resume_future.cancel()
-
-            except Exception:
-                pass
-
-            # Wait before retry (except on last attempt)
-            if attempt < max_attempts - 1:
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    def wait_before_retry():
-                        return True
-
-                    wait_future = executor.submit(wait_before_retry)
-                    try:
-                        wait_future.result(timeout=wait_time)
-                    except concurrent.futures.TimeoutError:
-                        pass
-                    finally:
-                        if not wait_future.done():
-                            wait_future.cancel()
-
-        return False
+        return self._backend_impl.safe_resume_simulation(max_attempts, wait_time)
 
 RawVariable = namedtuple('RawVariable', ['name', 'unit'])
 
