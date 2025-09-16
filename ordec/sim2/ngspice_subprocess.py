@@ -442,51 +442,50 @@ class _SubprocessBackend:
                                 # Fallback to space separation
                                 row_data = line.split()
 
-                            if len(row_data) >= 2 and self._is_numeric_row(row_data):
-                                # Ensure data row has a compatible number of columns
-                                if len(row_data) <= len(current_headers):
-                                    if self.debug and len(tables[current_headers]) < 3:  # Only print first few rows
-                                        print(f"DEBUG: Adding row data: {row_data}")
-                                    tables[current_headers].append(row_data)
+                            if len(row_data) >= 2 and self._is_numeric_row(row_data) and len(row_data) <= len(current_headers):
+                                if self.debug and len(tables[current_headers]) < 3:  # Only print first few rows
+                                    print(f"DEBUG: Adding row data: {row_data}")
+                                tables[current_headers].append(row_data)
 
-                                    # Create data point for this row
-                                    try:
-                                        time_val = float(row_data[1])  # time is in second column
-                                        # Only include points in our time range
-                                        if current_time <= time_val <= chunk_end:
-                                            # Create data point compatible with FFI backend format
-                                            data_point = {
-                                                'timestamp': time.time(),
-                                                'data': {
-                                                    'time': time_val
-                                                },
-                                                'index': self._data_points_sent,
-                                                'progress': min(1.0, time_val / tstop) if tstop > 0 else 0.0
-                                            }
+                                # Create data point for this row
+                                try:
+                                    time_val = float(row_data[1])  # time is in second column
+                                    # Only include points in our time range
+                                    if current_time <= time_val <= chunk_end:
+                                        # Create data point compatible with FFI backend format
+                                        data_point = {
+                                            'timestamp': time.time(),
+                                            'data': {
+                                                'time': time_val
+                                            },
+                                            'index': self._data_points_sent,
+                                            'progress': min(1.0, time_val / tstop) if tstop > 0 else 0.0
+                                        }
 
-                                            # Add voltage/current data (skip index and time columns)
-                                            for i, header in enumerate(current_headers[2:], 2):
-                                                if i < len(row_data) and row_data[i].strip():
-                                                    try:
-                                                        data_point['data'][header] = float(row_data[i])
-                                                    except ValueError:
-                                                        pass  # Skip non-numeric values
+                                        # Add voltage/current data (skip index and time columns)
+                                        for i, header in enumerate(current_headers[2:], 2):
+                                            if i < len(row_data) and row_data[i].strip():
+                                                try:
+                                                    data_point['data'][header] = float(row_data[i])
+                                                except ValueError:
+                                                    pass  # Skip non-numeric values
 
-                                            # Add voltage data if available for this time point
-                                            if time_val in voltage_data:
-                                                for node_name, voltage_val in voltage_data[time_val].items():
-                                                    data_point['data'][node_name] = voltage_val
+                                        # Add voltage data if available for this time point
+                                        if time_val in voltage_data:
+                                            for node_name, voltage_val in voltage_data[time_val].items():
+                                                data_point['data'][node_name] = voltage_val
 
-                                            # Debug: print data point structure
-                                            if self.debug and self._data_points_sent < 3:  # Only print first few points
-                                                print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")
+                                        # Debug: print data point structure
+                                        if self.debug and self._data_points_sent < 3:  # Only print first few points
+                                            print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")
 
-                                            # Add to queue
-                                            self._async_queue.put(data_point)
-                                            self._data_points_sent += 1
+                                        # Add to queue
+                                        self._async_queue.put(data_point)
+                                        self._data_points_sent += 1
 
-                                    except (ValueError, IndexError):
-                                        continue  # Skip malformed data
+                                except (ValueError, IndexError):
+                                    continue  # Skip malformed data
+
 
                     # Update current time for next chunk
                     current_time = chunk_end
