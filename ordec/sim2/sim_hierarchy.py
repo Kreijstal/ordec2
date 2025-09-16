@@ -232,9 +232,9 @@ class HighlevelSim:
     def find_component_by_ref_name(self, ref_name):
         """Find a component instance by its reference name (e.g., 'r1', 'c1')."""
         for sim_instance in self.simhier.all(SimInstance):
-            if hasattr(sim_instance, 'eref') and hasattr(sim_instance.eref, 'full_path_str'):
-                if sim_instance.eref.full_path_str().endswith(ref_name):
-                    return sim_instance
+            if hasattr(sim_instance, 'eref') and hasattr(sim_instance.eref, 'full_path_str') and sim_instance.eref.full_path_str().endswith(ref_name):
+                return sim_instance
+
         return None
 
     def find_sim_instance_from_schem_instance(self, schem_instance):
