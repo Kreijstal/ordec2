@@ -343,55 +343,29 @@ class _SubprocessBackend:
     def _run_chunked_simulation(self, tstep: float, tstop: float, tstep_str: str, throttle_interval: float):
         """Run simulation in chunks to provide async-like behavior with halt support."""
         try:
-            # Chunk size should be small enough for responsiveness but large enough for efficiency
-            chunk_time = min(tstop / 100, max(tstep * 5, 1e-9))  # Much smaller chunks for better halt responsiveness
-            if self.debug:
-                print(f"DEBUG: Chunked simulation starting: tstep={tstep}, tstop={tstop}, chunk_time={chunk_time}")
-            # Use stored current_time if available (for resume), otherwise start from 0
+            chunk_time = min(tstop / 100, max(tstep * 5, 1e-9))
             current_time = getattr(self, '_async_current_time', 0.0)
 
             while current_time < tstop and not self._async_halt_requested:
-                # Store current time for resume functionality
                 self._async_current_time = current_time
-                # Calculate chunk end time
                 chunk_end = min(current_time + chunk_time, tstop)
-                if self.debug:
-                    print(f"DEBUG: Running chunk {current_time}-{chunk_end}, halt_requested={self._async_halt_requested}")
-
-                # Run transient analysis for this chunk using tstart parameter
                 if current_time == 0:
-                    # First chunk - normal tran command
                     tran_cmd = f"tran {tstep_str} {chunk_end}"
                 else:
-                    # Subsequent chunks - use tstart parameter
                     tran_cmd = f"tran {tstep_str} {chunk_end} {current_time}"
 
                 try:
-                    # Run the chunk and get results
-                    if self.debug:
-                        print(f"DEBUG: Sending command: {tran_cmd}")
                     self.command(tran_cmd)
                     print_all_res = "\n".join(self.print_all())
                     lines = print_all_res.split('\n')
-
-                    # Debug: print raw output to understand format
-                    if self.debug:
-                        print(f"DEBUG: print_all output for chunk {current_time}-{chunk_end}:")
-                        for i, line in enumerate(lines):
-                            print(f"DEBUG: line {i}: '{line}'")
-
-                    # Get voltage data explicitly since print all may not include it
                     voltage_data = {}
                     try:
-                        # Get node voltages using display command to find available nodes
                         display_output = self.command("display")
                         for line in display_output.split('\n'):
-                            # Look for node voltage vectors (not starting with @ and not ending with #branch)
                             if ':' in line and not line.strip().startswith('@') and not line.strip().endswith('#branch'):
                                 parts = line.split(':')
                                 vec_name = parts[0].strip()
                                 if vec_name and not vec_name.startswith('@') and not vec_name.endswith('#branch'):
-                                    # Try to get voltage data for this node
                                     try:
                                         vec_print = self.command(f"print {vec_name}")
                                         for vec_line in vec_print.split('\n'):
@@ -409,10 +383,9 @@ class _SubprocessBackend:
                                     except Exception:
                                         continue
                     except Exception:
-                        # If voltage data collection fails, continue without it
                         pass
 
-                    tables = {}  # map from header tuple to list of data rows
+                    tables = {}
                     current_headers = None
 
                     for line in lines:
@@ -585,24 +558,9 @@ class _SubprocessBackend:
         with self._async_lock:
             self._async_halt_requested = False
             self._async_running = True  # Mark as running again
-            if self.debug:
-                print("DEBUG: Set async_halt_requested=False and async_running=True")
 
-        # For subprocess backend, resuming means continuing chunked simulation
-        # The _run_chunked_simulation method will naturally continue from current_time
-        # stored in self._async_current_time
         return True
 
-
-
-    def halt_simulation(self, timeout: float = 2.0) -> bool:
-        """Halt async simulation (alias for safe_halt_simulation for API compatibility)."""
-        if self.debug:
-            print(f"DEBUG: halt_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}")
-        result = self.safe_halt_simulation(max_attempts=int(timeout / 0.2), wait_time=0.2)
-        if self.debug:
-            print(f"DEBUG: halt_simulation result={result}, async_running={self._async_running}")
-        return result
 
     def _is_header_line(self, line, expected_headers):
         """Check if a line looks like a header line."""

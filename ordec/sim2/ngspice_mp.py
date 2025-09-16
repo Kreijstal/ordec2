@@ -29,7 +29,7 @@ class FFIWorkerProcess:
     """
     #TODO performance
 
-    def __init__(self, conn: Pipe, async_queue: Queue):
+    def __init__(self, conn: Pipe, async_queue: Queue, debug: bool = False):
         self.conn = conn
         self.async_queue = async_queue
         self._shutdown_event = None
@@ -37,6 +37,7 @@ class FFIWorkerProcess:
         self.backend = None
         self._progress_lock = None
         self._last_progress = 0.0
+        self.debug = debug
 
     def _handle_data_fallback(self):
         """Handle data retrieval fallback when normal callbacks don't work"""
@@ -81,9 +82,13 @@ class FFIWorkerProcess:
                                     'progress': progress
                                 })
 
-        except Exception:
-            # Fallback failed, but don't crash - continue silently
-            pass
+        except Exception as e:
+            # Log fallback errors but don't crash the simulation
+            import logging
+            logging.error("Exception in _handle_data_fallback: %s", e)
+            if self.debug:
+                import traceback
+                logging.debug("Fallback traceback: %s", traceback.format_exc())
 
     def run(self):
         """Main worker loop. Waits for commands and dispatches them."""
@@ -309,7 +314,7 @@ class IsolatedFFIBackend:
         parent_conn, child_conn = Pipe()
         async_queue = Queue()
 
-        worker = FFIWorkerProcess(child_conn, async_queue)
+        worker = FFIWorkerProcess(child_conn, async_queue, debug=debug)
         p = Process(target=worker.run)
         p.start()
 
@@ -488,17 +493,6 @@ class IsolatedFFIBackend:
         return generator_with_callback()
 
     def tran_async(self, *args, throttle_interval: float = 0.1):
-        """
-        Start async transient simulation and return data queue.
-
-        Args:
-            *args: tran arguments (tstep, tstop, etc.)
-            throttle_interval: Minimum time between data updates
-
-        Returns:
-            queue.Queue object containing simulation data points
-        """
-        # Start the async simulation in the worker
         self._call_worker('tran_async', *args, throttle_interval=throttle_interval)
         return self.async_queue
 

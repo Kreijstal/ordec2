@@ -554,7 +554,7 @@ class _FFIBackend:
         # Some complex models (like SKY130) don't trigger data callbacks during bg_tran
         import threading
         def data_fallback_handler():
-            """Handle data retrieval when callbacks don't work (e.g., complex models)"""
+            """Handle data retrieval when callbacks don't work (e.g.,Complex models like SKY130 with savecurrents option)"""
             # Wait for simulation to complete using race condition approach
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as fallback_executor:
@@ -614,11 +614,13 @@ class _FFIBackend:
                             if self.debug:
                                 print(f"[ngspice-ffi] Fallback retrieved {len(sample_indices)} data points from {num_points} total points")
 
-                except Exception:
-                    # Fallback failed, but don't crash - just log if debug
+                except Exception as e:
+                    # Fallback failed, but don't crash - log errors for diagnostics
+                    import logging
+                    logging.error("Exception in data_fallback_handler: %s", e)
                     if self.debug:
                         import traceback
-                        print(f"[ngspice-ffi] Data fallback failed: {traceback.format_exc()}")
+                        logging.debug("Fallback traceback: %s", traceback.format_exc())
 
         fallback_thread = threading.Thread(target=data_fallback_handler, daemon=True)
         fallback_thread.start()

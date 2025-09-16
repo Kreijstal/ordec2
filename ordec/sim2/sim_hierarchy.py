@@ -142,17 +142,6 @@ class HighlevelSim:
                     continue
 
     def export_to_vcd(self, filename="simulation.vcd", signal_names=None, timescale="1us"):
-        """
-        Export simulation results to VCD (Value Change Dump) format.
-
-        Args:
-            filename: Output VCD filename
-            signal_names: List of signal names to export (None for all signals)
-            timescale: VCD timescale (e.g., "1us", "1ns")
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
         import time
 
         if self.simhier.sim_type is None:
