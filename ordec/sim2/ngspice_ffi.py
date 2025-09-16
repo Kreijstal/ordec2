@@ -465,22 +465,6 @@ class _FFIBackend:
         return result
 
     def tran_async(self, *args, throttle_interval: float = 0.1) -> 'queue.Queue':
-        """
-        Start async transient simulation and return data queue.
-
-        This replaces the problematic generator-based approach with a queue-based system
-        that allows for better control over halt/alter operations.
-
-        Args:
-            *args: tran arguments (tstep, tstop, etc.)
-            throttle_interval: Minimum time between data updates
-
-        Returns:
-            queue.Queue object containing simulation data points
-
-        Raises:
-            NgspiceError: If simulation fails to start
-        """
         self._async_throttle_interval = throttle_interval
         self._last_callback_time = 0.0
         self._data_points_sent = 0
@@ -810,14 +794,6 @@ class _FFIBackend:
         return False  # Resume failed or timed out after all attempts
 
     def resume_simulation(self, timeout=2.0):
-        """Resume a halted simulation using bg_resume command.
-
-        Args:
-            timeout: Maximum time to wait for resume to complete
-
-        Returns:
-            bool: True if resume succeeded, False otherwise
-        """
         if self._is_running:
             return True  # Already running
 

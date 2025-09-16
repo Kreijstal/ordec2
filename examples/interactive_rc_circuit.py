@@ -404,18 +404,6 @@ class InteractiveSimulation:
                     self._vcd_file.write(f"r{value} {char}\n")
 
     def export_to_vcd(self, filename="interactive_simulation.vcd", timescale="1us"):
-        """
-        Export recorded simulation data to VCD format.
-        This method is kept for backward compatibility but streaming is preferred.
-
-        Args:
-            filename: Output VCD filename
-            timescale: VCD timescale (e.g., "1us", "1ns")
-
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        print("Warning: export_to_vcd() is for backward compatibility. Use start_vcd_recording() with streaming for better performance.")
         return self.start_vcd_recording(filename, timescale)
 
 def main(plot_all_signals=False):

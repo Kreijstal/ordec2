@@ -60,26 +60,7 @@ class Ngspice:
         return self._backend_impl.ac(*args, **kwargs)
 
     def tran_async(self, *args, throttle_interval: float = 0.1) -> 'queue.Queue':
-        """
-        Start asynchronous transient analysis and return data queue.
-
-        This replaces the problematic generator-based approach with a queue-based system
-        that allows for better control over halt/alter operations.
-
-        Args:
-            *args: tran arguments (tstep, tstop, etc.)
-            throttle_interval: Minimum time between data updates
-
-        Returns:
-            queue.Queue object containing simulation data points
-
-        Raises:
-            NotImplementedError: If backend doesn't support async
-        """
-        if hasattr(self._backend_impl, 'tran_async'):
-            return self._backend_impl.tran_async(*args, throttle_interval=throttle_interval)
-        else:
-            raise NotImplementedError("Async transient analysis not supported by this backend")
+        return self._backend_impl.tran_async(*args, throttle_interval=throttle_interval)
 
     def op_async(self, callback: Optional[Callable] = None) -> Generator:
         if hasattr(self._backend_impl, 'op_async'):
@@ -98,25 +79,9 @@ class Ngspice:
             self._backend_impl.stop_simulation()
 
     def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 0.2) -> bool:
-        """
-        Args:
-            max_attempts: Maximum number of halt attempts
-            wait_time: Time to wait between attempts and for verification
-
-        Returns:
-            True if halt succeeded, False otherwise
-        """
         return self._backend_impl.safe_halt_simulation(max_attempts, wait_time)
 
     def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 0.2) -> bool:
-        """
-        Args:
-            max_attempts: Maximum number of resume attempts
-            wait_time: Time to wait between attempts and for verification
-
-        Returns:
-            True if resume succeeded, False otherwise
-        """
         return self._backend_impl.safe_resume_simulation(max_attempts, wait_time)
 
 RawVariable = namedtuple('RawVariable', ['name', 'unit'])
