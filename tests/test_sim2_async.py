@@ -379,3 +379,52 @@ def test_async_alter_resume(backend):
     assert result['signal_count'] >= 2, "Should detect multiple signals"
     assert result['mapped_count'] >= 2, "Should map signal names correctly"
     assert result['voltage_steps'] == 4, "Should complete all voltage alteration steps"
+
+
+@pytest.mark.libngspice
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
+def test_async_time_progression_validation(backend):
+    """Test that async simulations properly progress time values.
+    
+    This test specifically validates that the time progression bug is fixed.
+    It ensures that async transient simulations return increasing time values
+    instead of always returning t=0.0.
+    """
+    h = lib_test.InvTb(vin=R(0), backend=backend)
+    
+    time_values = []
+    data_points = []
+    
+    for i, result in enumerate(h.sim_tran_async("0.1u", "3u")):
+        time_values.append(result.time)
+        data_points.append(result)
+        if i >= 10:  # Collect enough points to verify progression
+            break
+    
+    # Must have at least a few data points
+    assert len(time_values) >= 3, f"Expected at least 3 data points, got {len(time_values)}"
+    
+    # Time values should be monotonically increasing
+    for i in range(1, len(time_values)):
+        assert time_values[i] >= time_values[i-1], (
+            f"Time should be monotonically increasing: "
+            f"time[{i-1}]={time_values[i-1]}, time[{i}]={time_values[i]}"
+        )
+    
+    # At least some time values should be greater than 0
+    non_zero_times = [t for t in time_values if t > 0.0]
+    assert len(non_zero_times) > 0, (
+        f"Expected some time values > 0.0, but all were: {time_values}"
+    )
+    
+    # The last time value should be significantly larger than the first
+    # (for a 3us simulation, we expect progression to at least nanosecond scale)
+    max_time = max(time_values)
+    assert max_time > 1e-9, (
+        f"Expected time progression to at least 1ns, but max time was {max_time}"
+    )
+    
+    # Verify that data structure is correct and time field exists
+    for i, result in enumerate(data_points):
+        assert hasattr(result, 'time'), f"Data point {i} missing time attribute"
+        assert isinstance(result.time, (int, float)), f"Data point {i} time is not numeric: {type(result.time)}"
