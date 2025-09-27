@@ -265,26 +265,13 @@ def test_highlevel_async_parameter_sweep(backend):
                 break
 
         assert len(async_results) >= 1
-<<<<<<< HEAD:tests/test_sim2_async.py
-        results[vin] = async_results[-1].o.voltage
-=======
         # Store the final numeric value for comparison
         results[vin] = async_results[-1].o
->>>>>>> 2a47021 (simplify TransResult):tests/test_sim2_ffi_async.py
 
     assert len(results) == 3
     for vin in input_voltages:
         assert vin in results
         assert isinstance(results[vin], (int, float))
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.libngspice

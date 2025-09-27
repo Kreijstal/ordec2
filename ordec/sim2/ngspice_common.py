@@ -3,8 +3,42 @@
 
 import re
 from collections import namedtuple
+from enum import Enum
+from dataclasses import dataclass
+from typing import Dict
 
 NgspiceValue = namedtuple('NgspiceValue', ['type', 'name', 'subname', 'value'])
+
+class SignalKind(Enum):
+    TIME = 1
+    VOLTAGE = 3
+    CURRENT = 4
+    OTHER = 99
+
+    @classmethod
+    def from_vtype(cls, vtype: int):
+        """Map ngspice VectorInfo.v_type integer codes to SignalKind.
+
+        Common observed mapping (may vary across ngspice versions):
+        - 1 : TIME
+        - 3 : VOLTAGE
+        - 4 : CURRENT
+
+        Falls back to OTHER for unknown values.
+        """
+        if vtype == 1:
+            return cls.TIME
+        elif vtype == 3:
+            return cls.VOLTAGE
+        elif vtype == 4:
+            return cls.CURRENT
+        else:
+            return cls.OTHER
+
+@dataclass
+class SignalArray:
+    kind: SignalKind
+    values: list
 
 class NgspiceError(Exception):
     pass
@@ -24,12 +58,14 @@ class NgspiceTable:
 
 class NgspiceTransientResult:
     def __init__(self):
-        self.time = []
-        self.signals = {}
-        self.tables = []
-        self.voltages = {}
-        self.currents = {}
-        self.branches = {}
+        self.time: list = []
+        # Map signal name -> SignalArray
+        self.signals: Dict[str, SignalArray] = {}
+        self.tables: list = []
+        # legacy buckets (kept for compatibility with higher-level code)
+        self.voltages: Dict[str, list] = {}
+        self.currents: Dict[str, Dict[str, list]] = {}
+        self.branches: Dict[str, list] = {}
 
     def add_table(self, table):
         """Add a table and extract signals into the signals dictionary."""
@@ -80,8 +116,10 @@ class NgspiceTransientResult:
 
             # Only add signal if we got valid data
             if signal_data:
-                self.signals[signal_name] = signal_data
-                # Categorize signals for easier access
+                # Wrap the array in SignalArray with a best-effort kind classification
+                kind = self._guess_signal_kind(signal_name)
+                self.signals[signal_name] = SignalArray(kind=kind, values=signal_data)
+                # Categorize signals for easier access (populate voltages/currents/branches)
                 self._categorize_signal(signal_name, signal_data)
 
     def _categorize_signal(self, signal_name, signal_data):
@@ -100,6 +138,20 @@ class NgspiceTransientResult:
         else:
             # Regular node voltage
             self.voltages[signal_name] = signal_data
+
+    def _guess_signal_kind(self, signal_name) -> SignalKind:
+        """Best-effort heuristic to classify a signal name into a SignalKind."""
+        if not signal_name:
+            return SignalKind.OTHER
+        name = signal_name.lower()
+        if name in ('time', 'index'):
+            return SignalKind.TIME
+        if signal_name.startswith('@') and '[' in signal_name:
+            return SignalKind.CURRENT
+        if signal_name.endswith('#branch'):
+            return SignalKind.CURRENT
+        # Fallback: treat as node voltage
+        return SignalKind.VOLTAGE
 
     def __getitem__(self, key):
         """Allow table indexing or signal access."""

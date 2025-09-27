@@ -19,6 +19,8 @@ from .ngspice_common import (
     NgspiceAcResult,
     check_errors,
     NgspiceTable,
+    SignalKind,
+    SignalArray,
 )
 
 
@@ -416,6 +418,7 @@ class _FFIBackend:
         # Get all vector data and structure it by column, filtering out zero-length vectors
         vector_data_map = {}
         valid_headers = []
+        vec_kind_map = {}
         for vec_name in all_vectors:
             vec_info = self._get_vector_info(vec_name)
             if vec_info and vec_info.v_length > 0:
@@ -423,6 +426,12 @@ class _FFIBackend:
                 data_list = [vec_info.v_realdata[i] for i in range(vec_info.v_length)]
                 vector_data_map[vec_name] = data_list
                 valid_headers.append(vec_name)
+                try:
+                    # Use v_type reported by ngspice when available for robust classification
+                    vec_kind_map[vec_name] = SignalKind.from_vtype(int(vec_info.v_type))
+                except Exception:
+                    # If mapping fails, leave classification to the higher-level guesser
+                    pass
 
         table.headers = valid_headers
 
@@ -432,6 +441,16 @@ class _FFIBackend:
             table.data.append(row)
 
         result.add_table(table)
+
+        # If we determined exact vector kinds from ngspice, override guessed kinds
+        try:
+            for name, kind in vec_kind_map.items():
+                if name in result.signals:
+                    result.signals[name].kind = kind
+        except NameError:
+            # vec_kind_map not defined; nothing to override
+            pass
+
         return result
 
     def ac(self, *args, **kwargs) -> 'NgspiceAcResult':
@@ -444,6 +463,7 @@ class _FFIBackend:
         vector_data_map = {}
         valid_headers = []
 
+        vec_kind_map = {}
         for vec_name in all_vectors:
             vec_info = self._get_vector_info(vec_name)
             if vec_info and vec_info.v_length > 0:
@@ -454,6 +474,10 @@ class _FFIBackend:
                     data_list = [vec_info.v_realdata[i] for i in range(vec_info.v_length)]
                 vector_data_map[vec_name] = data_list
                 valid_headers.append(vec_name)
+                try:
+                    vec_kind_map[vec_name] = SignalKind.from_vtype(int(vec_info.v_type))
+                except Exception:
+                    pass
 
         if 'frequency' in vector_data_map:
             result.freq = tuple(vector_data_map['frequency'])
@@ -461,6 +485,18 @@ class _FFIBackend:
         for name, value in vector_data_map.items():
             if name != 'frequency':
                 result._categorize_signal(name, value)
+
+        # Populate a signals mapping with SignalArray wrappers using v_type when available
+        try:
+            for name, value in vector_data_map.items():
+                if name == 'frequency':
+                    continue
+                kind = vec_kind_map.get(name, SignalKind.VOLTAGE)
+                # Attach SignalArray entries to result for richer typing
+                result.signals[name] = SignalArray(kind=kind, values=value)
+        except Exception:
+            # Best-effort: do not break AC processing if SignalArray construction fails
+            pass
 
         return result
 
