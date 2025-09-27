@@ -19,150 +19,38 @@ class SignalValue:
     value: float
     kind: SignalKind
 
-    def get_vtype(self) -> int:
-        return self.kind.get_vtype_value()
-
-    def get_description(self) -> str:
-        return self.kind.get_description()
-
 
 class TranResult:
-    def __init__(self, data_dict, sim_hierarchy, netlister, progress):
+    def __init__(
+        self, data_dict, sim_hierarchy, netlister, progress, signal_kinds=None
+    ):
         self._data = data_dict
         self._node = sim_hierarchy
         self._netlister = netlister
-        self.time = data_dict.get("time", 0.0)
         self.progress = progress
 
-        # Handle time signal separately
-        if "time" in data_dict:
-            self.__dict__["time"] = SignalValue(
-                value=data_dict["time"], kind=SignalKind.TIME
-            )
+        # Use provided signal_kinds or fall back to heuristics
+        signal_kinds = signal_kinds or {}
 
-        # Create hierarchical access (nets)
+        if "time" in data_dict:
+            time_kind = signal_kinds.get("time", SignalKind.TIME)
+            self.__dict__["time"] = SignalValue(value=data_dict["time"], kind=time_kind)
+
         for net in sim_hierarchy.all(SimNet):
             net_name = netlister.name_hier_simobj(net)
             if net_name in data_dict and net_name != "time":
-                # Store SignalValue struct containing both value and kind
+                net_kind = signal_kinds.get(net_name, SignalKind.VOLTAGE)
                 self.__dict__[net.npath.name] = SignalValue(
-                    value=data_dict[net_name], kind=SignalKind.VOLTAGE
+                    value=data_dict[net_name], kind=net_kind
                 )
 
-        # Create hierarchical access (instances)
         for inst in sim_hierarchy.all(SimInstance):
             inst_name = netlister.name_hier_simobj(inst)
             if inst_name in data_dict:
-                # Store SignalValue struct containing both value and kind
+                inst_kind = signal_kinds.get(inst_name, SignalKind.CURRENT)
                 self.__dict__[inst.npath.name] = SignalValue(
-                    value=data_dict[inst_name], kind=SignalKind.CURRENT
+                    value=data_dict[inst_name], kind=inst_kind
                 )
-
-    def get_signal_kind(self, signal_name):
-        """Get the SignalKind enum for a given signal name."""
-        if hasattr(self, signal_name):
-            signal_value = getattr(self, signal_name)
-            if isinstance(signal_value, SignalValue):
-                return signal_value.kind
-        return SignalKind.OTHER
-
-    def get_signal_value(self, signal_name):
-        """Get the numeric value for a given signal name."""
-        if hasattr(self, signal_name):
-            signal_value = getattr(self, signal_name)
-            if isinstance(signal_value, SignalValue):
-                return signal_value.value
-        return None
-
-    def get_signal_vtype(self, signal_name):
-        """Get the ngspice v_type value by extracting it from the SignalKind enum."""
-        kind = self.get_signal_kind(signal_name)
-        return kind.get_vtype_value()
-
-    def get_signal_description(self, signal_name):
-        """Get a human-readable description by extracting it from the SignalKind enum."""
-        kind = self.get_signal_kind(signal_name)
-        return kind.get_description()
-
-    def get_signal_array(self, signal_name):
-        """Get a SignalArray for a given signal name (single value wrapped in array)."""
-        if signal_name in self._data:
-            kind = self.get_signal_kind(signal_name)
-            value = self.get_signal_value(signal_name)
-            return SignalArray(kind=kind, values=[value])
-        return None
-
-    def list_signals(self):
-        """List all available signal names."""
-        # Get signals from both _data and SignalValue attributes
-        signals = []
-        for attr_name, attr_value in self.__dict__.items():
-            if isinstance(attr_value, SignalValue):
-                signals.append(attr_name)
-        return signals
-
-    def list_signals_by_kind(self, kind):
-        """List signal names filtered by SignalKind."""
-        return [
-            name for name in self.list_signals() if self.get_signal_kind(name) == kind
-        ]
-
-    def list_signals_by_vtype(self, vtype):
-        """List signal names filtered by ngspice v_type value extracted from SignalKind enum."""
-        return [
-            name
-            for name in self.list_signals()
-            if self.get_signal_kind(name).get_vtype_value() == vtype
-        ]
-
-    def analyze_signal_types(self):
-        """Analyze and return signal type statistics using pattern matching."""
-        stats = {
-            "time_signals": [],
-            "voltage_signals": [],
-            "current_signals": [],
-            "other_signals": [],
-        }
-
-        for name in self.list_signals():
-            kind = self.get_signal_kind(name)
-            # Use pattern matching on the SignalKind enum itself
-            match kind:
-                case SignalKind.TIME:
-                    stats["time_signals"].append(name)
-                case SignalKind.VOLTAGE:
-                    stats["voltage_signals"].append(name)
-                case SignalKind.CURRENT:
-                    stats["current_signals"].append(name)
-                case SignalKind.OTHER:
-                    stats["other_signals"].append(name)
-
-        return stats
-
-    def get_signal_info(self, signal_name):
-        """Get comprehensive signal information using pattern matching."""
-        if not hasattr(self, signal_name) or not isinstance(
-            getattr(self, signal_name), SignalValue
-        ):
-            return None
-
-        kind = self.get_signal_kind(signal_name)
-        value = self.get_signal_value(signal_name)
-
-        # Extract data from the SignalKind enum using pattern matching
-        vtype, description = kind.match()
-
-        return {
-            "name": signal_name,
-            "value": value,
-            "vtype": vtype,
-            "description": description,
-            "kind": kind,
-            "is_time": kind.is_time(),
-            "is_voltage": kind.is_voltage(),
-            "is_current": kind.is_current(),
-            "is_other": kind.is_other(),
-        }
 
 
 class RotateTest(Cell):
@@ -658,12 +546,16 @@ class SimBase(Cell):
                                         if callback:
                                             callback(data_point)
                                         data = data_point.get("data", {})
+                                        signal_kinds = data_point.get(
+                                            "signal_kinds", {}
+                                        )
                                         progress = data_point.get("progress", 0.0)
                                         yield TranResult(
                                             data,
                                             node,
                                             highlevel_sim.netlister,
                                             progress,
+                                            signal_kinds,
                                         )
 
                             elif future == status_future:
@@ -701,12 +593,16 @@ class SimBase(Cell):
                                             if callback:
                                                 callback(data_point)
                                             data = data_point.get("data", {})
+                                            signal_kinds = data_point.get(
+                                                "signal_kinds", {}
+                                            )
                                             progress = data_point.get("progress", 0.0)
                                             yield TranResult(
                                                 data,
                                                 node,
                                                 highlevel_sim.netlister,
                                                 progress,
+                                                signal_kinds,
                                             )
                                         remaining_items += 1
                                     except queue.Empty:
@@ -722,7 +618,6 @@ class SimBase(Cell):
         Args:
             tstep: Time step for the simulation
             tstop: Stop time for the simulation
-            backend: Simulation backend ('ffi' or 'subprocess')
             enable_savecurrents: If True (default), enables .option savecurrents
         """
         # Create hierarchical simulation

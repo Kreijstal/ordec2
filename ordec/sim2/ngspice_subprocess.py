@@ -525,6 +525,7 @@ class _SubprocessBackend:
                                         data_point = {
                                             "timestamp": time.time(),
                                             "data": {"time": time_val},
+                                            "signal_kinds": {"time": SignalKind.TIME},
                                             "index": self._data_points_sent,
                                             "progress": min(1.0, time_val / tstop)
                                             if tstop > 0
@@ -543,6 +544,26 @@ class _SubprocessBackend:
                                                     data_point["data"][header] = float(
                                                         row_data[i]
                                                     )
+                                                    # Determine signal kind for this header
+                                                    if header.lower() == "time":
+                                                        data_point["signal_kinds"][
+                                                            header
+                                                        ] = SignalKind.TIME
+                                                    elif (
+                                                        header.startswith("@")
+                                                        and "[" in header
+                                                    ):
+                                                        data_point["signal_kinds"][
+                                                            header
+                                                        ] = SignalKind.CURRENT
+                                                    elif header.endswith("#branch"):
+                                                        data_point["signal_kinds"][
+                                                            header
+                                                        ] = SignalKind.CURRENT
+                                                    else:
+                                                        data_point["signal_kinds"][
+                                                            header
+                                                        ] = SignalKind.VOLTAGE
                                                 except ValueError:
                                                     pass  # Skip non-numeric values
 
@@ -555,6 +576,10 @@ class _SubprocessBackend:
                                                     data_point["data"][node_name] = (
                                                         voltage_val
                                                     )
+                                                    # Add signal kind for voltage data
+                                                    data_point["signal_kinds"][
+                                                        node_name
+                                                    ] = SignalKind.VOLTAGE
 
                                         # Debug: print data point structure
                                         if (

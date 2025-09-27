@@ -232,6 +232,25 @@ class _FFIBackend:
                     progress = max(progress, self._last_progress)
                     self._last_progress = progress
 
+                # Include signal type information in the async data
+                signal_kinds = {}
+                for vec_name in data_points:
+                    if vec_name != "time":  # time is handled separately
+                        vec_info = self._get_vector_info(vec_name)
+                        if vec_info:
+                            try:
+                                signal_kinds[vec_name] = SignalKind.from_vtype(
+                                    int(vec_info.v_type)
+                                )
+                            except Exception:
+                                # Fallback to heuristic if v_type mapping fails
+                                if vec_name.startswith("@") and "[" in vec_name:
+                                    signal_kinds[vec_name] = SignalKind.CURRENT
+                                elif vec_name.endswith("#branch"):
+                                    signal_kinds[vec_name] = SignalKind.CURRENT
+                                else:
+                                    signal_kinds[vec_name] = SignalKind.VOLTAGE
+
                 # Store in queue for safe retrieval
                 if data_points:
                     try:
@@ -239,6 +258,7 @@ class _FFIBackend:
                             {
                                 "timestamp": current_time,
                                 "data": data_points,
+                                "signal_kinds": signal_kinds,
                                 "index": vec_count,
                                 "progress": progress,
                             }
