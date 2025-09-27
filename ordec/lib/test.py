@@ -358,14 +358,14 @@ class SimBase(Cell):
         sim.op()
         return s
 
-    def sim_ac(self, *args, **kwargs):
+    def sim_ac(self, *args, backend=None, **kwargs):
         s = SimHierarchy(cell=self)
-        backend = kwargs.pop('backend', self.backend)
+        backend = backend if backend is not None else self.backend
         sim = HighlevelSim(self.schematic, s, backend=backend)
         sim.ac(*args, **kwargs)
         return s
 
-    def sim_tran_async(self, tstep, tstop, **kwargs):
+    def sim_tran_async(self, tstep, tstop, callback=None, throttle_interval=0.1, enable_savecurrents=True, backend=None):
         """Run async transient simulation.
 
         Args:
@@ -374,17 +374,15 @@ class SimBase(Cell):
             callback: Optional callback function for data updates
             throttle_interval: Minimum time between callbacks (seconds)
             enable_savecurrents: If True (default), enables .option savecurrents
+            backend: Optional backend override (defaults to self.backend)
         """
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
         from ..sim2.ngspice import Ngspice
 
-        callback = kwargs.pop('callback', None)
-        throttle_interval = kwargs.pop('throttle_interval', 0.1)
-        enable_savecurrents = kwargs.pop('enable_savecurrents', True)
-
         node = SimHierarchy()
-        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents, backend=self.backend)
+        hl_backend = backend if backend is not None else self.backend
+        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents, backend=hl_backend)
 
         # Create result wrapper class
         class TranResult:
@@ -407,7 +405,7 @@ class SimBase(Cell):
                         setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
 
         # Run simulation
-        with Ngspice.launch(backend=self.backend, debug=kwargs.get('debug', False)) as sim:
+        with Ngspice.launch(backend=hl_backend) as sim:
             sim.load_netlist(highlevel_sim.netlister.out())
 
             # Get the queue from the new queue-based tran_async
@@ -511,7 +509,7 @@ class SimBase(Cell):
 
 
 
-    def sim_tran(self, tstep, tstop, **kwargs):
+    def sim_tran(self, tstep, tstop, backend=None, **kwargs):
         """Run sync transient simulation.
 
         Args:
@@ -523,8 +521,8 @@ class SimBase(Cell):
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
         s = SimHierarchy(cell=self)
-        backend = kwargs.pop('backend', self.backend)
-        sim = HighlevelSim(self.schematic, s, backend=backend, **kwargs)
+        chosen_backend = backend if backend is not None else self.backend
+        sim = HighlevelSim(self.schematic, s, backend=chosen_backend, **kwargs)
         sim.tran(tstep, tstop)
         return s
 

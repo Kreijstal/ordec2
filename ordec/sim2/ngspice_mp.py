@@ -477,8 +477,8 @@ class IsolatedFFIBackend:
     def reset(self): return self._call_worker('reset')
     def cleanup(self): pass
 
-    def _create_async_generator(self, cmd, *args, **kwargs):
-        callback = kwargs.pop('callback', None)
+    def _create_async_generator(self, cmd, *args, callback=None, **kwargs):
+        # callback is now an explicit parameter and must NOT be forwarded to the worker
         self._call_worker(cmd, *args, **kwargs)
 
         def generator_with_callback():
