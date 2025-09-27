@@ -25,9 +25,9 @@ def test_highlevel_async_tran_basic(backend):
         data_points.append(result)
         time_values.append(result.time)
 
-        # Verify hierarchical access works
+        # Verify hierarchical access works; result.a is a numeric value representing the signal
         assert hasattr(result, 'a')
-        assert hasattr(result.a, 'voltage')
+        assert isinstance(result.a, (int, float))
         assert hasattr(result, 'time')
 
         # Break after collecting enough data
@@ -161,7 +161,7 @@ def test_highlevel_async_mos_sourcefollower(backend):
 
     final_result = data_points[-1]
     assert hasattr(final_result, 'o')
-    assert hasattr(final_result.o, 'voltage')
+    assert isinstance(final_result.o, (int, float))
 
 
 @pytest.mark.libngspice
@@ -180,7 +180,7 @@ def test_highlevel_async_mos_inverter(backend):
 
     final_result = data_points[-1]
     assert hasattr(final_result, 'o')
-    assert hasattr(final_result.o, 'voltage')
+    assert isinstance(final_result.o, (int, float))
 
 
 @pytest.mark.libngspice
@@ -198,7 +198,7 @@ def test_highlevel_async_sky_inverter(backend):
 
     final_result = data_points[-1]
     assert hasattr(final_result, 'o')
-    assert hasattr(final_result.o, 'voltage')
+    assert isinstance(final_result.o, (int, float))
 
 
 @pytest.mark.libngspice
@@ -234,7 +234,7 @@ def test_highlevel_async_multiple_circuits(backend):
 
     assert len(results1) >= 1
     assert hasattr(results1[0], 'a')
-    assert hasattr(results1[0].a, 'voltage')
+    assert isinstance(results1[0].a, (int, float))
 
     # Second circuit
     h2 = lib_test.ResdivHierTb(backend=backend)
@@ -246,7 +246,7 @@ def test_highlevel_async_multiple_circuits(backend):
 
     assert len(results2) >= 1
     assert hasattr(results2[0], 'r')
-    assert hasattr(results2[0].r, 'voltage')
+    assert isinstance(results2[0].r, (int, float))
 
 
 @pytest.mark.libngspice
@@ -265,7 +265,12 @@ def test_highlevel_async_parameter_sweep(backend):
                 break
 
         assert len(async_results) >= 1
+<<<<<<< HEAD:tests/test_sim2_async.py
         results[vin] = async_results[-1].o.voltage
+=======
+        # Store the final numeric value for comparison
+        results[vin] = async_results[-1].o
+>>>>>>> 2a47021 (simplify TransResult):tests/test_sim2_ffi_async.py
 
     assert len(results) == 3
     for vin in input_voltages:

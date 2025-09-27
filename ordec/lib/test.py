@@ -10,6 +10,31 @@ from .base import Gnd, NoConn, Res, Vdc, Idc, Cap, SinusoidalVoltageSource
 from . import sky130
 from . import ihp130
 
+# TranResult stores raw numeric values directly on attributes (no wrapper dataclasses)
+
+class TranResult:
+    def __init__(self, data_dict, sim_hierarchy, netlister, progress):
+        self._data = data_dict
+        self._node = sim_hierarchy
+        self._netlister = netlister
+        self.time = data_dict.get('time', 0.0)
+        self.progress = progress
+
+        # Create hierarchical access (nets)
+        for net in sim_hierarchy.all(SimNet):
+            net_name = netlister.name_hier_simobj(net)
+            if net_name in data_dict:
+                # Store raw numeric value directly (or None)
+                self.__dict__[net.npath.name] = data_dict[net_name]
+
+        # Create hierarchical access (instances)
+        for inst in sim_hierarchy.all(SimInstance):
+            inst_name = netlister.name_hier_simobj(inst)
+            if inst_name in data_dict:
+                # Store instance value directly; consumers should treat it as a numeric value
+                _val = data_dict[inst_name]
+                self.__dict__[inst.npath.name] = _val
+
 class RotateTest(Cell):
     @generate
     def schematic(self):
@@ -373,8 +398,6 @@ class SimBase(Cell):
             tstop: Stop time for the simulation
             callback: Optional callback function for data updates
             throttle_interval: Minimum time between callbacks (seconds)
-            enable_savecurrents: If True (default), enables .option savecurrents
-            backend: Optional backend override (defaults to self.backend)
         """
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
@@ -384,27 +407,6 @@ class SimBase(Cell):
         hl_backend = backend if backend is not None else self.backend
         highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents, backend=hl_backend)
 
-        # Create result wrapper class
-        class TranResult:
-            def __init__(self, data_dict, sim_hierarchy, netlister, progress):
-                self._data = data_dict
-                self._node = sim_hierarchy
-                self._netlister = netlister
-                self.time = data_dict.get('time', 0.0)
-                self.progress = progress
-
-                # Create hierarchical access
-                for net in sim_hierarchy.all(SimNet):
-                    net_name = netlister.name_hier_simobj(net)
-                    if net_name in data_dict:
-                        setattr(self, net.npath.name, type('NetData', (), {'voltage': data_dict[net_name]})())
-
-                for inst in sim_hierarchy.all(SimInstance):
-                    inst_name = netlister.name_hier_simobj(inst)
-                    if inst_name in data_dict:
-                        setattr(self, inst.npath.name, type('InstData', (), {'voltage': data_dict[inst_name]})())
-
-        # Run simulation
         with Ngspice.launch(backend=hl_backend) as sim:
             sim.load_netlist(highlevel_sim.netlister.out())
 
