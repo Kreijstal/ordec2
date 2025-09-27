@@ -283,13 +283,13 @@ class InteractiveSimulation:
     def stop_simulation(self):
         self.is_running = False
 
-    def start_vcd_recording(self, filename="interactive_simulation.vcd", timescale="1us"):
+    def start_vcd_recording(self, filename="interactive_simulation.vcd", timescale="1u"):
         """
         Start recording simulation data for VCD export with streaming to file.
 
         Args:
             filename: Output VCD filename
-            timescale: VCD timescale (e.g., "1us", "1ns")
+            timescale: VCD timescale (e.g., "1u", "1n")
         """
         try:
             self._vcd_file = open(filename, 'w')
@@ -403,7 +403,7 @@ class InteractiveSimulation:
 
                     self._vcd_file.write(f"r{value} {char}\n")
 
-    def export_to_vcd(self, filename="interactive_simulation.vcd", timescale="1us"):
+    def export_to_vcd(self, filename="interactive_simulation.vcd", timescale="1u"):
         return self.start_vcd_recording(filename, timescale)
 
 def main(plot_all_signals=False):
@@ -449,4 +449,4 @@ if __name__ == "__main__":
 
 InteractiveRCCircuit().schematic
 
-interactive_sim.start_vcd_recording("test.vcd") 
+interactive_sim.start_vcd_recording("test.vcd")

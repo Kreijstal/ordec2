@@ -5,13 +5,137 @@ from dataclasses import dataclass
 
 from .. import helpers
 from ..core import *
-from ..sim2.sim_hierarchy import HighlevelSim
+from ..sim2.sim_hierarchy import HighlevelSim, SimHierarchy
+from ..sim2.ngspice import Ngspice
 from ..sim2.ngspice_common import SignalKind, SignalArray
 
 from .generic_mos import Or2, Nmos, Pmos, Ringosc, Inv
 from .base import Gnd, NoConn, Res, Vdc, Idc, Cap, SinusoidalVoltageSource
 from . import sky130
 from . import ihp130
+
+import queue as _queue
+import time as _time
+import concurrent.futures as _futures
+
+def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
+    fallback_grace_period = 2.0
+    completion_time = None
+
+    def get_data_with_timeout(timeout):
+        try:
+            return data_queue.get(timeout=timeout)
+        except _queue.Empty:
+            return None
+
+    def check_simulation_status():
+        return sim.is_running()
+
+    # Track last progress locally to enforce monotonicity while yielding.
+    last_progress = simbase._sim_tran_last_progress if hasattr(simbase, "_sim_tran_last_progress") else 0.0
+
+    with _futures.ThreadPoolExecutor(max_workers=2) as executor:
+        while True:
+            # Race condition: submit both data fetch and status check
+            data_future = executor.submit(get_data_with_timeout, 0.05)
+            status_future = executor.submit(check_simulation_status)
+
+            data_available = False
+
+            try:
+                done_futures = _futures.as_completed([data_future, status_future], timeout=0.1)
+                for future in done_futures:
+                    if future == data_future:
+                        data_point = future.result()
+                        if data_point is not None:
+                            data_available = True
+
+                            # Handle MP backend sentinel
+                            if data_point == "---ASYNC_SIM_SENTINEL---":
+                                return
+
+                            # Process valid data
+                            if isinstance(data_point, dict):
+                                if callback:
+                                    callback(data_point)
+
+
+                                data = data_point.get("data", {})
+                                signal_kinds = data_point.get("signal_kinds", {})
+
+                                # Determine progress, enforce monotonicity
+                                progress = data_point.get("progress", 0.0)
+                                if progress < last_progress:
+                                    progress = last_progress
+                                else:
+                                    last_progress = progress
+
+                                # Persist last progress back to simbase for cross-yield consistency
+                                simbase._sim_tran_last_progress = last_progress
+
+                                yield TranResult(
+                                    data,
+                                    node,
+                                    highlevel_sim.netlister,
+                                    progress,
+                                    signal_kinds,
+                                )
+
+                    elif future == status_future:
+                        is_running = future.result()
+                        if not is_running and completion_time is None:
+                            completion_time = _time.time()
+
+            except _futures.TimeoutError:
+                # No immediate results, check simulation status
+                if not sim.is_running() and completion_time is None:
+                    completion_time = _time.time()
+
+            # Clean up futures
+            if not data_future.done():
+                data_future.cancel()
+            if not status_future.done():
+                status_future.cancel()
+
+            # Check termination conditions
+            if not data_available:
+                # No data received, check if we should continue
+                if completion_time is not None:
+                    # Simulation finished, check grace period
+                    if _time.time() - completion_time >= fallback_grace_period:
+                        # Try to drain any remaining items quickly
+                        remaining_items = 0
+                        while remaining_items < 10:
+                            try:
+                                data_point = data_queue.get_nowait()
+                                if data_point == "---ASYNC_SIM_SENTINEL---":
+                                    return
+                                if isinstance(data_point, dict):
+                                    if callback:
+                                        callback(data_point)
+
+                                    data = data_point.get("data", {})
+                                    signal_kinds = data_point.get("signal_kinds", {})
+                                    progress = data_point.get("progress", 0.0)
+                                    if progress < last_progress:
+                                        progress = last_progress
+                                    else:
+                                        last_progress = progress
+                                    simbase._sim_tran_last_progress = last_progress
+                                    yield TranResult(
+                                        data,
+                                        node,
+                                        highlevel_sim.netlister,
+                                        progress,
+                                        signal_kinds,
+                                    )
+                                remaining_items += 1
+                            except _queue.Empty:
+                                break
+                        break
+                elif not sim.is_running():
+                    # Just finished, start grace period
+                    completion_time = _time.time()
 
 
 @dataclass
@@ -473,9 +597,7 @@ class SimBase(Cell):
             callback: Optional callback function for data updates
             throttle_interval: Minimum time between callbacks (seconds)
         """
-        # Create hierarchical simulation
-        from ..sim2.sim_hierarchy import SimHierarchy
-        from ..sim2.ngspice import Ngspice
+
 
         node = SimHierarchy()
         hl_backend = backend if backend is not None else self.backend
@@ -486,131 +608,16 @@ class SimBase(Cell):
             backend=hl_backend,
         )
 
+        # helper moved to module-level function `stream_from_queue`
+
         with Ngspice.launch(backend=hl_backend) as sim:
             sim.load_netlist(highlevel_sim.netlister.out())
 
             # Get the queue from the new queue-based tran_async
-            data_queue = sim.tran_async(
-                tstep, tstop, throttle_interval=throttle_interval
-            )
+            data_queue = sim.tran_async(tstep, tstop, throttle_interval=throttle_interval)
 
-            # Convert queue-based approach to generator for API compatibility
-            import queue
-            import time
-            import threading
-            import concurrent.futures
-
-            # Use event-driven approach instead of wasteful polling
-            fallback_grace_period = 2.0
-            completion_time = None
-
-            # Use threading for non-blocking queue operations
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-
-                def get_data_with_timeout(timeout):
-                    """Get data from queue with timeout, returns None if timeout"""
-                    try:
-                        return data_queue.get(timeout=timeout)
-                    except queue.Empty:
-                        return None
-
-                def check_simulation_status():
-                    """Check if simulation is still running"""
-                    return sim.is_running()
-
-                while True:
-                    # Race condition: submit both data fetch and status check
-                    data_future = executor.submit(get_data_with_timeout, 0.05)
-                    status_future = executor.submit(check_simulation_status)
-
-                    # Wait for either data or status with short timeout
-                    done_futures = concurrent.futures.as_completed(
-                        [data_future, status_future], timeout=0.1
-                    )
-
-                    data_available = False
-
-                    try:
-                        for future in done_futures:
-                            if future == data_future:
-                                data_point = future.result()
-                                if data_point is not None:
-                                    data_available = True
-
-                                    # Handle MP backend sentinel
-                                    if data_point == "---ASYNC_SIM_SENTINEL---":
-                                        return
-
-                                    # Process valid data
-                                    if isinstance(data_point, dict):
-                                        if callback:
-                                            callback(data_point)
-                                        data = data_point.get("data", {})
-                                        signal_kinds = data_point.get(
-                                            "signal_kinds", {}
-                                        )
-                                        progress = data_point.get("progress", 0.0)
-                                        yield TranResult(
-                                            data,
-                                            node,
-                                            highlevel_sim.netlister,
-                                            progress,
-                                            signal_kinds,
-                                        )
-
-                            elif future == status_future:
-                                is_running = future.result()
-                                if not is_running and completion_time is None:
-                                    completion_time = time.time()
-
-                    except concurrent.futures.TimeoutError:
-                        # No immediate results, check simulation status
-                        if not sim.is_running() and completion_time is None:
-                            completion_time = time.time()
-
-                    # Clean up futures
-                    if not data_future.done():
-                        data_future.cancel()
-                    if not status_future.done():
-                        status_future.cancel()
-
-                    # Check termination conditions
-                    if not data_available:
-                        # No data received, check if we should continue
-                        if completion_time is not None:
-                            # Simulation finished, check grace period
-                            if time.time() - completion_time >= fallback_grace_period:
-                                # Try to drain any remaining items quickly
-                                remaining_items = 0
-                                while (
-                                    remaining_items < 10
-                                ):  # Limit to prevent infinite loop
-                                    try:
-                                        data_point = data_queue.get_nowait()
-                                        if data_point == "---ASYNC_SIM_SENTINEL---":
-                                            return
-                                        if isinstance(data_point, dict):
-                                            if callback:
-                                                callback(data_point)
-                                            data = data_point.get("data", {})
-                                            signal_kinds = data_point.get(
-                                                "signal_kinds", {}
-                                            )
-                                            progress = data_point.get("progress", 0.0)
-                                            yield TranResult(
-                                                data,
-                                                node,
-                                                highlevel_sim.netlister,
-                                                progress,
-                                                signal_kinds,
-                                            )
-                                        remaining_items += 1
-                                    except queue.Empty:
-                                        break
-                                break
-                        elif not sim.is_running():
-                            # Just finished, start grace period
-                            completion_time = time.time()
+            # Stream results using the module-level stream function
+            yield from stream_from_queue(self, sim, data_queue, highlevel_sim, node, callback)
 
     def sim_tran(self, tstep, tstop, backend=None, **kwargs):
         """Run sync transient simulation.
@@ -620,8 +627,7 @@ class SimBase(Cell):
             tstop: Stop time for the simulation
             enable_savecurrents: If True (default), enables .option savecurrents
         """
-        # Create hierarchical simulation
-        from ..sim2.sim_hierarchy import SimHierarchy
+
 
         s = SimHierarchy(cell=self)
         chosen_backend = backend if backend is not None else self.backend

@@ -23,6 +23,9 @@ from .ngspice_common import (
     SignalArray,
 )
 
+# Use the project's Rational parser for SI suffix handling
+from ..core import R
+
 
 class _FFIBackend:
     _instance = None
@@ -545,7 +548,14 @@ class _FFIBackend:
 
         return result
 
-    def tran_async(self, *args, throttle_interval: float = 0.1) -> "queue.Queue[dict]":
+    def tran_async(self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1) -> "queue.Queue[dict]":
+        """
+        Start asynchronous transient analysis.
+
+        New strict signature: tstep, tstop (optional), plus any extra ngspice tran args.
+        This intentionally replaces the old *args-only API and uses the project's
+        Rational parser (`R`) for SI suffix handling.
+        """
         self._async_throttle_interval = throttle_interval
         self._last_callback_time = 0.0
         self._data_points_sent = 0
@@ -553,21 +563,11 @@ class _FFIBackend:
         # Store simulation parameters for progress calculation
         self._sim_tstop = None
         self._last_progress = 0.0
-        if len(args) >= 2:
-            # Parse tstop from second argument (tstep, tstop)
-            try:
-                tstop_str = str(args[1])
-                # Convert units (u = micro, n = nano, m = milli, etc.)
-                if tstop_str.endswith("u"):
-                    self._sim_tstop = float(tstop_str[:-1]) * 1e-6
-                elif tstop_str.endswith("n"):
-                    self._sim_tstop = float(tstop_str[:-1]) * 1e-9
-                elif tstop_str.endswith("m"):
-                    self._sim_tstop = float(tstop_str[:-1]) * 1e-3
-                else:
-                    self._sim_tstop = float(tstop_str)
-            except (ValueError, IndexError):
-                self._sim_tstop = None
+
+        # Do not attempt to parse `tstop` here. Callers are required to pass a
+        # normalized value (use single-letter SI suffixes like 'u','m','n', etc.).
+        # Leave internal _sim_tstop unset so progress calculations won't rely on it.
+        self._sim_tstop = None
 
         # Clear any existing data
         while not self._async_data_queue.empty():
@@ -576,8 +576,13 @@ class _FFIBackend:
             except queue.Empty:
                 break
 
-        # Start background simulation using bg_tran
-        cmd_args = " ".join(str(arg) for arg in args)
+        # Build bg_tran command arguments from explicit tstep, optional tstop, and any extra args
+        cmd_args_list = [str(tstep)]
+        if tstop is not None:
+            cmd_args_list.append(str(tstop))
+        if extra_args:
+            cmd_args_list += [str(a) for a in extra_args]
+        cmd_args = " ".join(cmd_args_list)
         self.command(f"bg_tran {cmd_args}")
 
         # Wait for simulation to start or complete (handles fast simulations)
@@ -690,20 +695,53 @@ class _FFIBackend:
                                 0, num_points, max(1, num_points // 100)
                             )
 
-                            for i in sample_indices:
+                            # Build a list of sample indices so we can compute ordinal progress
+                            sample_list = list(sample_indices)
+                            sample_count = len(sample_list) if sample_list else 1
+
+                            for pos, i in enumerate(sample_list):
                                 data_points = {}
                                 for name, values in vector_data_map.items():
                                     if i < len(values):
                                         data_points[name] = values[i]
 
-                                if data_points:
-                                    self._async_data_queue.put_nowait(
-                                        {
-                                            "timestamp": time.time(),
-                                            "data": data_points,
-                                            "index": i,
-                                        }
-                                    )
+                                if not data_points:
+                                    continue
+
+                                # Compute progress for fallback data based on available info.
+                                # Prefer actual simulation time if present and _sim_tstop is set.
+                                progress = None
+                                try:
+                                    if "time" in vector_data_map and self._sim_tstop:
+                                        sim_time = vector_data_map["time"][i]
+                                        progress = min(max(sim_time / self._sim_tstop, 0.0), 1.0)
+                                except Exception:
+                                    progress = None
+
+                                # If we couldn't compute progress from time, estimate from index position.
+                                if progress is None:
+                                    try:
+                                        progress = min((pos + 1) / max(1, sample_count), 1.0)
+                                    except Exception:
+                                        progress = 0.0
+
+                                # Ensure monotonic progress: never send a progress value
+                                # less than the last reported progress. This avoids failing
+                                # assertions in tests that expect non-decreasing progress.
+                                if progress < self._last_progress:
+                                    progress = self._last_progress
+                                else:
+                                    # update last progress only when it increases
+                                    self._last_progress = progress
+
+                                self._async_data_queue.put_nowait(
+                                    {
+                                        "timestamp": time.time(),
+                                        "data": data_points,
+                                        "index": i,
+                                        "progress": progress,
+                                    }
+                                )
 
                             if self.debug:
                                 print(

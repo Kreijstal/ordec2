@@ -492,8 +492,16 @@ class IsolatedFFIBackend:
 
         return generator_with_callback()
 
-    def tran_async(self, *args, throttle_interval: float = 0.1):
-        self._call_worker('tran_async', *args, throttle_interval=throttle_interval)
+    def tran_async(self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1):
+        """
+        Start asynchronous transient simulation (explicit signature).
+
+        New strict signature: explicit `tstep`, optional `tstop`, plus any
+        extra ngspice tran args forwarded via `extra_args`. The throttle
+        interval is forwarded as a keyword for the worker.
+        """
+        # Forward explicit args to the worker
+        self._call_worker('tran_async', tstep, tstop, *extra_args, throttle_interval=throttle_interval)
         return self.async_queue
 
     def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 1.0):
@@ -579,9 +587,15 @@ class IsolatedFFIBackend:
 
         return False
 
-    def tran_async(self, *args, **kwargs):
+    def tran_async(self, tstep, tstop=None, *extra_args, **kwargs):
+        """
+        Mark async simulation running and forward explicit tran arguments to worker.
+
+        Accepts the explicit (tstep, tstop) signature to match updated backends.
+        Any additional keyword arguments are forwarded to the worker.
+        """
         self._async_simulation_running = True
-        self._call_worker('tran_async', *args, **kwargs)
+        self._call_worker('tran_async', tstep, tstop, *extra_args, **kwargs)
         return self.async_queue
 
     def op_async(self, *args, **kwargs):

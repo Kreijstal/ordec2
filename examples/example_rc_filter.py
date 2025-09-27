@@ -250,7 +250,7 @@ def run_rc_square_wave_simulation_with_vcd():
     sim.backend = backend_to_use
 
     # Simulate for 5 periods to see the integration curve clearly
-    print("Running transient simulation for 5ms using HighLevelSim...")
+    print("Running transient simulation for 5m using HighLevelSim...")
     sim.tran("10u", "5m")
 
     time_data = s.time
@@ -268,7 +268,7 @@ def run_rc_square_wave_simulation_with_vcd():
     # Export to VCD using the new HighLevelSim method
     print("\nExporting simulation results to VCD format...")
     try:
-        vcd_success = sim.export_to_vcd("rc_simulation.vcd", timescale="1us")
+        vcd_success = sim.export_to_vcd("rc_simulation.vcd", timescale="1u")
     except Exception as e:
         print(f"Error during VCD export: {e}")
         return False

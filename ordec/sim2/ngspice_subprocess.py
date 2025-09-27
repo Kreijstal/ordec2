@@ -16,6 +16,7 @@ from subprocess import Popen, PIPE, STDOUT
 from typing import Iterator, Optional
 
 import numpy as np
+from ..core import R
 
 from .ngspice_common import (
     NgspiceValue,
@@ -330,55 +331,28 @@ class _SubprocessBackend:
 
         return result
 
-    def tran_async(self, *args, throttle_interval: float = 0.1) -> "queue.Queue[dict]":
+    def tran_async(self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1) -> "queue.Queue[dict]":
         """
         Start asynchronous transient analysis using chunked simulation.
 
-        This provides async-like behavior for the subprocess backend by running
-        transient analysis in small time chunks and supporting halt/resume operations.
-
-        Args:
-            *args: tran arguments (tstep, tstop, etc.)
-            throttle_interval: Minimum time between data updates
-
-        Returns:
-            queue.Queue object containing simulation data points
+        New strict signature: explicit `tstep` and optional `tstop`. Additional
+        tran tokens may be passed via `extra_args`. Time parsing uses the
+        project's Rational parser `R` (which understands SI suffixes).
         """
         if self._async_running:
             raise RuntimeError("Async simulation is already running")
 
-        # Parse arguments
-        if len(args) < 2:
-            raise ValueError("tran_async requires at least tstep and tstop arguments")
-
-        tstep_str, tstop_str = str(args[0]), str(args[1])
-
-        # Parse time values with unit support
-        def parse_time(time_str):
-            time_str = time_str.strip()
-            if time_str.endswith("us"):
-                return float(time_str[:-2]) * 1e-6
-            elif time_str.endswith("ns"):
-                return float(time_str[:-2]) * 1e-9
-            elif time_str.endswith("ms"):
-                return float(time_str[:-2]) * 1e-3
-            elif time_str.endswith("ps"):
-                return float(time_str[:-2]) * 1e-12
-            elif time_str.endswith("u"):
-                return float(time_str[:-1]) * 1e-6
-            elif time_str.endswith("n"):
-                return float(time_str[:-1]) * 1e-9
-            elif time_str.endswith("m"):
-                return float(time_str[:-1]) * 1e-3
-            elif time_str.endswith("p"):
-                return float(time_str[:-1]) * 1e-12
-            else:
-                return float(time_str)
-
+        # We do NOT normalize or strip trailing 's' from unit strings here.
+        # Callers must provide single-letter SI suffixes (e.g. "5u", "10m", "1n"),
+        # not forms with a trailing 's' (e.g. "5us"). Parse directly with R.
+        tstep_str = str(tstep).strip()
+        if tstop is None:
+            raise ValueError("tran_async requires tstop argument")
+        tstop_str = str(tstop).strip()
         try:
-            tstep = parse_time(tstep_str)
-            tstop = parse_time(tstop_str)
-        except ValueError as e:
+            tstep_val = float(R(tstep_str))
+            tstop_val = float(R(tstop_str))
+        except Exception as e:
             raise ValueError(f"Invalid time format: {e}")
 
         # Create queue for results
@@ -387,10 +361,16 @@ class _SubprocessBackend:
         self._async_running = True
         self._data_points_sent = 0
 
+        # Build command parts (explicit tstep/tstop plus any extra args)
+        cmd_parts = [tstep_str, str(tstop)]
+        if extra_args:
+            cmd_parts += [str(a) for a in extra_args]
+        cmd_tstep_str = tstep_str  # keep original user-facing tstep string for print/commands
+
         # Start background thread for chunked simulation
         self._async_thread = threading.Thread(
             target=self._run_chunked_simulation,
-            args=(tstep, tstop, tstep_str, throttle_interval),
+            args=(tstep_val, tstop_val, cmd_tstep_str, throttle_interval),
             daemon=True,
         )
         self._async_thread.start()
