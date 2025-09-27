@@ -1,39 +1,169 @@
 # SPDX-FileCopyrightText: 2025 ORDeC contributors
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+
 from .. import helpers
 from ..core import *
 from ..sim2.sim_hierarchy import HighlevelSim
+from ..sim2.ngspice_common import SignalKind, SignalArray
 
 from .generic_mos import Or2, Nmos, Pmos, Ringosc, Inv
 from .base import Gnd, NoConn, Res, Vdc, Idc, Cap, SinusoidalVoltageSource
 from . import sky130
 from . import ihp130
 
-# TranResult stores raw numeric values directly on attributes (no wrapper dataclasses)
+
+@dataclass
+class SignalValue:
+    value: float
+    kind: SignalKind
+
+    def get_vtype(self) -> int:
+        return self.kind.get_vtype_value()
+
+    def get_description(self) -> str:
+        return self.kind.get_description()
+
 
 class TranResult:
     def __init__(self, data_dict, sim_hierarchy, netlister, progress):
         self._data = data_dict
         self._node = sim_hierarchy
         self._netlister = netlister
-        self.time = data_dict.get('time', 0.0)
+        self.time = data_dict.get("time", 0.0)
         self.progress = progress
+
+        # Handle time signal separately
+        if "time" in data_dict:
+            self.__dict__["time"] = SignalValue(
+                value=data_dict["time"], kind=SignalKind.TIME
+            )
 
         # Create hierarchical access (nets)
         for net in sim_hierarchy.all(SimNet):
             net_name = netlister.name_hier_simobj(net)
-            if net_name in data_dict:
-                # Store raw numeric value directly (or None)
-                self.__dict__[net.npath.name] = data_dict[net_name]
+            if net_name in data_dict and net_name != "time":
+                # Store SignalValue struct containing both value and kind
+                self.__dict__[net.npath.name] = SignalValue(
+                    value=data_dict[net_name], kind=SignalKind.VOLTAGE
+                )
 
         # Create hierarchical access (instances)
         for inst in sim_hierarchy.all(SimInstance):
             inst_name = netlister.name_hier_simobj(inst)
             if inst_name in data_dict:
-                # Store instance value directly; consumers should treat it as a numeric value
-                _val = data_dict[inst_name]
-                self.__dict__[inst.npath.name] = _val
+                # Store SignalValue struct containing both value and kind
+                self.__dict__[inst.npath.name] = SignalValue(
+                    value=data_dict[inst_name], kind=SignalKind.CURRENT
+                )
+
+    def get_signal_kind(self, signal_name):
+        """Get the SignalKind enum for a given signal name."""
+        if hasattr(self, signal_name):
+            signal_value = getattr(self, signal_name)
+            if isinstance(signal_value, SignalValue):
+                return signal_value.kind
+        return SignalKind.OTHER
+
+    def get_signal_value(self, signal_name):
+        """Get the numeric value for a given signal name."""
+        if hasattr(self, signal_name):
+            signal_value = getattr(self, signal_name)
+            if isinstance(signal_value, SignalValue):
+                return signal_value.value
+        return None
+
+    def get_signal_vtype(self, signal_name):
+        """Get the ngspice v_type value by extracting it from the SignalKind enum."""
+        kind = self.get_signal_kind(signal_name)
+        return kind.get_vtype_value()
+
+    def get_signal_description(self, signal_name):
+        """Get a human-readable description by extracting it from the SignalKind enum."""
+        kind = self.get_signal_kind(signal_name)
+        return kind.get_description()
+
+    def get_signal_array(self, signal_name):
+        """Get a SignalArray for a given signal name (single value wrapped in array)."""
+        if signal_name in self._data:
+            kind = self.get_signal_kind(signal_name)
+            value = self.get_signal_value(signal_name)
+            return SignalArray(kind=kind, values=[value])
+        return None
+
+    def list_signals(self):
+        """List all available signal names."""
+        # Get signals from both _data and SignalValue attributes
+        signals = []
+        for attr_name, attr_value in self.__dict__.items():
+            if isinstance(attr_value, SignalValue):
+                signals.append(attr_name)
+        return signals
+
+    def list_signals_by_kind(self, kind):
+        """List signal names filtered by SignalKind."""
+        return [
+            name for name in self.list_signals() if self.get_signal_kind(name) == kind
+        ]
+
+    def list_signals_by_vtype(self, vtype):
+        """List signal names filtered by ngspice v_type value extracted from SignalKind enum."""
+        return [
+            name
+            for name in self.list_signals()
+            if self.get_signal_kind(name).get_vtype_value() == vtype
+        ]
+
+    def analyze_signal_types(self):
+        """Analyze and return signal type statistics using pattern matching."""
+        stats = {
+            "time_signals": [],
+            "voltage_signals": [],
+            "current_signals": [],
+            "other_signals": [],
+        }
+
+        for name in self.list_signals():
+            kind = self.get_signal_kind(name)
+            # Use pattern matching on the SignalKind enum itself
+            match kind:
+                case SignalKind.TIME:
+                    stats["time_signals"].append(name)
+                case SignalKind.VOLTAGE:
+                    stats["voltage_signals"].append(name)
+                case SignalKind.CURRENT:
+                    stats["current_signals"].append(name)
+                case SignalKind.OTHER:
+                    stats["other_signals"].append(name)
+
+        return stats
+
+    def get_signal_info(self, signal_name):
+        """Get comprehensive signal information using pattern matching."""
+        if not hasattr(self, signal_name) or not isinstance(
+            getattr(self, signal_name), SignalValue
+        ):
+            return None
+
+        kind = self.get_signal_kind(signal_name)
+        value = self.get_signal_value(signal_name)
+
+        # Extract data from the SignalKind enum using pattern matching
+        vtype, description = kind.match()
+
+        return {
+            "name": signal_name,
+            "value": value,
+            "vtype": vtype,
+            "description": description,
+            "kind": kind,
+            "is_time": kind.is_time(),
+            "is_voltage": kind.is_voltage(),
+            "is_current": kind.is_current(),
+            "is_other": kind.is_other(),
+        }
+
 
 class RotateTest(Cell):
     @generate
@@ -41,18 +171,29 @@ class RotateTest(Cell):
         s = Schematic(cell=self)
         c = Or2().symbol
 
-        s.R0   = SchemInstance(c.portmap(), pos=Vec2R(1, 1), orientation=Orientation.R0)
-        s.R90  = SchemInstance(c.portmap(), pos=Vec2R(12, 1), orientation=Orientation.R90)
-        s.R180 = SchemInstance(c.portmap(), pos=Vec2R(18, 6), orientation=Orientation.R180)
-        s.R270 = SchemInstance(c.portmap(), pos=Vec2R(19, 6), orientation=Orientation.R270)
+        s.R0 = SchemInstance(c.portmap(), pos=Vec2R(1, 1), orientation=Orientation.R0)
+        s.R90 = SchemInstance(
+            c.portmap(), pos=Vec2R(12, 1), orientation=Orientation.R90
+        )
+        s.R180 = SchemInstance(
+            c.portmap(), pos=Vec2R(18, 6), orientation=Orientation.R180
+        )
+        s.R270 = SchemInstance(
+            c.portmap(), pos=Vec2R(19, 6), orientation=Orientation.R270
+        )
 
-        s.MY   = SchemInstance(c.portmap(), pos=Vec2R(6, 7), orientation=Orientation.MY)
-        s.MY90 = SchemInstance(c.portmap(), pos=Vec2R(12, 12), orientation=Orientation.MY90)
-        s.MX   = SchemInstance(c.portmap(), pos=Vec2R(13, 12), orientation=Orientation.MX)
-        s.MX90 = SchemInstance(c.portmap(), pos=Vec2R(19, 7), orientation=Orientation.MX90)
+        s.MY = SchemInstance(c.portmap(), pos=Vec2R(6, 7), orientation=Orientation.MY)
+        s.MY90 = SchemInstance(
+            c.portmap(), pos=Vec2R(12, 12), orientation=Orientation.MY90
+        )
+        s.MX = SchemInstance(c.portmap(), pos=Vec2R(13, 12), orientation=Orientation.MX)
+        s.MX90 = SchemInstance(
+            c.portmap(), pos=Vec2R(19, 7), orientation=Orientation.MX90
+        )
 
         s.outline = Rect4R(lx=0, ly=0, ux=25, uy=13)
         return s
+
 
 class PortAlignTest(Cell):
     @generate
@@ -83,6 +224,7 @@ class PortAlignTest(Cell):
 
         s.outline = Rect4R(lx=0, ly=0, ux=8, uy=8)
         return s
+
 
 class TapAlignTest(Cell):
     @generate
@@ -117,6 +259,7 @@ class DFF(Cell):
 
         return s
 
+
 class MultibitReg_Arrays(Cell):
     bits = Parameter(int)
 
@@ -126,8 +269,8 @@ class MultibitReg_Arrays(Cell):
 
         s.vss = Pin(pintype=PinType.In, align=Orientation.South)
         s.vdd = Pin(pintype=PinType.In, align=Orientation.North)
-        s.mkpath('d')
-        s.mkpath('q')
+        s.mkpath("d")
+        s.mkpath("q")
         for i in range(self.bits):
             s.d[i] = Pin(pintype=PinType.In, align=Orientation.West)
             s.q[i] = Pin(pintype=PinType.Out, align=Orientation.East)
@@ -143,8 +286,8 @@ class MultibitReg_Arrays(Cell):
         s.vss = Net(pin=self.symbol.vss)
         s.vdd = Net(pin=self.symbol.vdd)
         s.clk = Net(pin=self.symbol.clk)
-        s.mkpath('d')
-        s.mkpath('q')
+        s.mkpath("d")
+        s.mkpath("q")
         s.mkpath("I")
 
         s.vss % SchemPort(pos=Vec2R(1, 0), align=Orientation.East)
@@ -153,24 +296,29 @@ class MultibitReg_Arrays(Cell):
         for i in range(self.bits):
             s.d[i] = Net(pin=self.symbol.d[i])
             s.q[i] = Net(pin=self.symbol.q[i])
-            s.I[i] = SchemInstance(DFF().symbol.portmap(
+            s.I[i] = SchemInstance(
+                DFF().symbol.portmap(
                     vss=s.vss,
                     vdd=s.vdd,
                     clk=s.clk,
                     d=s.d[i],
                     q=s.q[i],
-                ), pos=Vec2R(2, 3 + 8*i), orientation=Orientation.R0)
+                ),
+                pos=Vec2R(2, 3 + 8 * i),
+                orientation=Orientation.R0,
+            )
 
-            s.d[i] % SchemPort(pos=Vec2R(1, 5+8*i), align=Orientation.East)
-            s.d[i] % SchemWire(vertices=[Vec2R(1, 5+8*i), Vec2R(2, 5+8*i)])
-            s.q[i] % SchemPort(pos=Vec2R(9, 5+8*i), align=Orientation.West)
-            s.q[i] % SchemWire(vertices=[Vec2R(8, 5+8*i), Vec2R(9, 5+8*i)])
+            s.d[i] % SchemPort(pos=Vec2R(1, 5 + 8 * i), align=Orientation.East)
+            s.d[i] % SchemWire(vertices=[Vec2R(1, 5 + 8 * i), Vec2R(2, 5 + 8 * i)])
+            s.q[i] % SchemPort(pos=Vec2R(9, 5 + 8 * i), align=Orientation.West)
+            s.q[i] % SchemWire(vertices=[Vec2R(8, 5 + 8 * i), Vec2R(9, 5 + 8 * i)])
 
-        s.outline = Rect4R(lx=0, ly=0, ux=10, uy=2+8*self.bits)
+        s.outline = Rect4R(lx=0, ly=0, ux=10, uy=2 + 8 * self.bits)
 
         helpers.schem_check(s, add_conn_points=True, add_terminal_taps=True)
 
         return s
+
 
 class MultibitReg_ArrayOfStructs(Cell):
     bits = Parameter(int)
@@ -181,7 +329,7 @@ class MultibitReg_ArrayOfStructs(Cell):
 
         s.vss = Pin(pintype=PinType.In, align=Orientation.South)
         s.vdd = Pin(pintype=PinType.In, align=Orientation.North)
-        s.mkpath('bit')
+        s.mkpath("bit")
         for i in range(self.bits):
             s.bit.mkpath(i)
             s.bit[i].d = Pin(pintype=PinType.In, align=Orientation.West)
@@ -190,6 +338,7 @@ class MultibitReg_ArrayOfStructs(Cell):
         helpers.symbol_place_pins(s)
 
         return s
+
 
 class MultibitReg_StructOfArrays(Cell):
     bits = Parameter(int)
@@ -200,9 +349,9 @@ class MultibitReg_StructOfArrays(Cell):
 
         s.vss = Pin(pintype=PinType.In, align=Orientation.South)
         s.vdd = Pin(pintype=PinType.In, align=Orientation.North)
-        s.mkpath('data')
-        s.data.mkpath('d')
-        s.data.mkpath('q')
+        s.mkpath("data")
+        s.data.mkpath("d")
+        s.data.mkpath("q")
         for i in range(self.bits):
             s.data.d[i] = Pin(pintype=PinType.In, align=Orientation.West)
             s.data.q[i] = Pin(pintype=PinType.Out, align=Orientation.East)
@@ -210,6 +359,7 @@ class MultibitReg_StructOfArrays(Cell):
         helpers.symbol_place_pins(s)
 
         return s
+
 
 class TestNmosInv(Cell):
     """For testing schem_check."""
@@ -239,7 +389,6 @@ class TestNmosInv(Cell):
         s.vdd = Net(pin=self.symbol.vdd)
         s.vss = Net(pin=self.symbol.vss)
 
-
         nmos = Nmos(w=R("500n"), l=R("250n")).symbol
 
         portmap = nmos.portmap(s=s.vss, b=s.vss, g=s.a, d=s.y)
@@ -255,14 +404,18 @@ class TestNmosInv(Cell):
         elif self.variant == "portmap_bad_value":
             list(s.pd.conns)[0].there = 12345
 
-        s.pu = SchemInstance(nmos.portmap(d=s.vdd, b=s.vss, g=s.vdd, s=s.y), pos=Vec2R(3, 8))
-        if self.variant=="double_instance":
-            s.pu2 = SchemInstance(nmos.portmap(d=s.vdd, b=s.vss, g=s.vdd, s=s.y), pos=Vec2R(3, 8))
+        s.pu = SchemInstance(
+            nmos.portmap(d=s.vdd, b=s.vss, g=s.vdd, s=s.y), pos=Vec2R(3, 8)
+        )
+        if self.variant == "double_instance":
+            s.pu2 = SchemInstance(
+                nmos.portmap(d=s.vdd, b=s.vss, g=s.vdd, s=s.y), pos=Vec2R(3, 8)
+            )
 
         s.vdd % SchemPort(pos=Vec2R(1, 13), align=Orientation.East)
         s.vss % SchemPort(pos=Vec2R(1, 1), align=Orientation.East)
         s.a % SchemPort(pos=Vec2R(1, 4), align=Orientation.East)
-        if self.variant == 'incorrect_port_conn':
+        if self.variant == "incorrect_port_conn":
             s.vss % SchemPort(pos=Vec2R(9, 7), align=Orientation.West)
         else:
             s.y % SchemPort(pos=Vec2R(9, 7), align=Orientation.West)
@@ -271,26 +424,41 @@ class TestNmosInv(Cell):
             s.default_supply = s.vdd
             s.default_ground = s.vss
         else:
-            s.vss % SchemWire(vertices=[Vec2R(1, 1), Vec2R(5, 1), s.pd.pos + nmos.s.pos])
-            if self.variant == 'skip_single_pin':
+            s.vss % SchemWire(
+                vertices=[Vec2R(1, 1), Vec2R(5, 1), s.pd.pos + nmos.s.pos]
+            )
+            if self.variant == "skip_single_pin":
                 s.vss % SchemWire(vertices=[Vec2R(7, 4), Vec2R(8, 4)])
             else:
-                s.vss % SchemWire(vertices=[Vec2R(7, 4), Vec2R(8, 4), Vec2R(8, 10), Vec2R(7, 10)])
-            if self.variant not in ('net_partitioned', 'net_partitioned_tapped'):
+                s.vss % SchemWire(
+                    vertices=[Vec2R(7, 4), Vec2R(8, 4), Vec2R(8, 10), Vec2R(7, 10)]
+                )
+            if self.variant not in ("net_partitioned", "net_partitioned_tapped"):
                 s.vss % SchemWire(vertices=[Vec2R(8, 4), Vec2R(8, 1), Vec2R(5, 1)])
 
-            if self.variant == 'net_partitioned_tapped':
+            if self.variant == "net_partitioned_tapped":
                 s.vss % SchemTapPoint(pos=Vec2R(8, 4), align=Orientation.South)
                 s.vss % SchemTapPoint(pos=Vec2R(5, 1), align=Orientation.East)
 
-            if self.variant == 'vdd_bad_wiring':
+            if self.variant == "vdd_bad_wiring":
                 s.vdd % SchemWire(vertices=[Vec2R(1, 13), Vec2R(2, 13)])
-            elif self.variant != 'skip_vdd_wiring':
-                s.vdd % SchemWire(vertices=[Vec2R(1, 13), Vec2R(2, 13), Vec2R(5, 13), s.pu.pos + nmos.d.pos])
+            elif self.variant != "skip_vdd_wiring":
+                s.vdd % SchemWire(
+                    vertices=[
+                        Vec2R(1, 13),
+                        Vec2R(2, 13),
+                        Vec2R(5, 13),
+                        s.pu.pos + nmos.d.pos,
+                    ]
+                )
                 if self.variant == "terminal_multiple_wires":
-                    s.vdd % SchemWire(vertices=[Vec2R(1, 13), Vec2R(1, 10), Vec2R(3, 10)])
+                    s.vdd % SchemWire(
+                        vertices=[Vec2R(1, 13), Vec2R(1, 10), Vec2R(3, 10)]
+                    )
                 else:
-                    s.vdd % SchemWire(vertices=[Vec2R(2, 13), Vec2R(2, 10), Vec2R(3, 10)])
+                    s.vdd % SchemWire(
+                        vertices=[Vec2R(2, 13), Vec2R(2, 10), Vec2R(3, 10)]
+                    )
 
             if self.variant == "terminal_connpoint":
                 s.vdd % SchemConnPoint(pos=Vec2R(1, 13))
@@ -300,8 +468,13 @@ class TestNmosInv(Cell):
             if self.variant == "tap_short":
                 s.vss % SchemTapPoint(pos=Vec2R(5, 13))
 
-            if self.variant == 'poly_short':
-                s.vdd % SchemWire(vertices=[Vec2R(2, 10), Vec2R(2, 4),])
+            if self.variant == "poly_short":
+                s.vdd % SchemWire(
+                    vertices=[
+                        Vec2R(2, 10),
+                        Vec2R(2, 4),
+                    ]
+                )
 
             s.a % SchemWire(vertices=[Vec2R(1, 4), Vec2R(2, 4), Vec2R(3, 4)])
             s.y % SchemWire(vertices=[Vec2R(5, 6), Vec2R(5, 7), Vec2R(5, 8)])
@@ -318,11 +491,15 @@ class TestNmosInv(Cell):
         if self.variant == "unconnected_conn_point":
             s.y % SchemConnPoint(pos=Vec2R(4, 7))
 
-
         s.outline = Rect4R(lx=0, ly=1, ux=10, uy=13)
-        helpers.schem_check(s, add_conn_points=self.add_conn_points, add_terminal_taps=self.add_terminal_taps)
+        helpers.schem_check(
+            s,
+            add_conn_points=self.add_conn_points,
+            add_terminal_taps=self.add_terminal_taps,
+        )
 
         return s
+
 
 class RingoscTb(Cell):
     @generate
@@ -334,22 +511,22 @@ class RingoscTb(Cell):
         s.y = Net()
 
         vdc = Vdc().symbol
-        s.i0 = SchemInstance(pos=Vec2R(0, 2), ref=vdc,
-            portmap={vdc.m:s.vss, vdc.p:s.vdd})
+        s.i0 = SchemInstance(
+            pos=Vec2R(0, 2), ref=vdc, portmap={vdc.m: s.vss, vdc.p: s.vdd}
+        )
 
         ro = Ringosc().symbol
-        s.dut = SchemInstance(pos=Vec2R(5, 2), ref=ro,
-            portmap={ro.vdd:s.vdd, ro.vss:s.vss, ro.y:s.y})
+        s.dut = SchemInstance(
+            pos=Vec2R(5, 2), ref=ro, portmap={ro.vdd: s.vdd, ro.vss: s.vss, ro.y: s.y}
+        )
 
         nc = NoConn().symbol
-        s.i1 = SchemInstance(pos=Vec2R(10, 2), ref=nc,
-            portmap={nc.a:s.y})
+        s.i1 = SchemInstance(pos=Vec2R(10, 2), ref=nc, portmap={nc.a: s.y})
 
         g = Gnd().symbol
-        s.i2 = SchemInstance(pos=Vec2R(0, -4), ref=g,
-            portmap={g.p:s.vss})
+        s.i2 = SchemInstance(pos=Vec2R(0, -4), ref=g, portmap={g.p: s.vss})
 
-        #s.ref = self.symbol
+        # s.ref = self.symbol
 
         s.outline = Rect4R(lx=0, ly=-4, ux=15, uy=7)
 
@@ -366,8 +543,9 @@ class RingoscTb(Cell):
 # Cells for sim2 testing
 # ----------------------
 
+
 class SimBase(Cell):
-    backend = Parameter(str, default='subprocess')
+    backend = Parameter(str, default="subprocess")
 
     @generate
     def sim_hierarchy(self):
@@ -390,7 +568,15 @@ class SimBase(Cell):
         sim.ac(*args, **kwargs)
         return s
 
-    def sim_tran_async(self, tstep, tstop, callback=None, throttle_interval=0.1, enable_savecurrents=True, backend=None):
+    def sim_tran_async(
+        self,
+        tstep,
+        tstop,
+        callback=None,
+        throttle_interval=0.1,
+        enable_savecurrents=True,
+        backend=None,
+    ):
         """Run async transient simulation.
 
         Args:
@@ -405,13 +591,20 @@ class SimBase(Cell):
 
         node = SimHierarchy()
         hl_backend = backend if backend is not None else self.backend
-        highlevel_sim = HighlevelSim(self.schematic, node, enable_savecurrents=enable_savecurrents, backend=hl_backend)
+        highlevel_sim = HighlevelSim(
+            self.schematic,
+            node,
+            enable_savecurrents=enable_savecurrents,
+            backend=hl_backend,
+        )
 
         with Ngspice.launch(backend=hl_backend) as sim:
             sim.load_netlist(highlevel_sim.netlister.out())
 
             # Get the queue from the new queue-based tran_async
-            data_queue = sim.tran_async(tstep, tstop, throttle_interval=throttle_interval)
+            data_queue = sim.tran_async(
+                tstep, tstop, throttle_interval=throttle_interval
+            )
 
             # Convert queue-based approach to generator for API compatibility
             import queue
@@ -443,7 +636,9 @@ class SimBase(Cell):
                     status_future = executor.submit(check_simulation_status)
 
                     # Wait for either data or status with short timeout
-                    done_futures = concurrent.futures.as_completed([data_future, status_future], timeout=0.1)
+                    done_futures = concurrent.futures.as_completed(
+                        [data_future, status_future], timeout=0.1
+                    )
 
                     data_available = False
 
@@ -462,9 +657,14 @@ class SimBase(Cell):
                                     if isinstance(data_point, dict):
                                         if callback:
                                             callback(data_point)
-                                        data = data_point.get('data', {})
-                                        progress = data_point.get('progress', 0.0)
-                                        yield TranResult(data, node, highlevel_sim.netlister, progress)
+                                        data = data_point.get("data", {})
+                                        progress = data_point.get("progress", 0.0)
+                                        yield TranResult(
+                                            data,
+                                            node,
+                                            highlevel_sim.netlister,
+                                            progress,
+                                        )
 
                             elif future == status_future:
                                 is_running = future.result()
@@ -490,7 +690,9 @@ class SimBase(Cell):
                             if time.time() - completion_time >= fallback_grace_period:
                                 # Try to drain any remaining items quickly
                                 remaining_items = 0
-                                while remaining_items < 10:  # Limit to prevent infinite loop
+                                while (
+                                    remaining_items < 10
+                                ):  # Limit to prevent infinite loop
                                     try:
                                         data_point = data_queue.get_nowait()
                                         if data_point == "---ASYNC_SIM_SENTINEL---":
@@ -498,9 +700,14 @@ class SimBase(Cell):
                                         if isinstance(data_point, dict):
                                             if callback:
                                                 callback(data_point)
-                                            data = data_point.get('data', {})
-                                            progress = data_point.get('progress', 0.0)
-                                            yield TranResult(data, node, highlevel_sim.netlister, progress)
+                                            data = data_point.get("data", {})
+                                            progress = data_point.get("progress", 0.0)
+                                            yield TranResult(
+                                                data,
+                                                node,
+                                                highlevel_sim.netlister,
+                                                progress,
+                                            )
                                         remaining_items += 1
                                     except queue.Empty:
                                         break
@@ -508,8 +715,6 @@ class SimBase(Cell):
                         elif not sim.is_running():
                             # Just finished, start grace period
                             completion_time = time.time()
-
-
 
     def sim_tran(self, tstep, tstop, backend=None, **kwargs):
         """Run sync transient simulation.
@@ -522,11 +727,13 @@ class SimBase(Cell):
         """
         # Create hierarchical simulation
         from ..sim2.sim_hierarchy import SimHierarchy
+
         s = SimHierarchy(cell=self)
         chosen_backend = backend if backend is not None else self.backend
         sim = HighlevelSim(self.schematic, s, backend=chosen_backend, **kwargs)
         sim.tran(tstep, tstop)
         return s
+
 
 class RcFilterTb(SimBase):
     r = Parameter(R, default=R(1e3))
@@ -540,7 +747,9 @@ class RcFilterTb(SimBase):
         s.out = Net()
         s.vss = Net()
 
-        vac = SinusoidalVoltageSource(amplitude=R(1), frequency=R(1)).symbol # frequency is a dummy value
+        vac = SinusoidalVoltageSource(
+            amplitude=R(1), frequency=R(1)
+        ).symbol  # frequency is a dummy value
         res = Res(r=self.r).symbol
         cap = Cap(c=self.c).symbol
         gnd = Gnd().symbol
@@ -554,13 +763,16 @@ class RcFilterTb(SimBase):
         s.out % SchemWire(vertices=[s.I2.pos + res.m.pos, s.I3.pos + cap.p.pos])
 
         vss_bus_y = R(-2)
-        s.vss % SchemWire(vertices=[Vec2R(2, vss_bus_y), Vec2R(12, vss_bus_y)]) # vss bus
+        s.vss % SchemWire(
+            vertices=[Vec2R(2, vss_bus_y), Vec2R(12, vss_bus_y)]
+        )  # vss bus
         s.vss % SchemWire(vertices=[s.I0.pos + gnd.p.pos, Vec2R(2, vss_bus_y)])
         s.vss % SchemWire(vertices=[s.I1.pos + vac.m.pos, Vec2R(2, vss_bus_y)])
         s.vss % SchemWire(vertices=[s.I3.pos + cap.m.pos, Vec2R(12, vss_bus_y)])
 
         helpers.schem_check(s, add_conn_points=True)
         return s
+
 
 class ResdivFlatTb(SimBase):
     @generate
@@ -584,7 +796,9 @@ class ResdivFlatTb(SimBase):
 
         s.vss % SchemWire(vertices=[Vec2R(7, 4), Vec2R(7, 5), Vec2R(7, 6)])
         s.vss % SchemWire(vertices=[Vec2R(2, 6), Vec2R(2, 5), Vec2R(7, 5)])
-        s.vdd % SchemWire(vertices=[Vec2R(2, 10), Vec2R(2, 21), Vec2R(7, 21), Vec2R(7, 20)])
+        s.vdd % SchemWire(
+            vertices=[Vec2R(2, 10), Vec2R(2, 21), Vec2R(7, 21), Vec2R(7, 20)]
+        )
         s.a % SchemWire(vertices=[Vec2R(7, 10), Vec2R(7, 11)])
         s.b % SchemWire(vertices=[Vec2R(7, 15), Vec2R(7, 16)])
 
@@ -593,6 +807,7 @@ class ResdivFlatTb(SimBase):
         helpers.schem_check(s, add_conn_points=True)
 
         return s
+
 
 class ResdivHier2(Cell):
     r = Parameter(R)
@@ -625,7 +840,9 @@ class ResdivHier2(Cell):
 
         s.I0 = SchemInstance(sym_res.portmap(m=s.b, p=s.m), pos=Vec2R(0, 1))
         s.I1 = SchemInstance(sym_res.portmap(m=s.m, p=s.t), pos=Vec2R(0, 7))
-        s.I2 = SchemInstance(sym_res.portmap(m=s.r, p=s.m), pos=Vec2R(9, 4), orientation=Orientation.R90)
+        s.I2 = SchemInstance(
+            sym_res.portmap(m=s.r, p=s.m), pos=Vec2R(9, 4), orientation=Orientation.R90
+        )
 
         s.outline = Rect4R(lx=0, ly=0, ux=10, uy=12)
 
@@ -637,6 +854,7 @@ class ResdivHier2(Cell):
 
         helpers.schem_check(s, add_conn_points=True)
         return s
+
 
 class ResdivHier1(Cell):
     @generate
@@ -668,7 +886,7 @@ class ResdivHier1(Cell):
         sym_1 = ResdivHier2(r=R(100)).symbol
         sym_2 = ResdivHier2(r=R(200)).symbol
 
-        #s % SchemInstance(pos=Vec2R(5, 0), ref=sym_1, portmap={sym_1.t: s.m, sym_1.b:s.gnd, sym_1.r:s.br})
+        # s % SchemInstance(pos=Vec2R(5, 0), ref=sym_1, portmap={sym_1.t: s.m, sym_1.b:s.gnd, sym_1.r:s.br})
         s.I0 = SchemInstance(sym_1.portmap(t=s.m, b=s.b, r=s.br), pos=Vec2R(5, 0))
         s.I1 = SchemInstance(sym_2.portmap(t=s.t, b=s.m, r=s.tr), pos=Vec2R(5, 6))
         s.I2 = SchemInstance(sym_1.portmap(t=s.tr, b=s.br, r=s.r), pos=Vec2R(10, 3))
@@ -685,6 +903,7 @@ class ResdivHier1(Cell):
         helpers.schem_check(s, add_conn_points=True)
         return s
 
+
 class ResdivHierTb(SimBase):
     @generate
     def schematic(self):
@@ -694,9 +913,13 @@ class ResdivHierTb(SimBase):
         s.r = Net()
         s.gnd = Net()
 
-        s.I0 = SchemInstance(ResdivHier1().symbol.portmap(t=s.t, b=s.gnd, r=s.r), pos=Vec2R(5, 0))
+        s.I0 = SchemInstance(
+            ResdivHier1().symbol.portmap(t=s.t, b=s.gnd, r=s.r), pos=Vec2R(5, 0)
+        )
         s.I1 = SchemInstance(NoConn().symbol.portmap(a=s.r), pos=Vec2R(10, 0))
-        s.I2 = SchemInstance(Vdc(dc=R(1)).symbol.portmap(m=s.gnd, p=s.t), pos=Vec2R(0, 0))
+        s.I2 = SchemInstance(
+            Vdc(dc=R(1)).symbol.portmap(m=s.gnd, p=s.t), pos=Vec2R(0, 0)
+        )
         s.I3 = SchemInstance(Gnd().symbol.portmap(p=s.gnd), pos=Vec2R(0, -6))
 
         s.outline = Rect4R(lx=0, ly=-6, ux=14, uy=5)
@@ -708,6 +931,7 @@ class ResdivHierTb(SimBase):
 
         helpers.schem_check(s, add_conn_points=True)
         return s
+
 
 class NmosSourceFollowerTb(SimBase):
     """Nmos (generic_mos) source follower with optional parameter vin."""
@@ -724,18 +948,28 @@ class NmosSourceFollowerTb(SimBase):
         s.vss = Net()
         vin = self.vin
 
-        s.I0 = SchemInstance(Nmos(w=R('5u'), l=R('1u')).symbol.portmap(d=s.vdd, s=s.o, g=s.i, b=s.vss), pos=Vec2R(11, 12))
+        s.I0 = SchemInstance(
+            Nmos(w=R("5u"), l=R("1u")).symbol.portmap(d=s.vdd, s=s.o, g=s.i, b=s.vss),
+            pos=Vec2R(11, 12),
+        )
 
         s.I1 = SchemInstance(Gnd().symbol.portmap(p=s.vss), pos=Vec2R(11, 0))
-        s.I2 = SchemInstance(Vdc(dc=R('5')).symbol.portmap(m=s.vss, p=s.vdd), pos=Vec2R(0, 6))
-        s.I3 = SchemInstance(Vdc(dc=vin).symbol.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6))
-        s.I4 = SchemInstance(Idc(dc=R('5u')).symbol.portmap(m=s.vss, p=s.o), pos=Vec2R(11, 6))
+        s.I2 = SchemInstance(
+            Vdc(dc=R("5")).symbol.portmap(m=s.vss, p=s.vdd), pos=Vec2R(0, 6)
+        )
+        s.I3 = SchemInstance(
+            Vdc(dc=vin).symbol.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6)
+        )
+        s.I4 = SchemInstance(
+            Idc(dc=R("5u")).symbol.portmap(m=s.vss, p=s.o), pos=Vec2R(11, 6)
+        )
 
         s.outline = Rect4R(lx=0, ly=0, ux=16, uy=22)
 
         helpers.schem_check(s, add_conn_points=True, add_terminal_taps=True)
 
         return s
+
 
 class InvTb(SimBase):
     vin = Parameter(R, optional=True, default=R(0))
@@ -749,17 +983,24 @@ class InvTb(SimBase):
         s.vss = Net()
         vin = self.vin
 
-        s.I0 = SchemInstance(Inv().symbol.portmap(vdd = s.vdd, vss=s.vss, a=s.i, y=s.o), pos=Vec2R(11, 9))
+        s.I0 = SchemInstance(
+            Inv().symbol.portmap(vdd=s.vdd, vss=s.vss, a=s.i, y=s.o), pos=Vec2R(11, 9)
+        )
         s.I1 = SchemInstance(NoConn().symbol.portmap(a=s.o), pos=Vec2R(16, 9))
         s.I2 = SchemInstance(Gnd().symbol.portmap(p=s.vss), pos=Vec2R(11, 0))
-        s.I3 = SchemInstance(Vdc(dc=R('5')).symbol.portmap(m=s.vss, p = s.vdd), pos=Vec2R(0, 6))
-        s.I4 = SchemInstance(Vdc(dc=vin).symbol.portmap(m=s.vss, p = s.i), pos=Vec2R(5, 6))
+        s.I3 = SchemInstance(
+            Vdc(dc=R("5")).symbol.portmap(m=s.vss, p=s.vdd), pos=Vec2R(0, 6)
+        )
+        s.I4 = SchemInstance(
+            Vdc(dc=vin).symbol.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6)
+        )
 
         s.outline = Rect4R(lx=0, ly=0, ux=20, uy=14)
 
         helpers.schem_check(s, add_conn_points=True, add_terminal_taps=True)
 
         return s
+
 
 class InvSkyTb(SimBase):
     vin = Parameter(R, optional=True, default=R(0))
@@ -777,10 +1018,12 @@ class InvSkyTb(SimBase):
         sym_inv = sky130.Inv().symbol
         sym_nc = NoConn().symbol
         sym_gnd = Gnd().symbol
-        sym_vdc_vdd = Vdc(dc=R('5')).symbol
+        sym_vdc_vdd = Vdc(dc=R("5")).symbol
         sym_vdc_in = Vdc(dc=vin).symbol
 
-        s.i_inv = SchemInstance(sym_inv.portmap(vdd=s.vdd, vss=s.vss, a=s.i, y=s.o), pos=Vec2R(11, 9))
+        s.i_inv = SchemInstance(
+            sym_inv.portmap(vdd=s.vdd, vss=s.vss, a=s.i, y=s.o), pos=Vec2R(11, 9)
+        )
         s.i_nc = SchemInstance(sym_nc.portmap(a=s.o), pos=Vec2R(16, 9))
 
         s.i_gnd = SchemInstance(sym_gnd.portmap(p=s.vss), pos=Vec2R(11, 0))
@@ -792,6 +1035,7 @@ class InvSkyTb(SimBase):
         helpers.schem_check(s, add_conn_points=True, add_terminal_taps=True)
 
         return s
+
 
 class InvIhpTb(SimBase):
     vin = Parameter(R, optional=True, default=R(0))
@@ -809,10 +1053,12 @@ class InvIhpTb(SimBase):
         sym_inv = ihp130.Inv().symbol
         sym_nc = NoConn().symbol
         sym_gnd = Gnd().symbol
-        sym_vdc_vdd = Vdc(dc=R('5')).symbol
+        sym_vdc_vdd = Vdc(dc=R("5")).symbol
         sym_vdc_in = Vdc(dc=vin).symbol
 
-        s.i_inv = SchemInstance(sym_inv.portmap(vdd=s.vdd, vss=s.vss, a=s.i, y=s.o), pos=Vec2R(11, 9))
+        s.i_inv = SchemInstance(
+            sym_inv.portmap(vdd=s.vdd, vss=s.vss, a=s.i, y=s.o), pos=Vec2R(11, 9)
+        )
         s.i_nc = SchemInstance(sym_nc.portmap(a=s.o), pos=Vec2R(16, 9))
 
         s.i_gnd = SchemInstance(sym_gnd.portmap(p=s.vss), pos=Vec2R(11, 0))
@@ -837,9 +1083,15 @@ class RCAlterTestbench(Cell):
         s.vout = Net()
         s.gnd = Net()
 
-        s.v1 = SchemInstance(Vdc(dc=R(1)).symbol.portmap(p=s.vin, m=s.gnd), pos=Vec2R(0, 5))
-        s.r1 = SchemInstance(Res(r=R(1000)).symbol.portmap(p=s.vin, m=s.vout), pos=Vec2R(5, 5))
-        s.c1 = SchemInstance(Cap(c=R("1u")).symbol.portmap(p=s.vout, m=s.gnd), pos=Vec2R(8, 3))
+        s.v1 = SchemInstance(
+            Vdc(dc=R(1)).symbol.portmap(p=s.vin, m=s.gnd), pos=Vec2R(0, 5)
+        )
+        s.r1 = SchemInstance(
+            Res(r=R(1000)).symbol.portmap(p=s.vin, m=s.vout), pos=Vec2R(5, 5)
+        )
+        s.c1 = SchemInstance(
+            Cap(c=R("1u")).symbol.portmap(p=s.vout, m=s.gnd), pos=Vec2R(8, 3)
+        )
         s.gnd_conn = SchemInstance(Gnd().symbol.portmap(p=s.gnd), pos=Vec2R(0, 0))
 
         return s

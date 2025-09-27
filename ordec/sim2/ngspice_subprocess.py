@@ -19,25 +19,30 @@ import numpy as np
 
 from .ngspice_common import (
     NgspiceValue,
+    NgspiceError,
     NgspiceFatalError,
     NgspiceTransientResult,
     NgspiceAcResult,
     check_errors,
     NgspiceTable,
+    SignalKind,
 )
 
-NgspiceVector = namedtuple('NgspiceVector', ['name', 'quantity', 'dtype', 'length', 'rest'])
+NgspiceVector = namedtuple(
+    "NgspiceVector", ["name", "quantity", "dtype", "length", "rest"]
+)
+
 
 class _SubprocessBackend:
     @staticmethod
     @contextmanager
     def launch(debug=False):
         # Choose the correct ngspice executable for the platform
-        if sys.platform == 'win32':
+        if sys.platform == "win32":
             # On Windows, prefer ngspice_con if available, fall back to ngspice
-            ngspice_exe = 'ngspice_con' if shutil.which('ngspice_con') else 'ngspice'
+            ngspice_exe = "ngspice_con" if shutil.which("ngspice_con") else "ngspice"
         else:
-            ngspice_exe = 'ngspice'
+            ngspice_exe = "ngspice"
 
         if debug:
             print(f"[debug] Using ngspice executable: {ngspice_exe}")
@@ -48,7 +53,9 @@ class _SubprocessBackend:
                 print(f"[debug] Starting ngspice with command: {[ngspice_exe, '-p']}")
                 print(f"[debug] Working directory: {cwd_str}")
 
-            p = Popen([ngspice_exe, '-p'], stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=cwd_str)
+            p: Popen[bytes] = Popen(
+                [ngspice_exe, "-p"], stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=cwd_str
+            )
             if debug:
                 print(f"[debug] Process started with PID: {p.pid}")
 
@@ -68,14 +75,16 @@ class _SubprocessBackend:
                     pass  # Process may have already terminated
 
     def __init__(self, p: Popen, debug: bool, cwd: Path):
-        self.p = p
+        self.p: Popen[bytes] = p
         self.debug = debug
         self.cwd = cwd
         self._async_running = False
-        self._async_thread = None
-        self._async_queue = None
+        self._async_thread: Optional[threading.Thread] = None
+        self._async_queue: Optional[queue.Queue] = None
         self._async_halt_requested = False
         self._async_lock = threading.Lock()
+        self._data_points_sent = 0
+        self._async_current_time = 0.0
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -105,7 +114,7 @@ class _SubprocessBackend:
                 print(f"[debug] received line {line_count} from ngspice: {repr(l)}")
 
             # Check for EOF first
-            if l == b'': # readline() returns the empty byte string only on EOF.
+            if l == b"":  # readline() returns the empty byte string only on EOF.
                 out_flat = "".join(out)
                 if self.debug:
                     print(f"[debug] EOF detected, ngspice terminated")
@@ -118,37 +127,41 @@ class _SubprocessBackend:
                 if not m:
                     break
                 if self.debug:
-                    print(f"[debug] Stripping prompt from line: {repr(l)} -> {repr(m.group(1))}")
+                    print(
+                        f"[debug] Stripping prompt from line: {repr(l)} -> {repr(m.group(1))}"
+                    )
                 stripped_content = m.group(1)
                 # Preserve the newline if the original line had one
-                if l.endswith(b'\n') and not stripped_content.endswith(b'\n'):
-                    l = stripped_content + b'\n'
+                if l.endswith(b"\n") and not stripped_content.endswith(b"\n"):
+                    l = stripped_content + b"\n"
                 else:
                     l = stripped_content
 
             # Check for our finish marker
-            if l.rstrip() == b'FINISHED':
+            if l.rstrip() == b"FINISHED":
                 if self.debug:
                     print(f"[debug] Found FINISHED marker, breaking")
                 break
 
             # Skip empty lines that are just prompts
-            if l.strip() == b'':
+            if l.strip() == b"":
                 continue
 
-            out.append(l.decode('ascii'))
+            out.append(l.decode("ascii"))
             if self.debug:
                 print(f"[debug] Added to output: {repr(l.decode('ascii'))}")
 
         out_flat = "".join(out)
         if self.debug:
-            print(f"[debug] received result from ngspice ({self.p.pid}): {repr(out_flat)}")
+            print(
+                f"[debug] received result from ngspice ({self.p.pid}): {repr(out_flat)}"
+            )
 
         check_errors(out_flat)
         return out_flat
 
     def load_netlist(self, netlist: str, no_auto_gnd: bool = True):
-        netlist_fn = self.cwd / 'netlist.sp'
+        netlist_fn = self.cwd / "netlist.sp"
         netlist_fn.write_text(netlist)
         if self.debug:
             print(f"Written netlist: \n {netlist}")
@@ -169,9 +182,11 @@ class _SubprocessBackend:
             display_output = self.command("display")
 
             # Parse vector list and print only vectors with length > 0
-            for line in display_output.split('\n'):
+            for line in display_output.split("\n"):
                 # Look for vector definitions like "name: type, real, N long"
-                vector_match = re.match(r'\s*([^:]+):\s*[^,]+,\s*[^,]+,\s*([0-9]+)\s+long', line)
+                vector_match = re.match(
+                    r"\s*([^:]+):\s*[^,]+,\s*[^,]+,\s*([0-9]+)\s+long", line
+                )
                 if vector_match:
                     vector_name = vector_match.group(1).strip()
                     vector_length = int(vector_match.group(2))
@@ -180,7 +195,7 @@ class _SubprocessBackend:
                     if vector_length > 0:
                         yield self.command(f"print {vector_name}")
         else:
-            yield from print_all_res.split('\n')
+            yield from print_all_res.split("\n")
 
     def _parse_op_results(self) -> Iterator[str]:
         """
@@ -194,9 +209,11 @@ class _SubprocessBackend:
             display_output = self.command("display")
 
             # Parse vector list and print only vectors with length > 0
-            for line in display_output.split('\n'):
+            for line in display_output.split("\n"):
                 # Look for vector definitions like "name: type, real, N long"
-                vector_match = re.match(r'\s*([^:]+):\s*[^,]+,\s*[^,]+,\s*([0-9]+)\s+long', line)
+                vector_match = re.match(
+                    r"\s*([^:]+):\s*[^,]+,\s*[^,]+,\s*([0-9]+)\s+long", line
+                )
                 if vector_match:
                     vector_name = vector_match.group(1).strip()
                     vector_length = int(vector_match.group(2))
@@ -205,12 +222,14 @@ class _SubprocessBackend:
                     if vector_length > 0:
                         cmd_output = self.command(f"print {vector_name}")
                         # Extract just the result lines from command output
-                        for output_line in cmd_output.split('\n'):
-                            if re.match(r"([0-9a-zA-Z_.#]+)\s*=\s*([0-9.\-+e]+)\s*", output_line):
+                        for output_line in cmd_output.split("\n"):
+                            if re.match(
+                                r"([0-9a-zA-Z_.#]+)\s*=\s*([0-9.\-+e]+)\s*", output_line
+                            ):
                                 yield output_line
         else:
             # Extract just the result lines from the print all output
-            for line in print_all_res.split('\n'):
+            for line in print_all_res.split("\n"):
                 if re.match(r"([0-9a-zA-Z_.#]+)\s*=\s*([0-9.\-+e]+)\s*", line):
                     yield line
 
@@ -224,25 +243,43 @@ class _SubprocessBackend:
             # Voltage result - updated regex to handle device names with special chars:
             res = re.match(r"([0-9a-zA-Z_.#]+)\s*=\s*([0-9.\-+e]+)\s*", line)
             if res:
-                yield NgspiceValue(type='voltage', name=res.group(1), subname=None, value=float(res.group(2)))
+                yield NgspiceValue(
+                    type="voltage",
+                    name=res.group(1),
+                    subname=None,
+                    value=float(res.group(2)),
+                )
 
             # Current result like "vgnd#branch":
             res = re.match(r"([0-9a-zA-Z_.#]+)#branch\s*=\s*([0-9.\-+e]+)\s*", line)
             if res:
-                yield NgspiceValue(type='current', name=res.group(1), subname='branch', value=float(res.group(2)))
+                yield NgspiceValue(
+                    type="current",
+                    name=res.group(1),
+                    subname="branch",
+                    value=float(res.group(2)),
+                )
 
             # Current result like "@m.xdut.mm2[is]" from savecurrents:
-            res = re.match(r"@([a-zA-Z]\.)?([0-9a-zA-Z_.#]+)\[([0-9a-zA-Z_]+)\]\s*=\s*([0-9.\-+e]+)\s*", line)
+            res = re.match(
+                r"@([a-zA-Z]\.)?([0-9a-zA-Z_.#]+)\[([0-9a-zA-Z_]+)\]\s*=\s*([0-9.\-+e]+)\s*",
+                line,
+            )
             if res:
-                yield NgspiceValue(type='current', name=res.group(2), subname=res.group(3), value=float(res.group(4)))
+                yield NgspiceValue(
+                    type="current",
+                    name=res.group(2),
+                    subname=res.group(3),
+                    value=float(res.group(4)),
+                )
 
     def tran(self, *args) -> NgspiceTransientResult:
         self.command(f"tran {' '.join(args)}")
         print_all_res = "\n".join(self.print_all())
-        lines = print_all_res.split('\n')
+        lines = print_all_res.split("\n")
 
         result = NgspiceTransientResult()
-        tables = {} # map from header tuple to list of data rows
+        tables = {}  # map from header tuple to list of data rows
         current_headers = None
 
         for line in lines:
@@ -251,7 +288,9 @@ class _SubprocessBackend:
                 continue
 
             potential_headers = line.split()
-            is_header = any(h.lower() in ('time', 'index') for h in potential_headers) and not self._is_numeric_row(potential_headers)
+            is_header = any(
+                h.lower() in ("time", "index") for h in potential_headers
+            ) and not self._is_numeric_row(potential_headers)
 
             if is_header:
                 current_headers = tuple(potential_headers)
@@ -271,9 +310,27 @@ class _SubprocessBackend:
                 table.data = data
                 result.add_table(table)
 
+        # Try to get vector info from ngspice to improve signal type detection
+        try:
+            vectors_info = self.vector_info()
+            for vec_info in vectors_info:
+                if vec_info.name in result.signals:
+                    # Use vector quantity information when available
+                    if hasattr(vec_info, "quantity") and vec_info.quantity:
+                        # Map ngspice vector quantities to SignalKind
+                        if vec_info.quantity.lower() in ("time", "index"):
+                            result.signals[vec_info.name].kind = SignalKind.TIME
+                        elif vec_info.quantity.lower() in ("voltage", "v"):
+                            result.signals[vec_info.name].kind = SignalKind.VOLTAGE
+                        elif vec_info.quantity.lower() in ("current", "i"):
+                            result.signals[vec_info.name].kind = SignalKind.CURRENT
+        except Exception:
+            # Fallback to existing heuristics if vector info is not available
+            pass
+
         return result
 
-    def tran_async(self, *args, throttle_interval: float = 0.1) -> 'queue.Queue':
+    def tran_async(self, *args, throttle_interval: float = 0.1) -> "queue.Queue[dict]":
         """
         Start asynchronous transient analysis using chunked simulation.
 
@@ -299,21 +356,21 @@ class _SubprocessBackend:
         # Parse time values with unit support
         def parse_time(time_str):
             time_str = time_str.strip()
-            if time_str.endswith('us'):
+            if time_str.endswith("us"):
                 return float(time_str[:-2]) * 1e-6
-            elif time_str.endswith('ns'):
+            elif time_str.endswith("ns"):
                 return float(time_str[:-2]) * 1e-9
-            elif time_str.endswith('ms'):
+            elif time_str.endswith("ms"):
                 return float(time_str[:-2]) * 1e-3
-            elif time_str.endswith('ps'):
+            elif time_str.endswith("ps"):
                 return float(time_str[:-2]) * 1e-12
-            elif time_str.endswith('u'):
+            elif time_str.endswith("u"):
                 return float(time_str[:-1]) * 1e-6
-            elif time_str.endswith('n'):
+            elif time_str.endswith("n"):
                 return float(time_str[:-1]) * 1e-9
-            elif time_str.endswith('m'):
+            elif time_str.endswith("m"):
                 return float(time_str[:-1]) * 1e-3
-            elif time_str.endswith('p'):
+            elif time_str.endswith("p"):
                 return float(time_str[:-1]) * 1e-12
             else:
                 return float(time_str)
@@ -334,17 +391,19 @@ class _SubprocessBackend:
         self._async_thread = threading.Thread(
             target=self._run_chunked_simulation,
             args=(tstep, tstop, tstep_str, throttle_interval),
-            daemon=True
+            daemon=True,
         )
         self._async_thread.start()
 
         return self._async_queue
 
-    def _run_chunked_simulation(self, tstep: float, tstop: float, tstep_str: str, throttle_interval: float):
+    def _run_chunked_simulation(
+        self, tstep: float, tstop: float, tstep_str: str, throttle_interval: float
+    ):
         """Run simulation in chunks to provide async-like behavior with halt support."""
         try:
             chunk_time = min(tstop / 100, max(tstep * 5, 1e-9))
-            current_time = getattr(self, '_async_current_time', 0.0)
+            current_time = self._async_current_time
 
             while current_time < tstop and not self._async_halt_requested:
                 self._async_current_time = current_time
@@ -357,27 +416,49 @@ class _SubprocessBackend:
                 try:
                     self.command(tran_cmd)
                     print_all_res = "\n".join(self.print_all())
-                    lines = print_all_res.split('\n')
+                    lines = print_all_res.split("\n")
                     voltage_data = {}
                     try:
                         display_output = self.command("display")
-                        for line in display_output.split('\n'):
-                            if ':' in line and not line.strip().startswith('@') and not line.strip().endswith('#branch'):
-                                parts = line.split(':')
+                        for line in display_output.split("\n"):
+                            if (
+                                ":" in line
+                                and not line.strip().startswith("@")
+                                and not line.strip().endswith("#branch")
+                            ):
+                                parts = line.split(":")
                                 vec_name = parts[0].strip()
-                                if vec_name and not vec_name.startswith('@') and not vec_name.endswith('#branch'):
+                                if (
+                                    vec_name
+                                    and not vec_name.startswith("@")
+                                    and not vec_name.endswith("#branch")
+                                ):
                                     try:
                                         vec_print = self.command(f"print {vec_name}")
-                                        for vec_line in vec_print.split('\n'):
-                                            if vec_line.strip() and not any(x in vec_line for x in ['Index', 'time', '---', 'print']):
+                                        for vec_line in vec_print.split("\n"):
+                                            if vec_line.strip() and not any(
+                                                x in vec_line
+                                                for x in [
+                                                    "Index",
+                                                    "time",
+                                                    "---",
+                                                    "print",
+                                                ]
+                                            ):
                                                 values = vec_line.split()
                                                 if len(values) >= 2:
                                                     try:
                                                         time_val = float(values[1])
-                                                        voltage_val = float(values[2]) if len(values) > 2 else 0.0
+                                                        voltage_val = (
+                                                            float(values[2])
+                                                            if len(values) > 2
+                                                            else 0.0
+                                                        )
                                                         if time_val not in voltage_data:
                                                             voltage_data[time_val] = {}
-                                                        voltage_data[time_val][vec_name] = voltage_val
+                                                        voltage_data[time_val][
+                                                            vec_name
+                                                        ] = voltage_val
                                                     except (ValueError, IndexError):
                                                         continue
                                     except Exception:
@@ -392,11 +473,18 @@ class _SubprocessBackend:
                         with self._async_lock:
                             if self._async_halt_requested:
                                 if self.debug:
-                                    print(f"DEBUG: Breaking due to halt request in chunk starting at {current_time}")
+                                    print(
+                                        f"DEBUG: Breaking due to halt request in chunk starting at {current_time}"
+                                    )
                                 break
 
                         line = line.strip()
-                        if not line or re.match(r"^-+$", line) or "Transient Analysis" in line or line == "print all":
+                        if (
+                            not line
+                            or re.match(r"^-+$", line)
+                            or "Transient Analysis" in line
+                            or line == "print all"
+                        ):
                             continue
 
                         # Check if this is a header line (contains "Index" and "time")
@@ -410,56 +498,79 @@ class _SubprocessBackend:
                         elif current_headers:
                             # Parse data - try both tab and space separation
                             # First try tab separation (ngspice default)
-                            row_data = line.split('\t')
+                            row_data = line.split("\t")
                             if len(row_data) < 2 or not self._is_numeric_row(row_data):
                                 # Fallback to space separation
                                 row_data = line.split()
 
-                            if len(row_data) >= 2 and self._is_numeric_row(row_data) and len(row_data) <= len(current_headers):
-                                if self.debug and len(tables[current_headers]) < 3:  # Only print first few rows
+                            if (
+                                len(row_data) >= 2
+                                and self._is_numeric_row(row_data)
+                                and len(row_data) <= len(current_headers)
+                            ):
+                                if (
+                                    self.debug and len(tables[current_headers]) < 3
+                                ):  # Only print first few rows
                                     print(f"DEBUG: Adding row data: {row_data}")
                                 tables[current_headers].append(row_data)
 
                                 # Create data point for this row
                                 try:
-                                    time_val = float(row_data[1])  # time is in second column
+                                    time_val = float(
+                                        row_data[1]
+                                    )  # time is in second column
                                     # Only include points in our time range
                                     if current_time <= time_val <= chunk_end:
                                         # Create data point compatible with FFI backend format
                                         data_point = {
-                                            'timestamp': time.time(),
-                                            'data': {
-                                                'time': time_val
-                                            },
-                                            'index': self._data_points_sent,
-                                            'progress': min(1.0, time_val / tstop) if tstop > 0 else 0.0
+                                            "timestamp": time.time(),
+                                            "data": {"time": time_val},
+                                            "index": self._data_points_sent,
+                                            "progress": min(1.0, time_val / tstop)
+                                            if tstop > 0
+                                            else 0.0,
                                         }
 
                                         # Add voltage/current data (skip index and time columns)
-                                        for i, header in enumerate(current_headers[2:], 2):
-                                            if i < len(row_data) and row_data[i].strip():
+                                        for i, header in enumerate(
+                                            current_headers[2:], 2
+                                        ):
+                                            if (
+                                                i < len(row_data)
+                                                and row_data[i].strip()
+                                            ):
                                                 try:
-                                                    data_point['data'][header] = float(row_data[i])
+                                                    data_point["data"][header] = float(
+                                                        row_data[i]
+                                                    )
                                                 except ValueError:
                                                     pass  # Skip non-numeric values
 
                                         # Add voltage data if available for this time point
                                         if time_val in voltage_data:
-                                            for node_name, voltage_val in voltage_data[time_val].items():
-                                                if node_name != 'time':
-                                                    data_point['data'][node_name] = voltage_val
+                                            for node_name, voltage_val in voltage_data[
+                                                time_val
+                                            ].items():
+                                                if node_name != "time":
+                                                    data_point["data"][node_name] = (
+                                                        voltage_val
+                                                    )
 
                                         # Debug: print data point structure
-                                        if self.debug and self._data_points_sent < 3:  # Only print first few points
-                                            print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")
+                                        if (
+                                            self.debug and self._data_points_sent < 3
+                                        ):  # Only print first few points
+                                            print(
+                                                f"DEBUG: Data point {self._data_points_sent}: {data_point}"
+                                            )
 
                                         # Add to queue
-                                        self._async_queue.put(data_point)
+                                        if self._async_queue:
+                                            self._async_queue.put(data_point)
                                         self._data_points_sent += 1
 
                                 except (ValueError, IndexError):
                                     continue  # Skip malformed data
-
 
                     # Update current time for next chunk
                     current_time = chunk_end
@@ -467,7 +578,9 @@ class _SubprocessBackend:
                     self._async_current_time = current_time
 
                     # Throttle to avoid overwhelming the queue but ensure responsiveness
-                    time.sleep(min(throttle_interval, 0.05))  # Cap at 50ms for better responsiveness
+                    time.sleep(
+                        min(throttle_interval, 0.05)
+                    )  # Cap at 50ms for better responsiveness
 
                 except Exception as e:
                     # If chunk fails, try to continue with smaller chunks
@@ -476,36 +589,45 @@ class _SubprocessBackend:
                         continue
                     else:
                         # If we can't make progress, abort
-                        error_data = {'error': f"Simulation failed: {str(e)}"}
-                        self._async_queue.put(error_data)
+                        error_data = {"error": f"Simulation failed: {str(e)}"}
+                        if self._async_queue:
+                            self._async_queue.put(error_data)
                         break
 
             if not self._async_halt_requested:
                 # Signal completion if not halted
                 if self.debug:
                     print("DEBUG: Simulation completed normally")
-                self._async_queue.put({'status': 'completed'})
+                if self._async_queue:
+                    self._async_queue.put({"status": "completed"})
             else:
                 # Signal halt
                 if self.debug:
                     print("DEBUG: Simulation halted by request")
-                self._async_queue.put({'status': 'halted'})
+                if self._async_queue:
+                    self._async_queue.put({"status": "halted"})
 
         except Exception as e:
             # Put error in queue
-            error_data = {'error': f"Async simulation failed: {str(e)}"}
+            error_data = {"error": f"Async simulation failed: {str(e)}"}
             self._async_queue.put(error_data)
         finally:
             self._async_running = False
 
     def is_running(self) -> bool:
         """Check if async simulation is running."""
-        return self._async_running and (self._async_thread is not None and self._async_thread.is_alive())
+        return self._async_running and (
+            self._async_thread is not None and self._async_thread.is_alive()
+        )
 
-    def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 0.2) -> bool:
+    def safe_halt_simulation(
+        self, max_attempts: int = 3, wait_time: float = 0.2
+    ) -> bool:
         """Halt async simulation safely."""
         if self.debug:
-            print(f"DEBUG: safe_halt_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}, thread_alive={self._async_thread and self._async_thread.is_alive() if self._async_thread else False}")
+            print(
+                f"DEBUG: safe_halt_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}, thread_alive={self._async_thread and self._async_thread.is_alive() if self._async_thread else False}"
+            )
         if not self._async_running:
             return True
 
@@ -517,14 +639,19 @@ class _SubprocessBackend:
         # Wait for thread to respond to halt request
         for attempt in range(max_attempts):
             # Check if thread has paused (not running but still alive)
-            if (self._async_thread and self._async_thread.is_alive() and
-                not self._async_running):
+            if (
+                self._async_thread
+                and self._async_thread.is_alive()
+                and not self._async_running
+            ):
                 if self.debug:
                     print(f"DEBUG: Simulation paused successfully")
                 return True
 
             if self.debug:
-                print(f"DEBUG: Attempt {attempt+1}/{max_attempts}: thread alive={self._async_thread and self._async_thread.is_alive()}, running={self._async_running}")
+                print(
+                    f"DEBUG: Attempt {attempt + 1}/{max_attempts}: thread alive={self._async_thread and self._async_thread.is_alive()}, running={self._async_running}"
+                )
             time.sleep(wait_time)
 
         if self.debug:
@@ -548,10 +675,14 @@ class _SubprocessBackend:
         # stored in self._async_current_time
         return True
 
-    def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 2.0) -> bool:
+    def safe_resume_simulation(
+        self, max_attempts: int = 3, wait_time: float = 2.0
+    ) -> bool:
         """Resume a halted simulation safely."""
         if self.debug:
-            print(f"DEBUG: safe_resume_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}")
+            print(
+                f"DEBUG: safe_resume_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}"
+            )
 
         if not self._async_halt_requested:
             return True  # Not halted, so already "running"
@@ -561,7 +692,6 @@ class _SubprocessBackend:
             self._async_running = True  # Mark as running again
 
         return True
-
 
     def _is_header_line(self, line, expected_headers):
         """Check if a line looks like a header line."""
@@ -578,7 +708,7 @@ class _SubprocessBackend:
         # If most headers are found in this line, it's likely a header
         return header_matches >= len(expected_headers) * 0.6
 
-    def _parse_ac_wrdata(self, file_path: str, vectors: list[str]) -> 'NgspiceAcResult':
+    def _parse_ac_wrdata(self, file_path: str, vectors: list[str]) -> "NgspiceAcResult":
         """Parses the ASCII output of a wrdata command for AC analysis."""
         result = NgspiceAcResult()
 
@@ -609,9 +739,27 @@ class _SubprocessBackend:
                 complex_data = [complex(r, i) for r, i in zip(real_parts, imag_parts)]
                 result._categorize_signal(vec_name, complex_data)
 
+        # Try to get vector info from ngspice to improve signal type detection
+        try:
+            vectors_info = self.vector_info()
+            for vec_info in vectors_info:
+                if vec_info.name in result.signals:
+                    # Use vector quantity information when available
+                    if hasattr(vec_info, "quantity") and vec_info.quantity:
+                        # Map ngspice vector quantities to SignalKind
+                        if vec_info.quantity.lower() in ("frequency", "freq"):
+                            result.signals[vec_info.name].kind = SignalKind.TIME
+                        elif vec_info.quantity.lower() in ("voltage", "v"):
+                            result.signals[vec_info.name].kind = SignalKind.VOLTAGE
+                        elif vec_info.quantity.lower() in ("current", "i"):
+                            result.signals[vec_info.name].kind = SignalKind.CURRENT
+        except Exception:
+            # Fallback to existing heuristics if vector info is not available
+            pass
+
         return result
 
-    def ac(self, *args, wrdata_file: Optional[str] = None) -> 'NgspiceAcResult':
+    def ac(self, *args, wrdata_file: Optional[str] = None) -> "NgspiceAcResult":
         self.command(f"ac {' '.join(args)}")
 
         if wrdata_file is None:
@@ -619,13 +767,13 @@ class _SubprocessBackend:
             print_all_res = "".join(self.print_all())
             result = NgspiceAcResult()
 
-            sections = re.split(r'AC Analysis\s+.*\n\s*-{60,}', print_all_res)
+            sections = re.split(r"AC Analysis\s+.*\n\s*-{60,}", print_all_res)
 
             for section in sections:
                 if not section.strip():
                     continue
 
-                lines = section.strip().split('\n')
+                lines = section.strip().split("\n")
                 header_line = lines[0]
                 data_lines = lines[1:]
 
@@ -635,7 +783,7 @@ class _SubprocessBackend:
 
                 vector_name = headers[-1]
 
-                if 'frequency' in headers:
+                if "frequency" in headers:
                     if not result.freq:
                         for line in data_lines:
                             match = re.match(r"\s*\d+\s+([\d.eE+-]+)", line)
@@ -655,12 +803,36 @@ class _SubprocessBackend:
 
                 result._categorize_signal(vector_name, signal_data)
 
-            result.freq = tuple(result.freq)
+            # Keep freq as list for compatibility with NgspiceAcResult
+            # The tuple conversion was causing type issues
+
+            # Try to get vector info from ngspice to improve signal type detection
+            try:
+                vectors_info = self.vector_info()
+                for vec_info in vectors_info:
+                    if vec_info.name in result.signals:
+                        # Use vector quantity information when available
+                        if hasattr(vec_info, "quantity") and vec_info.quantity:
+                            # Map ngspice vector quantities to SignalKind
+                            if vec_info.quantity.lower() in ("frequency", "freq"):
+                                result.signals[vec_info.name].kind = SignalKind.TIME
+                            elif vec_info.quantity.lower() in ("voltage", "v"):
+                                result.signals[vec_info.name].kind = SignalKind.VOLTAGE
+                            elif vec_info.quantity.lower() in ("current", "i"):
+                                result.signals[vec_info.name].kind = SignalKind.CURRENT
+            except Exception:
+                # Fallback to existing heuristics if vector info is not available
+                pass
+
             return result
         else:
-            vectors_to_write = [v.name for v in self.vector_info() if v.name != 'frequency' and v.length > 0]
+            vectors_to_write = [
+                v.name
+                for v in self.vector_info()
+                if v.name != "frequency" and v.length > 0
+            ]
             if not vectors_to_write:
-                return NgspiceAcResult() # Return empty result if no vectors
+                return NgspiceAcResult()  # Return empty result if no vectors
 
             # Quote vector names to handle special characters
             vectors_quoted = [f'"{v}"' for v in vectors_to_write]
@@ -670,18 +842,26 @@ class _SubprocessBackend:
     def vector_info(self) -> Iterator[NgspiceVector]:
         """Wrapper for ngspice's "display" command."""
         display_output = self.command("display")
-        lines = display_output.split('\n')
+        lines = display_output.split("\n")
 
         in_vectors_section = False
         for line in lines:
-            if 'Here are the vectors currently active:' in line:
+            if "Here are the vectors currently active:" in line:
                 in_vectors_section = True
                 continue
 
             if in_vectors_section:
-                if len(line) == 0 or line.startswith('Title:') or line.startswith('Name:') or line.startswith('Date:'):
+                if (
+                    len(line) == 0
+                    or line.startswith("Title:")
+                    or line.startswith("Name:")
+                    or line.startswith("Date:")
+                ):
                     continue
-                res = re.match(r"\s*([0-9a-zA-Z_.#@\[\]]*)\s*:\s*([a-zA-Z]+),\s*([a-zA-Z]+),\s*([0-9]+) long(.*)", line)
+                res = re.match(
+                    r"\s*([0-9a-zA-Z_.#@\[\]]*)\s*:\s*([a-zA-Z]+),\s*([a-zA-Z]+),\s*([0-9]+) long(.*)",
+                    line,
+                )
                 if res:
                     name, vtype, dtype, length, rest = res.groups()
                     yield NgspiceVector(name, vtype, dtype, int(length), rest)
