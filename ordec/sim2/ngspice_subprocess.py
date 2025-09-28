@@ -377,14 +377,15 @@ class NgspiceSubprocess:
 
         return self._async_queue
 
-    def _collect_voltage_data(self) -> dict:
-        vdata = {}
+    def _collect_all_signal_data(self) -> tuple[dict, dict]:
+        signal_data = {}
+        signal_kinds = {}
         try:
             # Use "print all" once to get all vector data efficiently instead of N individual commands
             print_all_output = self.command("print all")
         except NgspiceError:
-            # If print all fails, just return empty dict; not fatal for chunk parsing
-            return vdata
+            # If print all fails, just return empty dicts; not fatal for chunk parsing
+            return signal_data, signal_kinds
 
         # Parse the output from "print all"
         current_headers = None
@@ -416,25 +417,31 @@ class NgspiceSubprocess:
             except (ValueError, IndexError):
                 continue
                 
-            if time_val not in vdata:
-                vdata[time_val] = {}
+            if time_val not in signal_data:
+                signal_data[time_val] = {}
                 
             # Parse each column according to headers
             for i, header in enumerate(current_headers[2:], start=2):  # Skip Index and time columns
                 if i < len(values):
-                    # Skip branch currents and other non-voltage signals
-                    if header.startswith("@") or header.endswith("#branch"):
-                        continue
                     try:
-                        voltage_val = float(values[i])
-                        vdata[time_val][header] = voltage_val
+                        signal_val = float(values[i])
+                        signal_data[time_val][header] = signal_val
+                        
+                        # Categorize signal type based on name patterns (matching FFI implementation)
+                        if header.startswith("@") and "[" in header:
+                            signal_kinds[header] = SignalKind.CURRENT
+                        elif header.endswith("#branch"):
+                            signal_kinds[header] = SignalKind.CURRENT
+                        else:
+                            signal_kinds[header] = SignalKind.VOLTAGE
+                            
                     except (ValueError, IndexError):
                         continue
                         
-        return vdata
+        return signal_data, signal_kinds
 
     def _parse_and_enqueue_from_lines(self, lines: list, current_time: float, chunk_end: float, tstop: float) -> None:
-        voltage_data = self._collect_voltage_data()
+        signal_data, signal_kinds = self._collect_all_signal_data()
         tables = {}
         current_headers = None
 
@@ -508,13 +515,14 @@ class NgspiceSubprocess:
                 else:
                     data_point["signal_kinds"][header] = SignalKind.VOLTAGE
 
-            # Add printed voltage data if available for this time point
-            if time_val in voltage_data:
-                for node_name, voltage_val in voltage_data[time_val].items():
-                    if node_name == "time":
+            # Add all printed signal data if available for this time point
+            if time_val in signal_data:
+                for signal_name, signal_val in signal_data[time_val].items():
+                    if signal_name == "time":
                         continue
-                    data_point["data"][node_name] = voltage_val
-                    data_point["signal_kinds"][node_name] = SignalKind.VOLTAGE
+                    data_point["data"][signal_name] = signal_val
+                    # Use the proper signal kind classification
+                    data_point["signal_kinds"][signal_name] = signal_kinds.get(signal_name, SignalKind.VOLTAGE)
 
             if self.debug and self._data_points_sent < 3:
                 print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")
