@@ -14,20 +14,38 @@ from .ngspice import Ngspice, Netlister
 def build_hier_symbol(simhier, symbol):
     simhier.schematic = symbol
     for pin in symbol.all(Pin):
-        # TODO: implement hierarchical construction within schematic
-        setattr(simhier, pin.full_path_str(), SimNet(eref=pin))
+        full = pin.full_path_str()
+        parts = full.split('.')
+        node = simhier
+        for part in parts[:-1]:
+            if not hasattr(node, part):
+                setattr(node, part, SimHierarchy())
+            node = getattr(node, part)
+        setattr(node, parts[-1], SimNet(eref=pin))
 
 
 def build_hier_schematic(simhier, schematic):
     simhier.schematic = schematic
     for net in schematic.all(Net):
-        # TODO: implement hierarchical construction within schematic
-        setattr(simhier, net.full_path_str(), SimNet(eref=net))
+        full = net.full_path_str()
+        parts = full.split('.')
+        node = simhier
+        for part in parts[:-1]:
+            if not hasattr(node, part):
+                setattr(node, part, SimHierarchy())
+            node = getattr(node, part)
+        setattr(node, parts[-1], SimNet(eref=net))
 
     for inst in schematic.all(SchemInstance):
-        # TODO: implement hierarchical construction
-        setattr(simhier, inst.full_path_str(), SimInstance(eref=inst))
-        subnode = getattr(simhier, inst.full_path_str())
+        full = inst.full_path_str()
+        parts = full.split('.')
+        node = simhier
+        for part in parts[:-1]:
+            if not hasattr(node, part):
+                setattr(node, part, SimHierarchy())
+            node = getattr(node, part)
+        setattr(node, parts[-1], SimInstance(eref=inst))
+        subnode = getattr(node, parts[-1])
         try:
             subschematic = inst.symbol.cell.schematic
         except AttributeError:
@@ -41,14 +59,10 @@ class AlterSession:
     def __init__(self, highlevel_sim, ngspice_sim):
         self.highlevel_sim = highlevel_sim
         self.ngspice_sim = ngspice_sim
-        # mark active simulation on the high-level object
         highlevel_sim._active_sim = ngspice_sim
-        # preload the netlist so subsequent commands refer to the correct circuit
         ngspice_sim.load_netlist(highlevel_sim.netlister.out())
 
     def alter_component(self, component_instance, **parameters):
-        """Alter component parameters using a SimInstance or SchemInstance."""
-        # Accept either a SimInstance (has .eref) or a SchemInstance (find mapping)
         if not hasattr(component_instance, "eref"):
             sim_instance = self.highlevel_sim.find_sim_instance_from_schem_instance(component_instance)
             if not sim_instance:
@@ -62,7 +76,6 @@ class AlterSession:
         return True
 
     def show_component(self, component_instance):
-        """Return backend response to `show <component>` for given instance."""
         if not hasattr(component_instance, "eref"):
             sim_instance = self.highlevel_sim.find_sim_instance_from_schem_instance(component_instance)
             if not sim_instance:
@@ -73,7 +86,6 @@ class AlterSession:
         return self.ngspice_sim.command(f"show {netlist_name}")
 
     def op(self):
-        """Run operating-point analysis and update the simulation hierarchy."""
         self.highlevel_sim.simhier.sim_type = SimType.DC
         for hook in self.highlevel_sim.sim_setup_hooks:
             hook(self.ngspice_sim)
@@ -278,7 +290,6 @@ class HighlevelSim:
                         if i < len(signal_chars):
                             ident = signal_chars[i]
                         else:
-                            # multi-character identifier for many signals; VCD allows this
                             ident = f"sig{i}"
                         signals_to_export.append((base_name, ident, simnet.trans_voltage))
 
