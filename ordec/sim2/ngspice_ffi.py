@@ -564,10 +564,13 @@ class NgspiceFFI:
         self._sim_tstop = None
         self._last_progress = 0.0
 
-        # Do not attempt to parse `tstop` here. Callers are required to pass a
-        # normalized value (use single-letter SI suffixes like 'u','m','n', etc.).
-        # Leave internal _sim_tstop unset so progress calculations won't rely on it.
-        self._sim_tstop = None
+        if tstop is not None:
+            try:
+                # Parse tstop to enable accurate progress calculation using the R class
+                self._sim_tstop = float(R(str(tstop)))
+            except (ValueError, IndexError):
+                # Fallback if parsing fails, progress will be estimated
+                self._sim_tstop = None
 
         # Clear any existing data
         while not self._async_data_queue.empty():

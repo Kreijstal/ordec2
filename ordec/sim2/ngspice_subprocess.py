@@ -377,19 +377,17 @@ class NgspiceSubprocess:
 
         return self._async_queue
 
-    def _collect_all_signal_data(self) -> tuple[dict, dict]:
+
+    def _parse_and_enqueue_from_lines(self, lines: list, current_time: float, chunk_end: float, tstop: float) -> None:
+        # Parse the lines directly instead of calling _collect_all_signal_data 
+        # to avoid redundant "print all" command execution
         signal_data = {}
         signal_kinds = {}
-        try:
-            # Use "print all" once to get all vector data efficiently instead of N individual commands
-            print_all_output = self.command("print all")
-        except NgspiceError:
-            # If print all fails, just return empty dicts; not fatal for chunk parsing
-            return signal_data, signal_kinds
-
-        # Parse the output from "print all"
+        tables = {}
         current_headers = None
-        for line in print_all_output.split("\n"):
+        
+        # Parse signal data from lines (similar to _collect_all_signal_data logic)
+        for line in lines:
             line = line.strip()
             if not line:
                 continue
@@ -400,7 +398,7 @@ class NgspiceSubprocess:
                 
             # Check if this is a header line (contains "Index" and "time")
             if "Index" in line and "time" in line:
-                current_headers = line.split()
+                current_headers = tuple(line.split())
                 continue
                 
             if not current_headers:
@@ -437,54 +435,16 @@ class NgspiceSubprocess:
                             
                     except (ValueError, IndexError):
                         continue
-                        
-        return signal_data, signal_kinds
 
-    def _parse_and_enqueue_from_lines(self, lines: list, current_time: float, chunk_end: float, tstop: float) -> None:
-        signal_data, signal_kinds = self._collect_all_signal_data()
-        tables = {}
-        current_headers = None
-
-        for raw_line in lines:
+        # Now create data points from the parsed signal data
+        for time_val, time_signals in signal_data.items():
             with self._async_lock:
                 if self._async_halt_requested:
                     if self.debug:
                         print(f"DEBUG: Breaking due to halt request in chunk starting at {current_time}")
                     break
 
-            line = raw_line.strip()
-            if not line or re.match(r"^-+$", line) or "Transient Analysis" in line or line == "print all":
-                continue
-
-            # Check if this is a header line (contains "Index" and "time")
-            if "Index" in line and "time" in line:
-                current_headers = tuple(line.split())
-                if self.debug:
-                    print(f"DEBUG: Found headers: {current_headers}")
-                if current_headers not in tables:
-                    tables[current_headers] = []
-                continue
-
-            if not current_headers:
-                continue
-
-            row_data = line.split("\t")
-            if len(row_data) < 2 or not self._is_numeric_row(row_data):
-                row_data = line.split()
-
-            if len(row_data) < 2 or not self._is_numeric_row(row_data) or len(row_data) > len(current_headers):
-                continue
-
-            if self.debug and len(tables[current_headers]) < 3:
-                print(f"DEBUG: Adding row data: {row_data}")
-            tables[current_headers].append(row_data)
-
-            # Create data point for this row
-            try:
-                time_val = float(row_data[1])
-            except (ValueError, IndexError):
-                continue
-
+            # Only include points in our time range
             if not (current_time <= time_val <= chunk_end):
                 continue
 
@@ -496,33 +456,13 @@ class NgspiceSubprocess:
                 "progress": min(1.0, time_val / tstop) if tstop > 0 else 0.0,
             }
 
-            for i, header in enumerate(current_headers[2:], 2):
-                if i >= len(row_data) or not row_data[i].strip():
+            # Add all signal values for this time point
+            for signal_name, signal_val in time_signals.items():
+                if signal_name == "time":
                     continue
-                try:
-                    data_point["data"][header] = float(row_data[i])
-                except ValueError:
-                    # Skip non-numeric values
-                    continue
-
-                # Determine signal kind for this header
-                if header.lower() == "time":
-                    data_point["signal_kinds"][header] = SignalKind.TIME
-                elif header.startswith("@") and "[" in header:
-                    data_point["signal_kinds"][header] = SignalKind.CURRENT
-                elif header.endswith("#branch"):
-                    data_point["signal_kinds"][header] = SignalKind.CURRENT
-                else:
-                    data_point["signal_kinds"][header] = SignalKind.VOLTAGE
-
-            # Add all printed signal data if available for this time point
-            if time_val in signal_data:
-                for signal_name, signal_val in signal_data[time_val].items():
-                    if signal_name == "time":
-                        continue
-                    data_point["data"][signal_name] = signal_val
-                    # Use the proper signal kind classification
-                    data_point["signal_kinds"][signal_name] = signal_kinds.get(signal_name, SignalKind.VOLTAGE)
+                data_point["data"][signal_name] = signal_val
+                # Use the proper signal kind classification
+                data_point["signal_kinds"][signal_name] = signal_kinds.get(signal_name, SignalKind.VOLTAGE)
 
             if self.debug and self._data_points_sent < 3:
                 print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")
