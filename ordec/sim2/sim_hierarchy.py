@@ -1,22 +1,12 @@
 # SPDX-FileCopyrightText: 2025 ORDeC contributors
 # SPDX-License-Identifier: Apache-2.0
-"""
-High-level simulation helpers.
-
-This module provides:
-- helpers to build a simulation hierarchy from a schematic/symbol tree
-- a module-level `AlterSession` class that can be used to alter component
-  parameters and run analyses while keeping an ngspice session alive
-- `HighlevelSim` which exposes convenient methods to run op/tran/ac and
-  to export transient results to VCD with flexible timescale handling.
-"""
 
 from typing import Optional
 from contextlib import contextmanager
-import re
 import time
 
 from ..core import *
+from ..core.rational import R
 from ..core.schema import SimType
 from .ngspice import Ngspice, Netlister
 
@@ -47,12 +37,6 @@ def build_hier_schematic(simhier, schematic):
 
 
 class AlterSession:
-    """Module-level AlterSession used by `HighlevelSim.alter_session`.
-
-    This keeps a reference to the active high-level sim and the ngspice session
-    and exposes helpers for altering components, running analyses and controlling
-    asynchronous transient runs.
-    """
 
     def __init__(self, highlevel_sim, ngspice_sim):
         self.highlevel_sim = highlevel_sim
@@ -112,7 +96,6 @@ class AlterSession:
                     continue
 
     def start_async_tran(self, tstep, tstop, **kwargs):
-        """Start an asynchronous transient simulation (backend-specific)."""
         return self.ngspice_sim.tran_async(tstep, tstop, **kwargs)
 
     def halt_simulation(self, timeout=1.0):
@@ -236,53 +219,24 @@ class HighlevelSim:
                     continue
 
     def _parse_timescale_factor(self, timescale: str) -> float:
-        """Parse a VCD timescale string like '1us', '10 ns' or '1 s'.
-
-        Returns the factor to multiply seconds by to obtain integer units used
-        in VCD timestamps. Example: timescale='1us' -> returns 1e6.
-
-        The format accepted is: <number><unit> where unit is one of
-        s, ms, us, ns, ps, fs (case-insensitive) and optional whitespace.
-        """
         if not isinstance(timescale, str) or not timescale.strip():
             raise ValueError("timescale must be a non-empty string like '1us' or '10 ns'")
 
-        m = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)\s*$", timescale)
-        if not m:
-            raise ValueError(f"Invalid timescale format: '{timescale}'")
-
-        value_str, unit = m.group(1), m.group(2).lower()
         try:
-            value = float(value_str)
-        except ValueError:
-            raise ValueError(f"Invalid numeric value in timescale: '{value_str}'")
+            ts_rational = R(timescale)
+        except Exception as e:
+            raise ValueError(f"Invalid timescale '{timescale}': {e}")
 
-        unit_map = {
-            "s": 1.0,
-            "ms": 1e-3,
-            "us": 1e-6,
-            "ns": 1e-9,
-            "ps": 1e-12,
-            "fs": 1e-15,
-        }
+        try:
+            timescale_seconds = float(ts_rational)
+        except Exception as e:
+            raise ValueError(f"Could not convert parsed timescale to float: {e}")
 
-        if unit not in unit_map:
-            raise ValueError(f"Unsupported timescale unit: '{unit}'. Supported: {', '.join(unit_map.keys())}")
-
-        # timescale_seconds is the number of seconds per timescale tick (e.g. 1us -> 1e-6)
-        timescale_seconds = value * unit_map[unit]
         if timescale_seconds <= 0:
             raise ValueError("Timescale must be greater than zero")
-
-        # factor to convert seconds to timescale units (e.g. 1 second -> 1e6 microseconds)
         return 1.0 / timescale_seconds
 
-    def export_to_vcd(self, filename="simulation.vcd", signal_names=None, timescale="1us"):
-        """Export transient results to a VCD file.
-
-        - `signal_names` can be an iterable of base signal names to filter exports.
-        - `timescale` is a string like '1us' or '10ns' controlling the VCD timescale.
-        """
+    def export_to_vcd(self, filename="simulation.vcd", signal_names=None, timescale="1u"):
         if self.simhier.sim_type is None:
             raise ValueError("No simulation results available. Run a simulation first.")
 
@@ -361,18 +315,15 @@ class HighlevelSim:
             raise ValueError(f"Error generating VCD file: {e}")
 
     def get_component_netlist_name(self, component_instance):
-        """Get the netlist name for a component instance using existing mapping."""
         return self.netlister.name_hier_simobj(component_instance)
 
     def find_component_by_ref_name(self, ref_name):
-        """Find a component instance by its reference name (e.g., 'r1', 'c1')."""
         for sim_instance in self.simhier.all(SimInstance):
             if hasattr(sim_instance, "eref") and hasattr(sim_instance.eref, "full_path_str") and sim_instance.eref.full_path_str().endswith(ref_name):
                 return sim_instance
         return None
 
     def find_sim_instance_from_schem_instance(self, schem_instance):
-        """Find a SimInstance that corresponds to a SchemInstance from the schematic."""
         for sim_instance in self.simhier.all(SimInstance):
             if hasattr(sim_instance, "eref") and sim_instance.eref == schem_instance:
                 return sim_instance
@@ -380,13 +331,6 @@ class HighlevelSim:
 
     @contextmanager
     def alter_session(self, backend=None, debug=False):
-        """Context manager that yields an `AlterSession` bound to an ngspice session.
-
-        Example:
-            with highlevel.alter_session() as s:
-                s.alter_component(inst, value=10)
-                s.op()
-        """
         use_backend = backend or self.backend
         with Ngspice.launch(debug=debug, backend=use_backend) as ngspice_sim:
             try:
