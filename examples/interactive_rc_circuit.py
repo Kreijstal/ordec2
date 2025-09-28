@@ -14,6 +14,11 @@ from ordec.lib.base import Vdc, Res, Cap, Gnd
 from ordec.sim2.ngspice import Ngspice, NgspiceBackend
 from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 from ordec.widgets import AnimatedFnWidget, VdcSliderWidget
+from ordec.sim2.ngspice_ffi import NgspiceFFI
+
+# Ensure FFI library is checked early so errors are raised visibly during import.
+# This surfaces linker/load issues immediately and makes debugging simpler.
+NgspiceFFI.find_library()
 
 class InteractiveRCCircuit(Cell):
     vdc_initial = Parameter(R, default=R(1.0))
@@ -70,8 +75,7 @@ class InteractiveSimulation:
         self._vcd_header_buffer = []
         self._vcd_initial_values = []
 
-        from ordec.sim2.ngspice import _FFIBackend
-        _FFIBackend.find_library()
+        # FFI library is validated at module import time; no need to repeat here.
 
         self.vdc_slider.observe(self._on_voltage_change, names='value')
 
@@ -283,13 +287,13 @@ class InteractiveSimulation:
     def stop_simulation(self):
         self.is_running = False
 
-    def start_vcd_recording(self, filename="interactive_simulation.vcd", timescale="1us"):
+    def start_vcd_recording(self, filename="interactive_simulation.vcd", timescale="1u"):
         """
         Start recording simulation data for VCD export with streaming to file.
 
         Args:
             filename: Output VCD filename
-            timescale: VCD timescale (e.g., "1us", "1ns")
+            timescale: VCD timescale (e.g., "1u", "1n")
         """
         try:
             self._vcd_file = open(filename, 'w')
@@ -403,7 +407,7 @@ class InteractiveSimulation:
 
                     self._vcd_file.write(f"r{value} {char}\n")
 
-    def export_to_vcd(self, filename="interactive_simulation.vcd", timescale="1us"):
+    def export_to_vcd(self, filename="interactive_simulation.vcd", timescale="1u"):
         return self.start_vcd_recording(filename, timescale)
 
 def main(plot_all_signals=False):
@@ -449,4 +453,4 @@ if __name__ == "__main__":
 
 InteractiveRCCircuit().schematic
 
-interactive_sim.start_vcd_recording("test.vcd") 
+interactive_sim.start_vcd_recording("test.vcd")

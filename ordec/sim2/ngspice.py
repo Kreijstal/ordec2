@@ -10,9 +10,9 @@ from typing import Iterator, Optional, Callable, Generator
 import numpy as np
 
 from ..core import *
-from .ngspice_ffi import _FFIBackend
-from .ngspice_subprocess import _SubprocessBackend
-from .ngspice_mp import IsolatedFFIBackend
+from .ngspice_ffi import NgspiceFFI
+from .ngspice_subprocess import NgspiceSubprocess
+from .ngspice_mp import NgspiceIsolatedFFI
 
 class NgspiceBackend(Enum):
     """Available NgSpice backend types."""
@@ -31,9 +31,9 @@ class Ngspice:
             print(f"[Ngspice] Using backend: {backend.value}")
 
         backend_class = {
-            NgspiceBackend.FFI: _FFIBackend,
-            NgspiceBackend.SUBPROCESS: _SubprocessBackend,
-            NgspiceBackend.MP: IsolatedFFIBackend,
+            NgspiceBackend.FFI: NgspiceFFI,
+            NgspiceBackend.SUBPROCESS: NgspiceSubprocess,
+            NgspiceBackend.MP: NgspiceIsolatedFFI,
         }[backend]
 
         with backend_class.launch(debug=debug) as backend_instance:
@@ -59,8 +59,16 @@ class Ngspice:
     def ac(self, *args, **kwargs) -> 'NgspiceAcResult':
         return self._backend_impl.ac(*args, **kwargs)
 
-    def tran_async(self, *args, throttle_interval: float = 0.1) -> 'queue.Queue':
-        return self._backend_impl.tran_async(*args, throttle_interval=throttle_interval)
+    def tran_async(self, tstep, tstop=None, throttle_interval: float = 0.1) -> 'queue.Queue':
+        """
+        Start an asynchronous transient simulation.
+
+        New strict signature: explicit `tstep` and optional `tstop`. Any backend
+        that implements `tran_async` is expected to accept the same explicit
+        signature (tstep, tstop, ...) so the proxy forwards those parameters
+        directly to the backend implementation.
+        """
+        return self._backend_impl.tran_async(tstep, tstop, throttle_interval=throttle_interval)
 
     def op_async(self, callback: Optional[Callable] = None) -> Generator:
         if hasattr(self._backend_impl, 'op_async'):

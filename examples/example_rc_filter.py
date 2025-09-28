@@ -11,6 +11,9 @@ from io import BytesIO
 from ordec.core import *
 from ordec import Rational as R
 from ordec.lib.base import PulseVoltageSource, Res, Cap, Gnd
+from ordec.sim2.ngspice_ffi import NgspiceFFI
+# Ensure FFI library is checked early so linker/load errors are visible immediately.
+NgspiceFFI.find_library()
 from ordec.sim2.ngspice import Ngspice, NgspiceBackend
 from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 
@@ -236,21 +239,15 @@ def run_rc_square_wave_simulation_with_vcd():
     s = SimHierarchy(cell=tb)
     sim = HighlevelSim(tb.schematic, s)
 
-    # Try to use FFI backend if available, otherwise subprocess
-    backend_to_use = NgspiceBackend.SUBPROCESS
-    try:
-        from ordec.sim2.ngspice import _FFIBackend
-        _FFIBackend.find_library()
-        backend_to_use = NgspiceBackend.FFI
-        print("Using FFI backend for faster simulation")
-    except (ImportError, OSError):
-        print("Using subprocess backend")
+    # The FFI library is checked at module import, so we can directly use the FFI backend.
+    backend_to_use = NgspiceBackend.FFI
+    print("Using FFI backend for faster simulation")
 
     # Set backend for HighLevelSim
     sim.backend = backend_to_use
 
     # Simulate for 5 periods to see the integration curve clearly
-    print("Running transient simulation for 5ms using HighLevelSim...")
+    print("Running transient simulation for 5m using HighLevelSim...")
     sim.tran("10u", "5m")
 
     time_data = s.time
@@ -268,7 +265,7 @@ def run_rc_square_wave_simulation_with_vcd():
     # Export to VCD using the new HighLevelSim method
     print("\nExporting simulation results to VCD format...")
     try:
-        vcd_success = sim.export_to_vcd("rc_simulation.vcd", timescale="1us")
+        vcd_success = sim.export_to_vcd("rc_simulation.vcd", timescale="1u")
     except Exception as e:
         print(f"Error during VCD export: {e}")
         return False

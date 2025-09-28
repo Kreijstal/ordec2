@@ -23,9 +23,9 @@ except (RuntimeError, AttributeError):
 
 class FFIWorkerProcess:
     """
-    This worker runs in a separate process. It creates a standard _FFIBackend
-    and acts as a bridge, forwarding commands and results between the main
-    process and the FFI backend.
+    This worker runs in a separate process. It creates an FFI backend
+    instance and acts as a bridge, forwarding commands and results between the
+    worker process and the FFI backend implementation.
     """
     #TODO performance
 
@@ -92,7 +92,7 @@ class FFIWorkerProcess:
 
     def run(self):
         """Main worker loop. Waits for commands and dispatches them."""
-        from .ngspice_ffi import _FFIBackend
+        from .ngspice_ffi import NgspiceFFI
         import traceback  # Ensure traceback is available in worker process
 
         # Initialize thread synchronization objects (can't pickle these)
@@ -105,7 +105,7 @@ class FFIWorkerProcess:
         msg = self.conn.recv()
         if msg['type'] == 'init':
             try:
-                self.backend = _FFIBackend(debug=msg.get('debug', False))
+                self.backend = NgspiceFFI(debug=msg.get('debug', False))
                 self.conn.send({'type': 'init_success'})
             except Exception as e:
                 self.conn.send({'type': 'error', 'data': pickle.dumps(e), 'traceback': traceback.format_exc()})
@@ -303,7 +303,7 @@ class FFIWorkerProcess:
         self._relay_thread = threading.Thread(target=relay_data, daemon=True)
         self._relay_thread.start()
 
-class IsolatedFFIBackend:
+class NgspiceIsolatedFFI:
     """
     A proxy that runs FFI calls in an isolated child process.
     """
@@ -318,15 +318,14 @@ class IsolatedFFIBackend:
         p = Process(target=worker.run)
         p.start()
 
-        backend = None
+        backend = NgspiceIsolatedFFI(parent_conn, p, async_queue)
         try:
-            backend = IsolatedFFIBackend(parent_conn, p, async_queue)
             parent_conn.send({'type': 'init', 'debug': debug})
             response = parent_conn.recv()
             if response['type'] == 'error':
-                 exc = pickle.loads(response['data'])
-                 exc.args += (f"\n--- Traceback from worker process ---\n{response['traceback']}",)
-                 raise exc
+                exc = pickle.loads(response['data'])
+                exc.args += (f"\n--- Traceback from worker process ---\n{response['traceback']}",)
+                raise exc
             yield backend
         finally:
             if backend:
@@ -477,8 +476,8 @@ class IsolatedFFIBackend:
     def reset(self): return self._call_worker('reset')
     def cleanup(self): pass
 
-    def _create_async_generator(self, cmd, *args, **kwargs):
-        callback = kwargs.pop('callback', None)
+    def _create_async_generator(self, cmd, *args, callback=None, **kwargs):
+        # callback is now an explicit parameter and must NOT be forwarded to the worker
         self._call_worker(cmd, *args, **kwargs)
 
         def generator_with_callback():
@@ -492,8 +491,16 @@ class IsolatedFFIBackend:
 
         return generator_with_callback()
 
-    def tran_async(self, *args, throttle_interval: float = 0.1):
-        self._call_worker('tran_async', *args, throttle_interval=throttle_interval)
+    def tran_async(self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1):
+        """
+        Start asynchronous transient simulation (explicit signature).
+
+        New strict signature: explicit `tstep`, optional `tstop`, plus any
+        extra ngspice tran args forwarded via `extra_args`. The throttle
+        interval is forwarded as a keyword for the worker.
+        """
+        # Forward explicit args to the worker
+        self._call_worker('tran_async', tstep, tstop, *extra_args, throttle_interval=throttle_interval)
         return self.async_queue
 
     def safe_halt_simulation(self, max_attempts: int = 3, wait_time: float = 1.0):
@@ -579,9 +586,15 @@ class IsolatedFFIBackend:
 
         return False
 
-    def tran_async(self, *args, **kwargs):
+    def tran_async(self, tstep, tstop=None, *extra_args, **kwargs):
+        """
+        Mark async simulation running and forward explicit tran arguments to worker.
+
+        Accepts the explicit (tstep, tstop) signature to match updated backends.
+        Any additional keyword arguments are forwarded to the worker.
+        """
         self._async_simulation_running = True
-        self._call_worker('tran_async', *args, **kwargs)
+        self._call_worker('tran_async', tstep, tstop, *extra_args, **kwargs)
         return self.async_queue
 
     def op_async(self, *args, **kwargs):
