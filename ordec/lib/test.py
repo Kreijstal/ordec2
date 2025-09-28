@@ -26,6 +26,23 @@ class SignalValue:
 
 
 class TranResult:
+    """
+    Simulation result wrapper that provides dynamic attribute access to signals.
+    
+    This class dynamically sets attributes using `self.__dict__` to provide convenient 
+    dot-notation access to simulation signals (e.g., `result.my_net`). The dynamic 
+    attributes are created based on:
+    
+    - Time data: Available as `result.time` (SignalValue with kind=SignalKind.TIME)
+    - Net signals: Available as `result.<net_name>` (SignalValue with appropriate kind)
+    
+    Each attribute is a SignalValue containing:
+    - value: The actual signal data (list of values)
+    - kind: SignalKind indicating the type of signal (TIME, VOLTAGE, CURRENT, OTHER)
+    
+    The signal kinds are determined from provided signal_kinds mapping or fall back
+    to heuristics (time signals -> TIME, net signals -> VOLTAGE by default).
+    """
     def __init__(
         self, data_dict, sim_hierarchy, netlister, progress, signal_kinds=None
     ):

@@ -106,16 +106,81 @@ class NgspiceTable:
         self.data = []
 
 
-class NgspiceTransientResult:
+class NgspiceResultBase:
+    """Base class for NgspiceTransientResult and NgspiceAcResult to reduce code duplication."""
+    
     def __init__(self):
-        self.time: list = []
         # Map signal name -> SignalArray
         self.signals: Dict[str, SignalArray] = {}
-        self.tables: list = []
         # legacy buckets (kept for compatibility with higher-level code)
         self.voltages: Dict[str, list] = {}
         self.currents: Dict[str, Dict[str, list]] = {}
         self.branches: Dict[str, list] = {}
+
+    def _categorize_signal(self, signal_name, signal_data):
+        """Categorize signals into voltages, currents, and branches."""
+        if signal_name.startswith("@") and "[" in signal_name:
+            # Device current like "@m.xi0.mpd[id]"
+            device_part = signal_name.split("[")[0][1:]  # Remove @ and get device part
+            current_type = signal_name.split("[")[1].rstrip("]")  # Get current type
+            if device_part not in self.currents:
+                self.currents[device_part] = {}
+            self.currents[device_part][current_type] = signal_data
+        elif signal_name.endswith("#branch"):
+            # Branch current like "vi3#branch"
+            branch_name = signal_name.replace("#branch", "")
+            self.branches[branch_name] = signal_data
+        else:
+            # Regular node voltage
+            self.voltages[signal_name] = signal_data
+
+    def _guess_signal_kind(self, signal_name) -> SignalKind:
+        """Best-effort heuristic to classify a signal name into a SignalKind. 
+        Subclasses should override for analysis-specific logic."""
+        if not signal_name:
+            return SignalKind.OTHER
+        if signal_name.startswith("@") and "[" in signal_name:
+            return SignalKind.CURRENT
+        if signal_name.endswith("#branch"):
+            return SignalKind.CURRENT
+        # Fallback: treat as node voltage
+        return SignalKind.VOLTAGE
+
+    def __getitem__(self, key):
+        """Allow signal access."""
+        return self.get_signal(key)
+
+    def get_signal(self, signal_name):
+        return self.signals.get(signal_name, [])
+
+    def get_voltage(self, node_name):
+        return self.voltages.get(node_name, [])
+
+    def get_current(self, device_name, current_type="id"):
+        device_currents = self.currents.get(device_name, {})
+        return device_currents.get(current_type, [])
+
+    def get_branch_current(self, branch_name):
+        return self.branches.get(branch_name, [])
+
+    def list_signals(self):
+        return list(self.signals.keys())
+
+    def list_voltages(self):
+        return list(self.voltages.keys())
+
+    def list_currents(self):
+        return list(self.currents.keys())
+
+    def list_branches(self):
+        return list(self.branches.keys())
+
+
+class NgspiceTransientResult(NgspiceResultBase):
+    def __init__(self):
+        super().__init__()
+        self.time: list = []
+        self.tables: list = []
 
     def add_table(self, table):
         """Add a table and extract signals into the signals dictionary."""
@@ -172,23 +237,6 @@ class NgspiceTransientResult:
                 # Categorize signals for easier access (populate voltages/currents/branches)
                 self._categorize_signal(signal_name, signal_data)
 
-    def _categorize_signal(self, signal_name, signal_data):
-        """Categorize signals into voltages, currents, and branches."""
-        if signal_name.startswith("@") and "[" in signal_name:
-            # Device current like "@m.xi0.mpd[id]"
-            device_part = signal_name.split("[")[0][1:]  # Remove @ and get device part
-            current_type = signal_name.split("[")[1].rstrip("]")  # Get current type
-            if device_part not in self.currents:
-                self.currents[device_part] = {}
-            self.currents[device_part][current_type] = signal_data
-        elif signal_name.endswith("#branch"):
-            # Branch current like "vi3#branch"
-            branch_name = signal_name.replace("#branch", "")
-            self.branches[branch_name] = signal_data
-        else:
-            # Regular node voltage
-            self.voltages[signal_name] = signal_data
-
     def _guess_signal_kind(self, signal_name) -> SignalKind:
         """Best-effort heuristic to classify a signal name into a SignalKind."""
         if not signal_name:
@@ -196,12 +244,8 @@ class NgspiceTransientResult:
         name = signal_name.lower()
         if name in ("time", "index"):
             return SignalKind.TIME
-        if signal_name.startswith("@") and "[" in signal_name:
-            return SignalKind.CURRENT
-        if signal_name.endswith("#branch"):
-            return SignalKind.CURRENT
-        # Fallback: treat as node voltage
-        return SignalKind.VOLTAGE
+        # Delegate to base class for common patterns
+        return super()._guess_signal_kind(signal_name)
 
     def __getitem__(self, key):
         """Allow table indexing or signal access."""
@@ -216,31 +260,6 @@ class NgspiceTransientResult:
     def __iter__(self):
         return iter(self.tables)
 
-    def get_signal(self, signal_name):
-        return self.signals.get(signal_name, [])
-
-    def get_voltage(self, node_name):
-        return self.voltages.get(node_name, [])
-
-    def get_current(self, device_name, current_type="id"):
-        device_currents = self.currents.get(device_name, {})
-        return device_currents.get(current_type, [])
-
-    def get_branch_current(self, branch_name):
-        return self.branches.get(branch_name, [])
-
-    def list_signals(self):
-        return list(self.signals.keys())
-
-    def list_voltages(self):
-        return list(self.voltages.keys())
-
-    def list_currents(self):
-        return list(self.currents.keys())
-
-    def list_branches(self):
-        return list(self.branches.keys())
-
     def plot_signals(self, *signal_names):
         result = {"time": self.time}
         for name in signal_names:
@@ -248,30 +267,15 @@ class NgspiceTransientResult:
         return result
 
 
-class NgspiceAcResult:
+class NgspiceAcResult(NgspiceResultBase):
     def __init__(self):
+        super().__init__()
         self.freq = []
-        # Map signal name -> SignalArray
-        self.signals: Dict[str, SignalArray] = {}
-        # legacy buckets (kept for compatibility with higher-level code)
-        self.voltages: Dict[str, list] = {}
-        self.currents: Dict[str, Dict[str, list]] = {}
-        self.branches: Dict[str, list] = {}
 
     def _categorize_signal(self, signal_name, signal_data):
         """Categorize signals into voltages, currents, and branches."""
-        if signal_name.startswith("@") and "[" in signal_name:
-            device_part = signal_name.split("[")[0][1:]
-            current_type = signal_name.split("[")[1].rstrip("]")
-            if device_part not in self.currents:
-                self.currents[device_part] = {}
-            self.currents[device_part][current_type] = signal_data
-        elif signal_name.endswith("#branch"):
-            branch_name = signal_name.replace("#branch", "")
-            self.branches[branch_name] = signal_data
-        else:
-            self.voltages[signal_name] = signal_data
-
+        # Delegate to base class for common categorization
+        super()._categorize_signal(signal_name, signal_data)
         # Also add to signals dictionary with best-effort kind classification
         kind = self._guess_signal_kind(signal_name)
         self.signals[signal_name] = SignalArray(kind=kind, values=signal_data)
@@ -282,44 +286,9 @@ class NgspiceAcResult:
             return SignalKind.OTHER
         name = signal_name.lower()
         if name in ("frequency", "freq"):
-            return (
-                SignalKind.TIME
-            )  # Frequency is the independent variable in AC analysis
-        if signal_name.startswith("@") and "[" in signal_name:
-            return SignalKind.CURRENT
-        if signal_name.endswith("#branch"):
-            return SignalKind.CURRENT
-        # Fallback: treat as node voltage
-        return SignalKind.VOLTAGE
-
-    def __getitem__(self, key):
-        """Allow signal access."""
-        return self.get_signal(key)
-
-    def get_signal(self, signal_name):
-        return self.signals.get(signal_name, [])
-
-    def get_voltage(self, node_name):
-        return self.voltages.get(node_name, [])
-
-    def get_current(self, device_name, current_type="id"):
-        device_currents = self.currents.get(device_name, {})
-        return device_currents.get(current_type, [])
-
-    def get_branch_current(self, branch_name):
-        return self.branches.get(branch_name, [])
-
-    def list_signals(self):
-        return list(self.signals.keys())
-
-    def list_voltages(self):
-        return list(self.voltages.keys())
-
-    def list_currents(self):
-        return list(self.currents.keys())
-
-    def list_branches(self):
-        return list(self.branches.keys())
+            return SignalKind.TIME  # Frequency is the independent variable in AC analysis
+        # Delegate to base class for common patterns
+        return super()._guess_signal_kind(signal_name)
 
     def plot_signals(self, *signal_names):
         result = {"frequency": self.freq}

@@ -342,13 +342,20 @@ class NgspiceSubprocess:
         if self._async_running:
             raise RuntimeError("Async simulation is already running")
 
+        # The subprocess backend requires tstop for its chunked simulation approach
+        # which provides async behavior with halt/resume capability and progress updates
+        if tstop is None:
+            raise ValueError(
+                "tran_async subprocess backend requires tstop parameter for chunked simulation. "
+                "Consider using FFI backend for simulations without explicit stop time."
+            )
+
         # We do NOT normalize or strip trailing 's' from unit strings here.
         # Callers must provide single-letter SI suffixes (e.g. "5u", "10m", "1n"),
         # not forms with a trailing 's' (e.g. "5us"). Parse directly with R.
         tstep_str = str(tstep).strip()
-        if tstop is None:
-            raise ValueError("tran_async requires tstop argument")
         tstop_str = str(tstop).strip()
+        
         try:
             tstep_val = float(R(tstep_str))
             tstop_val = float(R(tstop_str))
@@ -362,7 +369,7 @@ class NgspiceSubprocess:
         self._data_points_sent = 0
 
         # Build command parts (explicit tstep/tstop plus any extra args)
-        cmd_parts = [tstep_str, str(tstop)]
+        cmd_parts = [tstep_str, tstop_str]
         if extra_args:
             cmd_parts += [str(a) for a in extra_args]
         cmd_tstep_str = tstep_str  # keep original user-facing tstep string for print/commands
