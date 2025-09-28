@@ -380,43 +380,57 @@ class NgspiceSubprocess:
     def _collect_voltage_data(self) -> dict:
         vdata = {}
         try:
-            display_output = self.command("display")
+            # Use "print all" once to get all vector data efficiently instead of N individual commands
+            print_all_output = self.command("print all")
         except NgspiceError:
-            # If display fails, just return empty dict; not fatal for chunk parsing
+            # If print all fails, just return empty dict; not fatal for chunk parsing
             return vdata
 
-        for line in display_output.split("\n"):
-            if ":" not in line or line.strip().startswith("@") or line.strip().endswith("#branch"):
+        # Parse the output from "print all"
+        current_headers = None
+        for line in print_all_output.split("\n"):
+            line = line.strip()
+            if not line:
                 continue
-            parts = line.split(":", 1)
-            vec_name = parts[0].strip()
-            if not vec_name or vec_name.startswith("@") or vec_name.endswith("#branch"):
+            
+            # Skip separator lines and command echoes
+            if any(x in line for x in ("---", "print all", "Transient Analysis")):
                 continue
-            # Attempt to read a printed version of the vector; tolerate parse errors
+                
+            # Check if this is a header line (contains "Index" and "time")
+            if "Index" in line and "time" in line:
+                current_headers = line.split()
+                continue
+                
+            if not current_headers:
+                continue
+                
+            # Parse data row
+            values = line.split()
+            if len(values) < len(current_headers):
+                continue
+                
             try:
-                vec_print = self.command(f"print {vec_name}")
-            except NgspiceError:
+                # First column should be index, second should be time
+                time_val = float(values[1])
+            except (ValueError, IndexError):
                 continue
-            for vec_line in vec_print.split("\n"):
-                if not vec_line.strip():
-                    continue
-                if any(x in vec_line for x in ("Index", "time", "---", "print")):
-                    continue
-                values = vec_line.split()
-                # expect: index time [value...]
-                if len(values) < 2:
-                    continue
-                try:
-                    time_val = float(values[1])
-                except ValueError:
-                    continue
-                try:
-                    voltage_val = float(values[2]) if len(values) > 2 else 0.0
-                except ValueError:
-                    voltage_val = 0.0
-                if time_val not in vdata:
-                    vdata[time_val] = {}
-                vdata[time_val][vec_name] = voltage_val
+                
+            if time_val not in vdata:
+                vdata[time_val] = {}
+                
+            # Parse each column according to headers
+            for i, header in enumerate(current_headers[2:], start=2):  # Skip Index and time columns
+                if i < len(values):
+                    # Skip branch currents and other non-voltage signals
+                    if header.startswith("@") or header.endswith("#branch"):
+                        continue
+                    try:
+                        voltage_val = float(values[i])
+                        vdata[time_val][header] = voltage_val
+                    except (ValueError, IndexError):
+                        continue
+                        
         return vdata
 
     def _parse_and_enqueue_from_lines(self, lines: list, current_time: float, chunk_end: float, tstop: float) -> None:
