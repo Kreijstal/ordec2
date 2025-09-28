@@ -342,23 +342,21 @@ class NgspiceSubprocess:
         if self._async_running:
             raise RuntimeError("Async simulation is already running")
 
-        # The subprocess backend requires tstop for its chunked simulation approach
-        # which provides async behavior with halt/resume capability and progress updates
-        if tstop is None:
-            raise ValueError(
-                "tran_async subprocess backend requires tstop parameter for chunked simulation. "
-                "Consider using FFI backend for simulations without explicit stop time."
-            )
+        # Handle optional tstop parameter for infinite simulation support
 
         # We do NOT normalize or strip trailing 's' from unit strings here.
         # Callers must provide single-letter SI suffixes (e.g. "5u", "10m", "1n"),
         # not forms with a trailing 's' (e.g. "5us"). Parse directly with R.
         tstep_str = str(tstep).strip()
-        tstop_str = str(tstop).strip()
+        tstop_str = None
+        tstop_val = None
+        if tstop is not None:
+            tstop_str = str(tstop).strip()
         
         try:
             tstep_val = float(R(tstep_str))
-            tstop_val = float(R(tstop_str))
+            if tstop_str is not None:
+                tstop_val = float(R(tstop_str))
         except Exception as e:
             raise ValueError(f"Invalid time format: {e}")
 
@@ -368,8 +366,10 @@ class NgspiceSubprocess:
         self._async_running = True
         self._data_points_sent = 0
 
-        # Build command parts (explicit tstep/tstop plus any extra args)
-        cmd_parts = [tstep_str, tstop_str]
+        # Build command parts (explicit tstep, optional tstop, plus any extra args)
+        cmd_parts = [tstep_str]
+        if tstop_str is not None:
+            cmd_parts.append(tstop_str)
         if extra_args:
             cmd_parts += [str(a) for a in extra_args]
         cmd_tstep_str = tstep_str  # keep original user-facing tstep string for print/commands
@@ -385,7 +385,7 @@ class NgspiceSubprocess:
         return self._async_queue
 
 
-    def _parse_and_enqueue_from_lines(self, lines: list, current_time: float, chunk_end: float, tstop: float) -> None:
+    def _parse_and_enqueue_from_lines(self, lines: list, current_time: float, chunk_end: float, tstop: float | None) -> None:
         # Parse the lines directly instead of calling _collect_all_signal_data 
         # to avoid redundant "print all" command execution
         signal_data = {}
@@ -460,7 +460,7 @@ class NgspiceSubprocess:
                 "data": {"time": time_val},
                 "signal_kinds": {"time": SignalKind.TIME},
                 "index": self._data_points_sent,
-                "progress": min(1.0, time_val / tstop) if tstop > 0 else 0.0,
+                "progress": min(1.0, time_val / tstop) if tstop is not None and tstop > 0 else 0.0,
             }
 
             # Add all signal values for this time point
@@ -480,17 +480,25 @@ class NgspiceSubprocess:
             self._data_points_sent += 1
 
     def _run_chunked_simulation(
-        self, tstep: float, tstop: float, tstep_str: str, throttle_interval: float
+        self, tstep: float, tstop: float | None, tstep_str: str, throttle_interval: float
     ):
         """Run simulation in chunks to provide async-like behavior with halt support.
-
+        
+        If tstop is None, runs indefinitely until halt is requested.
         The loop is now short and delegates parsing + enqueueing to helpers.
         """
         try:
-            chunk_time = min(tstop / 100, max(tstep * 5, 1e-9))
+            # Determine chunk size - use reasonable default for infinite simulations
+            if tstop is not None:
+                chunk_time = min(tstop / 100, max(tstep * 5, 1e-9))
+            else:
+                # For infinite simulations, use a reasonable chunk size based on tstep
+                chunk_time = max(tstep * 10, 1e-6)  # At least 1µs chunks
+                
             current_time = self._async_current_time
 
-            while current_time < tstop and not self._async_halt_requested:
+            # Main simulation loop - continue until tstop reached or halt requested
+            while not self._async_halt_requested and (tstop is None or current_time < tstop):
                 # Quick check for halt request before expensive work
                 with self._async_lock:
                     if self._async_halt_requested:
@@ -499,7 +507,11 @@ class NgspiceSubprocess:
                         break
 
                 self._async_current_time = current_time
-                chunk_end = min(current_time + chunk_time, tstop)
+                if tstop is not None:
+                    chunk_end = min(current_time + chunk_time, tstop)
+                else:
+                    chunk_end = current_time + chunk_time
+                    
                 if current_time == 0:
                     tran_cmd = f"tran {tstep_str} {chunk_end}"
                 else:
