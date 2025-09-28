@@ -239,16 +239,9 @@ def run_rc_square_wave_simulation_with_vcd():
     s = SimHierarchy(cell=tb)
     sim = HighlevelSim(tb.schematic, s)
 
-    # Try to use FFI backend if available, otherwise subprocess
-    backend_to_use = NgspiceBackend.SUBPROCESS
-    try:
-        from ordec.sim2.ngspice_ffi import NgspiceFFI
-        NgspiceFFI.find_library()
-        backend_to_use = NgspiceBackend.FFI
-        print("Using FFI backend for faster simulation")
-    except (ImportError, OSError) as e:
-        # Let errors be printed for easier debugging; fall back to subprocess backend
-        print("Using subprocess backend")
+    # The FFI library is checked at module import, so we can directly use the FFI backend.
+    backend_to_use = NgspiceBackend.FFI
+    print("Using FFI backend for faster simulation")
 
     # Set backend for HighLevelSim
     sim.backend = backend_to_use
