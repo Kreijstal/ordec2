@@ -12,6 +12,7 @@ NgspiceValue = namedtuple("NgspiceValue", ["type", "name", "subname", "value"])
 
 class SignalKind(Enum):
     TIME = (1, "time")
+    FREQUENCY = (2, "frequency")
     VOLTAGE = (3, "voltage")
     CURRENT = (4, "current")
     OTHER = (99, "other")
@@ -26,6 +27,7 @@ class SignalKind(Enum):
 
         Common observed mapping (may vary across ngspice versions):
         - 1 : TIME
+        - 2 : FREQUENCY (custom mapping)
         - 3 : VOLTAGE
         - 4 : CURRENT
 
@@ -53,6 +55,8 @@ class SignalKind(Enum):
             match signal_kind:
                 case SignalKind.TIME:
                     print("This is a time signal")
+                case SignalKind.FREQUENCY:
+                    print("This is a frequency signal")
                 case SignalKind.VOLTAGE:
                     print("This is a voltage signal")
                 case SignalKind.CURRENT:
@@ -65,6 +69,10 @@ class SignalKind(Enum):
     def is_time(self) -> bool:
         """Check if this signal kind represents time."""
         return self is SignalKind.TIME
+
+    def is_frequency(self) -> bool:
+        """Check if this signal kind represents frequency."""
+        return self is SignalKind.FREQUENCY
 
     def is_voltage(self) -> bool:
         """Check if this signal kind represents voltage."""
@@ -286,7 +294,7 @@ class NgspiceAcResult(NgspiceResultBase):
             return SignalKind.OTHER
         name = signal_name.lower()
         if name in ("frequency", "freq"):
-            return SignalKind.TIME  # Frequency is the independent variable in AC analysis
+            return SignalKind.FREQUENCY  # Frequency is the independent variable in AC analysis
         # Delegate to base class for common patterns
         return super()._guess_signal_kind(signal_name)
 

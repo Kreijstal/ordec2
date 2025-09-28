@@ -38,7 +38,7 @@ class TranResult:
     
     Each attribute is a SignalValue containing:
     - value: The actual signal data (list of values)
-    - kind: SignalKind indicating the type of signal (TIME, VOLTAGE, CURRENT, OTHER)
+    - kind: SignalKind indicating the type of signal (TIME, FREQUENCY, VOLTAGE, CURRENT, OTHER)
     
     The signal kinds are determined from provided signal_kinds mapping or fall back
     to heuristics (time signals -> TIME, net signals -> VOLTAGE by default).
