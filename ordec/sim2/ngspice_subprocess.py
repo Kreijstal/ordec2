@@ -16,7 +16,7 @@ from subprocess import Popen, PIPE, STDOUT
 from typing import Iterator, Optional
 
 import numpy as np
-from ..core import R
+from ..core.rational import Rational as R
 
 from .ngspice_common import (
     NgspiceValue,
@@ -34,7 +34,7 @@ NgspiceVector = namedtuple(
 )
 
 
-class _SubprocessBackend:
+class NgspiceSubprocess:
     @staticmethod
     @contextmanager
     def launch(debug=False):
@@ -61,7 +61,7 @@ class _SubprocessBackend:
                 print(f"[debug] Process started with PID: {p.pid}")
 
             try:
-                yield _SubprocessBackend(p, debug=debug, cwd=Path(cwd_str))
+                yield NgspiceSubprocess(p, debug=debug, cwd=Path(cwd_str))
             finally:
                 if debug:
                     print(f"[debug] Cleaning up process {p.pid}")
@@ -377,15 +377,158 @@ class _SubprocessBackend:
 
         return self._async_queue
 
+    def _collect_voltage_data(self) -> dict:
+        vdata = {}
+        try:
+            display_output = self.command("display")
+        except NgspiceError:
+            # If display fails, just return empty dict; not fatal for chunk parsing
+            return vdata
+
+        for line in display_output.split("\n"):
+            if ":" not in line or line.strip().startswith("@") or line.strip().endswith("#branch"):
+                continue
+            parts = line.split(":", 1)
+            vec_name = parts[0].strip()
+            if not vec_name or vec_name.startswith("@") or vec_name.endswith("#branch"):
+                continue
+            # Attempt to read a printed version of the vector; tolerate parse errors
+            try:
+                vec_print = self.command(f"print {vec_name}")
+            except NgspiceError:
+                continue
+            for vec_line in vec_print.split("\n"):
+                if not vec_line.strip():
+                    continue
+                if any(x in vec_line for x in ("Index", "time", "---", "print")):
+                    continue
+                values = vec_line.split()
+                # expect: index time [value...]
+                if len(values) < 2:
+                    continue
+                try:
+                    time_val = float(values[1])
+                except ValueError:
+                    continue
+                try:
+                    voltage_val = float(values[2]) if len(values) > 2 else 0.0
+                except ValueError:
+                    voltage_val = 0.0
+                if time_val not in vdata:
+                    vdata[time_val] = {}
+                vdata[time_val][vec_name] = voltage_val
+        return vdata
+
+    def _parse_and_enqueue_from_lines(self, lines: list, current_time: float, chunk_end: float, tstop: float) -> None:
+        voltage_data = self._collect_voltage_data()
+        tables = {}
+        current_headers = None
+
+        for raw_line in lines:
+            with self._async_lock:
+                if self._async_halt_requested:
+                    if self.debug:
+                        print(f"DEBUG: Breaking due to halt request in chunk starting at {current_time}")
+                    break
+
+            line = raw_line.strip()
+            if not line or re.match(r"^-+$", line) or "Transient Analysis" in line or line == "print all":
+                continue
+
+            # Check if this is a header line (contains "Index" and "time")
+            if "Index" in line and "time" in line:
+                current_headers = tuple(line.split())
+                if self.debug:
+                    print(f"DEBUG: Found headers: {current_headers}")
+                if current_headers not in tables:
+                    tables[current_headers] = []
+                continue
+
+            if not current_headers:
+                continue
+
+            row_data = line.split("\t")
+            if len(row_data) < 2 or not self._is_numeric_row(row_data):
+                row_data = line.split()
+
+            if len(row_data) < 2 or not self._is_numeric_row(row_data) or len(row_data) > len(current_headers):
+                continue
+
+            if self.debug and len(tables[current_headers]) < 3:
+                print(f"DEBUG: Adding row data: {row_data}")
+            tables[current_headers].append(row_data)
+
+            # Create data point for this row
+            try:
+                time_val = float(row_data[1])
+            except (ValueError, IndexError):
+                continue
+
+            if not (current_time <= time_val <= chunk_end):
+                continue
+
+            data_point = {
+                "timestamp": time.time(),
+                "data": {"time": time_val},
+                "signal_kinds": {"time": SignalKind.TIME},
+                "index": self._data_points_sent,
+                "progress": min(1.0, time_val / tstop) if tstop > 0 else 0.0,
+            }
+
+            for i, header in enumerate(current_headers[2:], 2):
+                if i >= len(row_data) or not row_data[i].strip():
+                    continue
+                try:
+                    data_point["data"][header] = float(row_data[i])
+                except ValueError:
+                    # Skip non-numeric values
+                    continue
+
+                # Determine signal kind for this header
+                if header.lower() == "time":
+                    data_point["signal_kinds"][header] = SignalKind.TIME
+                elif header.startswith("@") and "[" in header:
+                    data_point["signal_kinds"][header] = SignalKind.CURRENT
+                elif header.endswith("#branch"):
+                    data_point["signal_kinds"][header] = SignalKind.CURRENT
+                else:
+                    data_point["signal_kinds"][header] = SignalKind.VOLTAGE
+
+            # Add printed voltage data if available for this time point
+            if time_val in voltage_data:
+                for node_name, voltage_val in voltage_data[time_val].items():
+                    if node_name == "time":
+                        continue
+                    data_point["data"][node_name] = voltage_val
+                    data_point["signal_kinds"][node_name] = SignalKind.VOLTAGE
+
+            if self.debug and self._data_points_sent < 3:
+                print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")
+
+            # Add to queue
+            if self._async_queue:
+                self._async_queue.put(data_point)
+            self._data_points_sent += 1
+
     def _run_chunked_simulation(
         self, tstep: float, tstop: float, tstep_str: str, throttle_interval: float
     ):
-        """Run simulation in chunks to provide async-like behavior with halt support."""
+        """Run simulation in chunks to provide async-like behavior with halt support.
+
+        The loop is now short and delegates parsing + enqueueing to helpers.
+        """
         try:
             chunk_time = min(tstop / 100, max(tstep * 5, 1e-9))
             current_time = self._async_current_time
 
             while current_time < tstop and not self._async_halt_requested:
+                # Quick check for halt request before expensive work
+                with self._async_lock:
+                    if self._async_halt_requested:
+                        if self.debug:
+                            print(f"DEBUG: Halt requested before starting chunk at {current_time}")
+                        break
+
                 self._async_current_time = current_time
                 chunk_end = min(current_time + chunk_time, tstop)
                 if current_time == 0:
@@ -395,225 +538,44 @@ class _SubprocessBackend:
 
                 try:
                     self.command(tran_cmd)
-                    print_all_res = "\n".join(self.print_all())
-                    lines = print_all_res.split("\n")
-                    voltage_data = {}
-                    try:
-                        display_output = self.command("display")
-                        for line in display_output.split("\n"):
-                            if (
-                                ":" in line
-                                and not line.strip().startswith("@")
-                                and not line.strip().endswith("#branch")
-                            ):
-                                parts = line.split(":")
-                                vec_name = parts[0].strip()
-                                if (
-                                    vec_name
-                                    and not vec_name.startswith("@")
-                                    and not vec_name.endswith("#branch")
-                                ):
-                                    try:
-                                        vec_print = self.command(f"print {vec_name}")
-                                        for vec_line in vec_print.split("\n"):
-                                            if vec_line.strip() and not any(
-                                                x in vec_line
-                                                for x in [
-                                                    "Index",
-                                                    "time",
-                                                    "---",
-                                                    "print",
-                                                ]
-                                            ):
-                                                values = vec_line.split()
-                                                if len(values) >= 2:
-                                                    try:
-                                                        time_val = float(values[1])
-                                                        voltage_val = (
-                                                            float(values[2])
-                                                            if len(values) > 2
-                                                            else 0.0
-                                                        )
-                                                        if time_val not in voltage_data:
-                                                            voltage_data[time_val] = {}
-                                                        voltage_data[time_val][
-                                                            vec_name
-                                                        ] = voltage_val
-                                                    except (ValueError, IndexError):
-                                                        continue
-                                    except Exception:
-                                        continue
-                    except Exception:
-                        pass
-
-                    tables = {}
-                    current_headers = None
-
-                    for line in lines:
-                        with self._async_lock:
-                            if self._async_halt_requested:
-                                if self.debug:
-                                    print(
-                                        f"DEBUG: Breaking due to halt request in chunk starting at {current_time}"
-                                    )
-                                break
-
-                        line = line.strip()
-                        if (
-                            not line
-                            or re.match(r"^-+$", line)
-                            or "Transient Analysis" in line
-                            or line == "print all"
-                        ):
-                            continue
-
-                        # Check if this is a header line (contains "Index" and "time")
-                        if "Index" in line and "time" in line:
-                            current_headers = tuple(line.split())
-                            if self.debug:
-                                print(f"DEBUG: Found headers: {current_headers}")
-                            if current_headers not in tables:
-                                tables[current_headers] = []
-                            continue
-                        elif current_headers:
-                            # Parse data - try both tab and space separation
-                            # First try tab separation (ngspice default)
-                            row_data = line.split("\t")
-                            if len(row_data) < 2 or not self._is_numeric_row(row_data):
-                                # Fallback to space separation
-                                row_data = line.split()
-
-                            if (
-                                len(row_data) >= 2
-                                and self._is_numeric_row(row_data)
-                                and len(row_data) <= len(current_headers)
-                            ):
-                                if (
-                                    self.debug and len(tables[current_headers]) < 3
-                                ):  # Only print first few rows
-                                    print(f"DEBUG: Adding row data: {row_data}")
-                                tables[current_headers].append(row_data)
-
-                                # Create data point for this row
-                                try:
-                                    time_val = float(
-                                        row_data[1]
-                                    )  # time is in second column
-                                    # Only include points in our time range
-                                    if current_time <= time_val <= chunk_end:
-                                        # Create data point compatible with FFI backend format
-                                        data_point = {
-                                            "timestamp": time.time(),
-                                            "data": {"time": time_val},
-                                            "signal_kinds": {"time": SignalKind.TIME},
-                                            "index": self._data_points_sent,
-                                            "progress": min(1.0, time_val / tstop)
-                                            if tstop > 0
-                                            else 0.0,
-                                        }
-
-                                        # Add voltage/current data (skip index and time columns)
-                                        for i, header in enumerate(
-                                            current_headers[2:], 2
-                                        ):
-                                            if (
-                                                i < len(row_data)
-                                                and row_data[i].strip()
-                                            ):
-                                                try:
-                                                    data_point["data"][header] = float(
-                                                        row_data[i]
-                                                    )
-                                                    # Determine signal kind for this header
-                                                    if header.lower() == "time":
-                                                        data_point["signal_kinds"][
-                                                            header
-                                                        ] = SignalKind.TIME
-                                                    elif (
-                                                        header.startswith("@")
-                                                        and "[" in header
-                                                    ):
-                                                        data_point["signal_kinds"][
-                                                            header
-                                                        ] = SignalKind.CURRENT
-                                                    elif header.endswith("#branch"):
-                                                        data_point["signal_kinds"][
-                                                            header
-                                                        ] = SignalKind.CURRENT
-                                                    else:
-                                                        data_point["signal_kinds"][
-                                                            header
-                                                        ] = SignalKind.VOLTAGE
-                                                except ValueError:
-                                                    pass  # Skip non-numeric values
-
-                                        # Add voltage data if available for this time point
-                                        if time_val in voltage_data:
-                                            for node_name, voltage_val in voltage_data[
-                                                time_val
-                                            ].items():
-                                                if node_name != "time":
-                                                    data_point["data"][node_name] = (
-                                                        voltage_val
-                                                    )
-                                                    # Add signal kind for voltage data
-                                                    data_point["signal_kinds"][
-                                                        node_name
-                                                    ] = SignalKind.VOLTAGE
-
-                                        # Debug: print data point structure
-                                        if (
-                                            self.debug and self._data_points_sent < 3
-                                        ):  # Only print first few points
-                                            print(
-                                                f"DEBUG: Data point {self._data_points_sent}: {data_point}"
-                                            )
-
-                                        # Add to queue
-                                        if self._async_queue:
-                                            self._async_queue.put(data_point)
-                                        self._data_points_sent += 1
-
-                                except (ValueError, IndexError):
-                                    continue  # Skip malformed data
-
-                    # Update current time for next chunk
-                    current_time = chunk_end
-                    # Store current time for resume functionality
-                    self._async_current_time = current_time
-
-                    # Throttle to avoid overwhelming the queue but ensure responsiveness
-                    time.sleep(
-                        min(throttle_interval, 0.05)
-                    )  # Cap at 50ms for better responsiveness
-
-                except Exception as e:
-                    # If chunk fails, try to continue with smaller chunks
+                except NgspiceError as e:
                     if chunk_time > tstep * 10:
-                        chunk_time = chunk_time / 2
+                        chunk_time /= 2
+                        if self.debug:
+                            print(f"DEBUG: Chunk failed with {e}; reducing chunk_time to {chunk_time} and continuing")
                         continue
-                    else:
-                        # If we can't make progress, abort
-                        error_data = {"error": f"Simulation failed: {str(e)}"}
-                        if self._async_queue:
-                            self._async_queue.put(error_data)
-                        break
+                    error_data = {"error": f"Simulation failed (tran): {str(e)}"}
+                    if self._async_queue:
+                        self._async_queue.put(error_data)
+                    break
+
+                # Collect printed tables and parse them into data points
+                try:
+                    print_all_res = "\n".join(self.print_all())
+                except NgspiceError:
+                    print_all_res = ""
+
+                lines = print_all_res.split("\n") if print_all_res else []
+                # Delegate parsing and enqueueing to helper
+                self._parse_and_enqueue_from_lines(lines, current_time, chunk_end, tstop)
+
+                # Advance time and store state for resume
+                current_time = chunk_end
+                self._async_current_time = current_time
+
+                # Throttle to avoid overwhelming the queue but ensure responsiveness
+                time.sleep(min(throttle_interval, 0.05))  # Cap at 50ms for better responsiveness
 
             if not self._async_halt_requested:
-                # Signal completion if not halted
                 if self.debug:
                     print("DEBUG: Simulation completed normally")
-                if self._async_queue:
-                    self._async_queue.put({"status": "completed"})
+                self._async_queue.put({"status": "completed"})
             else:
-                # Signal halt
                 if self.debug:
                     print("DEBUG: Simulation halted by request")
-                if self._async_queue:
-                    self._async_queue.put({"status": "halted"})
+                self._async_queue.put({"status": "halted"})
 
         except Exception as e:
-            # Put error in queue
             error_data = {"error": f"Async simulation failed: {str(e)}"}
             self._async_queue.put(error_data)
         finally:
@@ -631,7 +593,7 @@ class _SubprocessBackend:
         """Halt async simulation safely."""
         if self.debug:
             print(
-                f"DEBUG: safe_halt_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}, thread_alive={self._async_thread and self._async_thread.is_alive() if self._async_thread else False}"
+                f"DEBUG: safe_halt_simulation called, async_running={self._async_running}, halt_requested={self._async_halt_requested}, thread_alive={self._async_thread and self._async_thread.is_alive() if self._async_thread else False}"
             )
         if not self._async_running:
             return True
@@ -686,7 +648,7 @@ class _SubprocessBackend:
         """Resume a halted simulation safely."""
         if self.debug:
             print(
-                f"DEBUG: safe_resume_simulation called, async_running={self._async_running}, halt_requested={getattr(self, '_async_halt_requested', False)}"
+                f"DEBUG: safe_resume_simulation called, async_running={self._async_running}, halt_requested={self._async_halt_requested}"
             )
 
         if not self._async_halt_requested:
@@ -729,7 +691,7 @@ class _SubprocessBackend:
         if data.shape[0] == 0:
             return result
 
-        result.freq = tuple(data[:, 0])
+        result.freq = list(data[:, 0])
 
         # Subsequent columns are grouped in threes: freq, real, imag.
         for i, vec_name in enumerate(vectors):

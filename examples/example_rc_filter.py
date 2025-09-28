@@ -11,6 +11,9 @@ from io import BytesIO
 from ordec.core import *
 from ordec import Rational as R
 from ordec.lib.base import PulseVoltageSource, Res, Cap, Gnd
+from ordec.sim2.ngspice_ffi import NgspiceFFI
+# Ensure FFI library is checked early so linker/load errors are visible immediately.
+NgspiceFFI.find_library()
 from ordec.sim2.ngspice import Ngspice, NgspiceBackend
 from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 
@@ -239,11 +242,12 @@ def run_rc_square_wave_simulation_with_vcd():
     # Try to use FFI backend if available, otherwise subprocess
     backend_to_use = NgspiceBackend.SUBPROCESS
     try:
-        from ordec.sim2.ngspice import _FFIBackend
-        _FFIBackend.find_library()
+        from ordec.sim2.ngspice_ffi import NgspiceFFI
+        NgspiceFFI.find_library()
         backend_to_use = NgspiceBackend.FFI
         print("Using FFI backend for faster simulation")
-    except (ImportError, OSError):
+    except (ImportError, OSError) as e:
+        # Let errors be printed for easier debugging; fall back to subprocess backend
         print("Using subprocess backend")
 
     # Set backend for HighLevelSim

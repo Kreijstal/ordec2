@@ -448,9 +448,6 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
     def check_simulation_status():
         return sim.is_running()
 
-    # Small helper to process a single data_point and produce either a TranResult
-    # or indicate sentinel/ignore. Returns a tuple (kind, payload, updated_last_progress)
-    # where kind is one of: "sentinel", "ignore", "result".
     def process_data_point(data_point, last_progress):
         # Handle MP backend sentinel
         if data_point == "---ASYNC_SIM_SENTINEL---":
@@ -484,10 +481,6 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
         )
         return ("result", tr, last_progress)
 
-    # Drain up to N remaining items quickly after simulation completion.
-    # Collect TranResult objects into a list and return a tuple (state, last_progress, results).
-    # state is either "done" or "sentinel". This avoids returning a generator whose
-    # return value would be available only via StopIteration.
     def drain_remaining_items(last_progress, max_items=10):
         results = []
         remaining_items = 0

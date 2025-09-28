@@ -14,6 +14,11 @@ from ordec.lib.base import Vdc, Res, Cap, Gnd
 from ordec.sim2.ngspice import Ngspice, NgspiceBackend
 from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 from ordec.widgets import AnimatedFnWidget, VdcSliderWidget
+from ordec.sim2.ngspice_ffi import NgspiceFFI
+
+# Ensure FFI library is checked early so errors are raised visibly during import.
+# This surfaces linker/load issues immediately and makes debugging simpler.
+NgspiceFFI.find_library()
 
 class InteractiveRCCircuit(Cell):
     vdc_initial = Parameter(R, default=R(1.0))
@@ -70,8 +75,7 @@ class InteractiveSimulation:
         self._vcd_header_buffer = []
         self._vcd_initial_values = []
 
-        from ordec.sim2.ngspice import _FFIBackend
-        _FFIBackend.find_library()
+        # FFI library is validated at module import time; no need to repeat here.
 
         self.vdc_slider.observe(self._on_voltage_change, names='value')
 

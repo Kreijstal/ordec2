@@ -27,7 +27,7 @@ from .ngspice_common import (
 from ..core import R
 
 
-class _FFIBackend:
+class NgspiceFFI:
     _instance = None
     """FFI backend for ngspice shared library.
 
@@ -40,7 +40,7 @@ class _FFIBackend:
 
     def __new__(cls, *args, **kwargs):
         if not cls._instance:
-            cls._instance = super(_FFIBackend, cls).__new__(cls)
+            cls._instance = super(NgspiceFFI, cls).__new__(cls)
         return cls._instance
 
     class NgComplex(ctypes.Structure):
@@ -156,7 +156,7 @@ class _FFIBackend:
     def launch(debug=False):
         backend = None
         try:
-            backend = _FFIBackend(debug=debug)
+            backend = NgspiceFFI(debug=debug)
             yield backend
         except NgspiceError as e:
             raise e
@@ -165,11 +165,11 @@ class _FFIBackend:
                 try:
                     backend.cleanup()
                 except:
-                    pass  # Ignore cleanup errors to prevent segfaults
+                    pass  # TODO
 
-    def cleanup(self):
-        # Skip calling quit to avoid memory corruption issues in ngspice FFI
-        # The shared library will be cleaned up when the process exits
+
+
+    def cleanup(self): #TODO
         pass
 
     def _send_char_handler(self, message: bytes, ident: int, user_data) -> int:
