@@ -18,125 +18,6 @@ import queue as _queue
 import time as _time
 import concurrent.futures as _futures
 
-def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
-    fallback_grace_period = 2.0
-    completion_time = None
-
-    def get_data_with_timeout(timeout):
-        try:
-            return data_queue.get(timeout=timeout)
-        except _queue.Empty:
-            return None
-
-    def check_simulation_status():
-        return sim.is_running()
-
-    # Track last progress locally to enforce monotonicity while yielding.
-    last_progress = simbase._sim_tran_last_progress if hasattr(simbase, "_sim_tran_last_progress") else 0.0
-
-    with _futures.ThreadPoolExecutor(max_workers=2) as executor:
-        while True:
-            # Race condition: submit both data fetch and status check
-            data_future = executor.submit(get_data_with_timeout, 0.05)
-            status_future = executor.submit(check_simulation_status)
-
-            data_available = False
-
-            try:
-                done_futures = _futures.as_completed([data_future, status_future], timeout=0.1)
-                for future in done_futures:
-                    if future == data_future:
-                        data_point = future.result()
-                        if data_point is not None:
-                            data_available = True
-
-                            # Handle MP backend sentinel
-                            if data_point == "---ASYNC_SIM_SENTINEL---":
-                                return
-
-                            # Process valid data
-                            if isinstance(data_point, dict):
-                                if callback:
-                                    callback(data_point)
-
-
-                                data = data_point.get("data", {})
-                                signal_kinds = data_point.get("signal_kinds", {})
-
-                                # Determine progress, enforce monotonicity
-                                progress = data_point.get("progress", 0.0)
-                                if progress < last_progress:
-                                    progress = last_progress
-                                else:
-                                    last_progress = progress
-
-                                # Persist last progress back to simbase for cross-yield consistency
-                                simbase._sim_tran_last_progress = last_progress
-
-                                yield TranResult(
-                                    data,
-                                    node,
-                                    highlevel_sim.netlister,
-                                    progress,
-                                    signal_kinds,
-                                )
-
-                    elif future == status_future:
-                        is_running = future.result()
-                        if not is_running and completion_time is None:
-                            completion_time = _time.time()
-
-            except _futures.TimeoutError:
-                # No immediate results, check simulation status
-                if not sim.is_running() and completion_time is None:
-                    completion_time = _time.time()
-
-            # Clean up futures
-            if not data_future.done():
-                data_future.cancel()
-            if not status_future.done():
-                status_future.cancel()
-
-            # Check termination conditions
-            if not data_available:
-                # No data received, check if we should continue
-                if completion_time is not None:
-                    # Simulation finished, check grace period
-                    if _time.time() - completion_time >= fallback_grace_period:
-                        # Try to drain any remaining items quickly
-                        remaining_items = 0
-                        while remaining_items < 10:
-                            try:
-                                data_point = data_queue.get_nowait()
-                                if data_point == "---ASYNC_SIM_SENTINEL---":
-                                    return
-                                if isinstance(data_point, dict):
-                                    if callback:
-                                        callback(data_point)
-
-                                    data = data_point.get("data", {})
-                                    signal_kinds = data_point.get("signal_kinds", {})
-                                    progress = data_point.get("progress", 0.0)
-                                    if progress < last_progress:
-                                        progress = last_progress
-                                    else:
-                                        last_progress = progress
-                                    simbase._sim_tran_last_progress = last_progress
-                                    yield TranResult(
-                                        data,
-                                        node,
-                                        highlevel_sim.netlister,
-                                        progress,
-                                        signal_kinds,
-                                    )
-                                remaining_items += 1
-                            except _queue.Empty:
-                                break
-                        break
-                elif not sim.is_running():
-                    # Just finished, start grace period
-                    completion_time = _time.time()
-
 
 @dataclass
 class SignalValue:
@@ -550,6 +431,138 @@ class RingoscTb(Cell):
         helpers.schem_check(s, add_conn_points=True)
 
         return s
+
+
+
+
+def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
+    fallback_grace_period = 2.0
+    completion_time = None
+
+    def get_data_with_timeout(timeout):
+        try:
+            return data_queue.get(timeout=timeout)
+        except _queue.Empty:
+            return None
+
+    def check_simulation_status():
+        return sim.is_running()
+
+    # Small helper to process a single data_point and produce either a TranResult
+    # or indicate sentinel/ignore. Returns a tuple (kind, payload, updated_last_progress)
+    # where kind is one of: "sentinel", "ignore", "result".
+    def process_data_point(data_point, last_progress):
+        # Handle MP backend sentinel
+        if data_point == "---ASYNC_SIM_SENTINEL---":
+            return ("sentinel", None, last_progress)
+
+        if not isinstance(data_point, dict):
+            return ("ignore", None, last_progress)
+
+        if callback:
+            callback(data_point)
+
+        data = data_point.get("data", {})
+        signal_kinds = data_point.get("signal_kinds", {})
+
+        # Determine progress, enforce monotonicity
+        progress = data_point.get("progress", 0.0)
+        if progress < last_progress:
+            progress = last_progress
+        else:
+            last_progress = progress
+
+        # Persist last progress back to simbase for cross-yield consistency
+        simbase._sim_tran_last_progress = last_progress
+
+        tr = TranResult(
+            data,
+            node,
+            highlevel_sim.netlister,
+            progress,
+            signal_kinds,
+        )
+        return ("result", tr, last_progress)
+
+    # Drain up to N remaining items quickly after simulation completion.
+    # Collect TranResult objects into a list and return a tuple (state, last_progress, results).
+    # state is either "done" or "sentinel". This avoids returning a generator whose
+    # return value would be available only via StopIteration.
+    def drain_remaining_items(last_progress, max_items=10):
+        results = []
+        remaining_items = 0
+        while remaining_items < max_items:
+            try:
+                data_point = data_queue.get_nowait()
+                kind, payload, last_progress = process_data_point(data_point, last_progress)
+                if kind == "sentinel":
+                    return ("sentinel", last_progress, results)
+                if kind == "result":
+                    results.append(payload)
+                remaining_items += 1
+            except _queue.Empty:
+                break
+        return ("done", last_progress, results)
+
+    # Track last progress locally to enforce monotonicity while yielding.
+    last_progress = simbase._sim_tran_last_progress if hasattr(simbase, "_sim_tran_last_progress") else 0.0
+
+    with _futures.ThreadPoolExecutor(max_workers=2) as executor:
+        while True:
+            # Race condition: submit both data fetch and status check
+            data_future = executor.submit(get_data_with_timeout, 0.05)
+            status_future = executor.submit(check_simulation_status)
+
+            data_available = False
+
+            try:
+                done_futures = _futures.as_completed([data_future, status_future], timeout=0.1)
+                for future in done_futures:
+                    if future == data_future:
+                        data_point = future.result()
+                        if data_point is not None:
+                            data_available = True
+
+                            kind, payload, last_progress = process_data_point(data_point, last_progress)
+
+                            if kind == "sentinel":
+                                return
+
+                            if kind == "result":
+                                yield payload
+
+                    elif future == status_future:
+                        is_running = future.result()
+                        if not is_running and completion_time is None:
+                            completion_time = _time.time()
+
+            except _futures.TimeoutError:
+                # No immediate results, check simulation status
+                if not sim.is_running() and completion_time is None:
+                    completion_time = _time.time()
+
+            # Clean up futures
+            if not data_future.done():
+                data_future.cancel()
+            if not status_future.done():
+                status_future.cancel()
+
+            # Check termination conditions
+            if not data_available:
+                # No data received, check if we should continue
+                if completion_time is not None:
+                    # Simulation finished, check grace period
+                    if _time.time() - completion_time >= fallback_grace_period:
+                        # Try to drain any remaining items quickly
+                        state, last_progress, results = drain_remaining_items(last_progress)
+                        if state == "sentinel":
+                            return
+                        for tr in results:
+                            yield tr
+                        break
+                elif not sim.is_running():
+                    # Just finished, start grace period
+                    completion_time = _time.time()
 
 
 # Cells for sim2 testing
