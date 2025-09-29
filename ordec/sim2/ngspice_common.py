@@ -23,67 +23,33 @@ class SignalKind(Enum):
 
     @classmethod
     def from_vtype(cls, vtype: int):
-        """Map ngspice VectorInfo.v_type integer codes to SignalKind.
-
-        Common observed mapping (may vary across ngspice versions):
-        - 1 : TIME
-        - 2 : FREQUENCY (custom mapping)
-        - 3 : VOLTAGE
-        - 4 : CURRENT
-
-        Falls back to OTHER for unknown values.
-        """
         for kind in cls:
             if vtype == kind.vtype_value:
                 return kind
         return cls.OTHER
 
     def get_vtype_value(self) -> int:
-        """Get the ngspice v_type value for this signal kind."""
         return self.vtype_value
 
     def get_description(self) -> str:
-        """Get a human-readable description of this signal kind."""
         return self.description
 
     def match(self) -> tuple[int, str]:
-        """Pattern matching helper: returns (vtype_value, description).
-
-        Usage example:
-            vtype, desc = signal_kind.match()
-            # or use pattern matching:
-            match signal_kind:
-                case SignalKind.TIME:
-                    print("This is a time signal")
-                case SignalKind.FREQUENCY:
-                    print("This is a frequency signal")
-                case SignalKind.VOLTAGE:
-                    print("This is a voltage signal")
-                case SignalKind.CURRENT:
-                    print("This is a current signal")
-                case SignalKind.OTHER:
-                    print("This is an unknown signal type")
-        """
         return (self.vtype_value, self.description)
 
     def is_time(self) -> bool:
-        """Check if this signal kind represents time."""
         return self is SignalKind.TIME
 
     def is_frequency(self) -> bool:
-        """Check if this signal kind represents frequency."""
         return self is SignalKind.FREQUENCY
 
     def is_voltage(self) -> bool:
-        """Check if this signal kind represents voltage."""
         return self is SignalKind.VOLTAGE
 
     def is_current(self) -> bool:
-        """Check if this signal kind represents current."""
         return self is SignalKind.CURRENT
 
     def is_other(self) -> bool:
-        """Check if this signal kind represents an unknown type."""
         return self is SignalKind.OTHER
 
 
@@ -115,8 +81,6 @@ class NgspiceTable:
 
 
 class NgspiceResultBase:
-    """Base class for NgspiceTransientResult and NgspiceAcResult to reduce code duplication."""
-    
     def __init__(self):
         # Map signal name -> SignalArray
         self.signals: Dict[str, SignalArray] = {}
@@ -126,7 +90,6 @@ class NgspiceResultBase:
         self.branches: Dict[str, list] = {}
 
     def _categorize_signal(self, signal_name, signal_data):
-        """Categorize signals into voltages, currents, and branches."""
         if signal_name.startswith("@") and "[" in signal_name:
             # Device current like "@m.xi0.mpd[id]"
             device_part = signal_name.split("[")[0][1:]  # Remove @ and get device part
@@ -143,7 +106,7 @@ class NgspiceResultBase:
             self.voltages[signal_name] = signal_data
 
     def _guess_signal_kind(self, signal_name) -> SignalKind:
-        """Best-effort heuristic to classify a signal name into a SignalKind. 
+        """Best-effort heuristic to classify a signal name into a SignalKind.
         Subclasses should override for analysis-specific logic."""
         if not signal_name:
             return SignalKind.OTHER
@@ -294,7 +257,9 @@ class NgspiceAcResult(NgspiceResultBase):
             return SignalKind.OTHER
         name = signal_name.lower()
         if name in ("frequency", "freq"):
-            return SignalKind.FREQUENCY  # Frequency is the independent variable in AC analysis
+            return (
+                SignalKind.FREQUENCY
+            )  # Frequency is the independent variable in AC analysis
         # Delegate to base class for common patterns
         return super()._guess_signal_kind(signal_name)
 
