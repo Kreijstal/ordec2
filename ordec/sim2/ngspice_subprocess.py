@@ -24,6 +24,7 @@ from .ngspice_common import (
     NgspiceFatalError,
     NgspiceTransientResult,
     NgspiceAcResult,
+    NgspiceResultBase,
     check_errors,
     NgspiceTable,
     SignalKind,
@@ -410,8 +411,6 @@ class NgspiceSubprocess:
                     signal_val = float(values[i])
                     signal_data[time_val][header] = signal_val
 
-                    from .ngspice_common import NgspiceResultBase
-
                     temp_result = NgspiceResultBase()
                     signal_kinds[header] = temp_result.categorize_signal(header)
 
@@ -543,7 +542,6 @@ class NgspiceSubprocess:
     def safe_halt_simulation(
         self, max_attempts: int = 3, wait_time: float = 0.2
     ) -> bool:
-        """Halt async simulation safely."""
         if self.debug:
             print(
                 f"DEBUG: safe_halt_simulation called, async_running={self._async_running}, halt_requested={self._async_halt_requested}, thread_alive={self._async_thread and self._async_thread.is_alive() if self._async_thread else False}"
@@ -593,7 +591,6 @@ class NgspiceSubprocess:
     def safe_resume_simulation(
         self, max_attempts: int = 3, wait_time: float = 2.0
     ) -> bool:
-        """Resume a halted simulation safely."""
         if self.debug:
             print(
                 f"DEBUG: safe_resume_simulation called, async_running={self._async_running}, halt_requested={self._async_halt_requested}"
