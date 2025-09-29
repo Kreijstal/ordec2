@@ -179,7 +179,7 @@ class NgspiceSubprocess:
         print_all_res = self.command("print all")
         # Check if the result contains the warning about zero-length vectors
         if "is not available or has zero length" in print_all_res:
-            # Fallback: get list of available vectors and print only valid ones
+            # get list of available vectors and print only valid ones
             display_output = self.command("display")
 
             # Parse vector list and print only vectors with length > 0
@@ -709,26 +709,18 @@ class NgspiceSubprocess:
 
                 result._categorize_signal(vector_name, signal_data)
 
-            # Keep freq as list for compatibility with NgspiceAcResult
-            # The tuple conversion was causing type issues
-
-            # Try to get vector info from ngspice to improve signal type detection
-            try:
-                vectors_info = self.vector_info()
-                for vec_info in vectors_info:
-                    if vec_info.name in result.signals:
-                        # Use vector quantity information when available
-                        if hasattr(vec_info, "quantity") and vec_info.quantity:
-                            # Map ngspice vector quantities to SignalKind
-                            if vec_info.quantity.lower() in ("frequency", "freq"):
-                                result.signals[vec_info.name].kind = SignalKind.TIME
-                            elif vec_info.quantity.lower() in ("voltage", "v"):
-                                result.signals[vec_info.name].kind = SignalKind.VOLTAGE
-                            elif vec_info.quantity.lower() in ("current", "i"):
-                                result.signals[vec_info.name].kind = SignalKind.CURRENT
-            except Exception:
-                # Fallback to existing heuristics if vector info is not available
-                pass
+            vectors_info = self.vector_info()
+            for vec_info in vectors_info:
+                if vec_info.name in result.signals:
+                    # Use vector quantity information when available
+                    if hasattr(vec_info, "quantity") and vec_info.quantity:
+                        # Map ngspice vector quantities to SignalKind
+                        if vec_info.quantity.lower() in ("frequency", "freq"):
+                            result.signals[vec_info.name].kind = SignalKind.TIME
+                        elif vec_info.quantity.lower() in ("voltage", "v"):
+                            result.signals[vec_info.name].kind = SignalKind.VOLTAGE
+                        elif vec_info.quantity.lower() in ("current", "i"):
+                            result.signals[vec_info.name].kind = SignalKind.CURRENT
 
             return result
         else:
