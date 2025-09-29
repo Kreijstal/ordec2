@@ -27,6 +27,7 @@ from .ngspice_common import (
     check_errors,
     NgspiceTable,
     SignalKind,
+    SignalArray,
 )
 
 NgspiceVector = namedtuple(
@@ -311,6 +312,11 @@ class NgspiceSubprocess:
                 table.data = data
                 result.add_table(table)
 
+        self._update_signal_kinds_from_vector_info(result)
+
+        return result
+
+    def _update_signal_kinds_from_vector_info(self, result):
         vectors_info = self.vector_info()
         for vec_info in vectors_info:
             if vec_info.name in result.signals:
@@ -321,8 +327,6 @@ class NgspiceSubprocess:
                         result.signals[vec_info.name].kind = SignalKind.VOLTAGE
                     elif vec_info.quantity.lower() in ("current", "i"):
                         result.signals[vec_info.name].kind = SignalKind.CURRENT
-
-        return result
 
     def tran_async(
         self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1
@@ -648,20 +652,10 @@ class NgspiceSubprocess:
                 imag_parts = data[:, imag_col_idx]
 
                 complex_data = [complex(r, i) for r, i in zip(real_parts, imag_parts)]
-                result._categorize_signal(vec_name, complex_data)
+                kind = result.categorize_signal(vec_name)
+                result.signals[vec_name] = SignalArray(kind=kind, values=complex_data)
 
-        vectors_info = self.vector_info()
-        for vec_info in vectors_info:
-            if vec_info.name in result.signals:
-                # Use vector quantity information when available
-                if hasattr(vec_info, "quantity") and vec_info.quantity:
-                    # Map ngspice vector quantities to SignalKind
-                    if vec_info.quantity.lower() in ("frequency", "freq"):
-                        result.signals[vec_info.name].kind = SignalKind.TIME
-                    elif vec_info.quantity.lower() in ("voltage", "v"):
-                        result.signals[vec_info.name].kind = SignalKind.VOLTAGE
-                    elif vec_info.quantity.lower() in ("current", "i"):
-                        result.signals[vec_info.name].kind = SignalKind.CURRENT
+        self._update_signal_kinds_from_vector_info(result)
 
         return result
 
@@ -707,20 +701,10 @@ class NgspiceSubprocess:
                 if not signal_data:
                     continue
 
-                result._categorize_signal(vector_name, signal_data)
+                kind = result.categorize_signal(vector_name)
+                result.signals[vector_name] = SignalArray(kind=kind, values=signal_data)
 
-            vectors_info = self.vector_info()
-            for vec_info in vectors_info:
-                if vec_info.name in result.signals:
-                    # Use vector quantity information when available
-                    if hasattr(vec_info, "quantity") and vec_info.quantity:
-                        # Map ngspice vector quantities to SignalKind
-                        if vec_info.quantity.lower() in ("frequency", "freq"):
-                            result.signals[vec_info.name].kind = SignalKind.TIME
-                        elif vec_info.quantity.lower() in ("voltage", "v"):
-                            result.signals[vec_info.name].kind = SignalKind.VOLTAGE
-                        elif vec_info.quantity.lower() in ("current", "i"):
-                            result.signals[vec_info.name].kind = SignalKind.CURRENT
+            self._update_signal_kinds_from_vector_info(result)
 
             return result
         else:

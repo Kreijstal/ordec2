@@ -757,7 +757,6 @@ class NgspiceFFI:
         self.command("op")
         self.command("bg_run")
 
-        # Wait for simulation to start using race condition approach
         timeout = time.time() + 5.0
 
         import concurrent.futures
@@ -853,7 +852,6 @@ class NgspiceFFI:
     def safe_halt_simulation(
         self, max_attempts: int = 3, wait_time: float = 0.2
     ) -> bool:
-        """Halt async simulation safely."""
         if not self._is_running:
             return True
 
@@ -870,7 +868,6 @@ class NgspiceFFI:
         return not self._is_running
 
     def halt_simulation(self, timeout: float = 2.0) -> bool:
-        """Halt async simulation (alias for safe_halt_simulation for API compatibility)."""
         result = self.safe_halt_simulation(
             max_attempts=int(timeout / 0.2), wait_time=0.2
         )
@@ -879,7 +876,6 @@ class NgspiceFFI:
     def safe_resume_simulation(
         self, max_attempts: int = 3, wait_time: float = 2.0
     ) -> bool:
-        """Resume a halted simulation safely."""
         if self._is_running:
             return True  # Already running
 
