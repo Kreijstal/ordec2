@@ -165,25 +165,10 @@ class NgspiceFFI:
                 try:
                     backend.cleanup()
                 except:
-                    # Ignore cleanup errors to prevent segfaults due to ngspice FFI issues
-                    # See cleanup() method documentation for details
+                    # TODO
                     pass
 
-
-
-    def cleanup(self):
-        """
-        Clean up FFI backend resources.
-        
-        NOTE: We intentionally avoid calling ngspice's quit() function here due to
-        known memory corruption issues in the ngspice FFI when quit() is called.
-        These issues can cause segmentation faults during cleanup. The shared 
-        library resources will be cleaned up automatically when the Python process 
-        exits, so explicit cleanup is not critical for correctness.
-        
-        This is a known limitation of the ngspice FFI implementation and should be
-        revisited when ngspice FFI stability improves in future versions.
-        """
+    def cleanup(self):  # TODO
         pass
 
     def _send_char_handler(self, message: bytes, ident: int, user_data) -> int:
@@ -193,7 +178,6 @@ class NgspiceFFI:
             if self.debug:
                 print(f"[ngspice-ffi-out] {msg_str}")
 
-            # Store error information safely (NEVER raise exceptions in C callbacks!)
             # Exceptions in C callbacks cause undefined behavior and crashes
             if msg_str.startswith("stderr Error:"):
                 error_text = msg_str[7:]  # Remove "stderr " prefix
@@ -206,7 +190,6 @@ class NgspiceFFI:
         return 0
 
     def _send_data_handler(self, vec_data, vec_count, ident, user_data) -> int:
-        """Handle data from background simulations (NEVER raise exceptions!)"""
         try:
             current_time = time.time()
 
@@ -217,7 +200,6 @@ class NgspiceFFI:
             self._last_callback_time = current_time
 
             if vec_data and vec_count > 0:
-                # Extract data from C structures safely
                 data_points = {}
                 vec_data_content = vec_data.contents
 
@@ -243,7 +225,7 @@ class NgspiceFFI:
                     progress = max(progress, self._last_progress)
                     self._last_progress = progress
                 else:
-                    # Fallback: increment progress based on data points
+                    # TODO find if this can be safely deleted.
                     self._data_points_sent += 1
                     progress = min(self._data_points_sent * 0.05, 0.95)
                     progress = max(progress, self._last_progress)
@@ -296,7 +278,6 @@ class NgspiceFFI:
                             pass
 
         except Exception:
-            # NEVER raise exceptions in C callbacks - just log if debug is on
             if self.debug:
                 import traceback
 
@@ -307,7 +288,6 @@ class NgspiceFFI:
         return 0
 
     def _send_init_data_handler(self, vec_info, ident, user_data) -> int:
-        """Handle initialization data from background simulations (NEVER raise exceptions!)"""
         try:
             if vec_info:
                 vec_info_content = vec_info.contents
@@ -362,7 +342,6 @@ class NgspiceFFI:
         return 0
 
     def _bg_thread_running_handler(self, is_not_running, ident, user_data) -> int:
-        """Handle background thread status updates (NEVER raise exceptions!)"""
         try:
             self._is_running = not bool(is_not_running)
             if self.debug:
@@ -370,7 +349,6 @@ class NgspiceFFI:
                 print(f"[ngspice-ffi] Background thread {status}")
 
         except Exception:
-            # NEVER raise exceptions in C callbacks
             if self.debug:
                 import traceback
 
@@ -418,6 +396,7 @@ class NgspiceFFI:
             self.command("remcirc")
         except:
             # Ignore errors if no circuit is loaded
+            # TODO: detect this error specifically
             pass
 
         try:
@@ -425,6 +404,7 @@ class NgspiceFFI:
             self.command("destroy all")
         except:
             # Ignore errors if no data exists
+            # TODO: detect this error specifically
             pass
 
         # Clear internal state
@@ -456,7 +436,6 @@ class NgspiceFFI:
             else:
                 raise NgspiceError(self._error_message)
 
-        # Fallback to traditional error checking for non-callback errors
         output = "\n".join(self._output_lines)
         check_errors(output)
 
@@ -496,26 +475,19 @@ class NgspiceFFI:
 
         all_vectors = self._get_all_vectors()
 
-        # Get all vector data and determine signal kinds from v_type
         for vec_name in all_vectors:
             vec_info = self._get_vector_info(vec_name)
             if vec_info and vec_info.v_length > 0:
                 data_list = [vec_info.v_realdata[i] for i in range(vec_info.v_length)]
 
-                # Use v_type reported by ngspice for direct signal classification
                 try:
                     kind = SignalKind.from_vtype(int(vec_info.v_type))
                 except Exception:
-                    # If mapping fails, fall back to heuristic classification
-                    kind = result._guess_signal_kind(vec_name)
+                    # TODO find if still necessary and delete if not
+                    kind = result.categorize_signal(vec_name)
 
-                # Create SignalArray directly with the determined kind
                 result.signals[vec_name] = SignalArray(kind=kind, values=data_list)
 
-                # Also categorize into legacy buckets for compatibility
-                result._categorize_signal(vec_name, data_list)
-
-                # Handle time vector separately
                 if vec_name.lower() == "time":
                     result.time = data_list
 
@@ -543,33 +515,22 @@ class NgspiceFFI:
                         vec_info.v_realdata[i] for i in range(vec_info.v_length)
                     ]
 
-                # Use v_type reported by ngspice for direct signal classification
                 try:
                     kind = SignalKind.from_vtype(int(vec_info.v_type))
                 except Exception:
-                    # If mapping fails, fall back to heuristic classification
-                    kind = result._guess_signal_kind(vec_name)
+                    # TODO find if still necessary and delete if not
+                    kind = result.categorize_signal(vec_name)
 
-                # Create SignalArray directly with the determined kind
                 result.signals[vec_name] = SignalArray(kind=kind, values=data_list)
 
-                # Also categorize into legacy buckets for compatibility
-                result._categorize_signal(vec_name, data_list)
-
-                # Handle frequency vector separately
                 if vec_name.lower() in ("frequency", "freq"):
                     result.freq = data_list
 
         return result
 
-    def tran_async(self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1) -> "queue.Queue[dict]":
-        """
-        Start asynchronous transient analysis.
-
-        New strict signature: tstep, tstop (optional), plus any extra ngspice tran args.
-        This intentionally replaces the old *args-only API and uses the project's
-        Rational parser (`R`) for SI suffix handling.
-        """
+    def tran_async(
+        self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1
+    ) -> "queue.Queue[dict]":
         self._async_throttle_interval = throttle_interval
         self._last_callback_time = 0.0
         self._data_points_sent = 0
@@ -612,11 +573,9 @@ class NgspiceFFI:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
 
             def check_running_status():
-                """Check if simulation is running"""
                 return self._is_running
 
             def check_queue_activity():
-                """Check if data queue has activity (fast simulations)"""
                 return not self._async_data_queue.empty()
 
             while time.time() < timeout:
@@ -641,7 +600,6 @@ class NgspiceFFI:
                         break
 
                 except concurrent.futures.TimeoutError:
-                    # Continue checking until main timeout
                     pass
 
                 # Clean up futures
@@ -731,14 +689,18 @@ class NgspiceFFI:
                                 try:
                                     if "time" in vector_data_map and self._sim_tstop:
                                         sim_time = vector_data_map["time"][i]
-                                        progress = min(max(sim_time / self._sim_tstop, 0.0), 1.0)
+                                        progress = min(
+                                            max(sim_time / self._sim_tstop, 0.0), 1.0
+                                        )
                                 except Exception:
                                     progress = None
 
                                 # If we couldn't compute progress from time, estimate from index position.
                                 if progress is None:
                                     try:
-                                        progress = min((pos + 1) / max(1, sample_count), 1.0)
+                                        progress = min(
+                                            (pos + 1) / max(1, sample_count), 1.0
+                                        )
                                     except Exception:
                                         progress = 0.0
 
