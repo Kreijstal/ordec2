@@ -664,9 +664,7 @@ class RcFilterTb(SimBase):
         s.out % SchemWire(vertices=[s.I2.pos + res.m.pos, s.I3.pos + cap.p.pos])
 
         vss_bus_y = R(-2)
-        s.vss % SchemWire(
-            vertices=[Vec2R(2, vss_bus_y), Vec2R(12, vss_bus_y)]
-        )  # vss bus
+        s.vss % SchemWire(vertices=[Vec2R(2, vss_bus_y), Vec2R(12, vss_bus_y)])
         s.vss % SchemWire(vertices=[s.I0.pos + gnd.p.pos, Vec2R(2, vss_bus_y)])
         s.vss % SchemWire(vertices=[s.I1.pos + vac.m.pos, Vec2R(2, vss_bus_y)])
         s.vss % SchemWire(vertices=[s.I3.pos + cap.m.pos, Vec2R(12, vss_bus_y)])

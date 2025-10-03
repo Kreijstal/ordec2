@@ -260,14 +260,7 @@ class InteractiveSimulation:
         data_queue = self.alter_session.start_async_tran(time_step, sim_time)
         start_time = time.time()
 
-        if "m" in sim_time:
-            sim_duration = float(sim_time.replace("m", "")) * 1e-3
-        elif "u" in sim_time:
-            sim_duration = float(sim_time.replace("u", "")) * 1e-6
-        elif "n" in sim_time:
-            sim_duration = float(sim_time.replace("n", "")) * 1e-9
-        else:
-            sim_duration = float(sim_time)
+        sim_duration = float(R(sim_time))
 
         timeout = max(30.0, sim_duration * 100)
 
