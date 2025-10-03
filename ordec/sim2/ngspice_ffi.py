@@ -27,7 +27,6 @@ from .ngspice_common import (
     SignalArray,
 )
 
-# Use the project's Rational parser for SI suffix handling
 from ..core import R
 
 
@@ -235,24 +234,14 @@ class NgspiceFFI:
                     progress = max(progress, self._last_progress)
                     self._last_progress = progress
 
-                # Include signal type information in the async data
                 signal_kinds = {}
                 for vec_name in data_points:
-                    if vec_name != "time":  # time is handled separately
+                    if vec_name != "time":
                         vec_info = self._get_vector_info(vec_name)
                         if vec_info:
-                            try:
-                                signal_kinds[vec_name] = SignalKind.from_vtype(
-                                    int(vec_info.v_type)
-                                )
-                            except Exception:
-                                # Fallback to heuristic if v_type mapping fails
-                                if vec_name.startswith("@") and "[" in vec_name:
-                                    signal_kinds[vec_name] = SignalKind.CURRENT
-                                elif vec_name.endswith("#branch"):
-                                    signal_kinds[vec_name] = SignalKind.CURRENT
-                                else:
-                                    signal_kinds[vec_name] = SignalKind.VOLTAGE
+                            signal_kinds[vec_name] = SignalKind.from_vtype(
+                                int(vec_info.v_type)
+                            )
 
                 # Store in queue for safe retrieval
                 if data_points:
@@ -623,23 +612,11 @@ class NgspiceFFI:
                                 continue
 
                             progress = None
-                            try:
-                                if "time" in vector_data_map and self._sim_tstop:
-                                    sim_time = vector_data_map["time"][i]
-                                    progress = min(
-                                        max(sim_time / self._sim_tstop, 0.0), 1.0
-                                    )
-                            except Exception:
-                                progress = None
-
-                            # If we couldn't compute progress from time, estimate from index position.
-                            if progress is None:
-                                try:
-                                    progress = min(
-                                        (pos + 1) / max(1, sample_count), 1.0
-                                    )
-                                except Exception:
-                                    progress = 0.0
+                            if "time" in vector_data_map and self._sim_tstop:
+                                sim_time = vector_data_map["time"][i]
+                                progress = min(
+                                    max(sim_time / self._sim_tstop, 0.0), 1.0
+                                )
 
                             if progress < self._last_progress:
                                 # TODO invesitigate why and when
@@ -748,7 +725,6 @@ class NgspiceFFI:
         if not startup_detected:
             raise NgspiceError("Background operating point analysis failed to start")
 
-        # Stream data as it becomes available
         while self._is_running:
             try:
                 data_point = self._async_data_queue.get(timeout=0.1)
@@ -758,13 +734,11 @@ class NgspiceFFI:
                 yield data_point
 
             except queue.Empty:
-                # Check if simulation is still running
                 if hasattr(self.lib, "ngSpice_running"):
                     if not self.lib.ngSpice_running():
                         self._is_running = False
                         break
 
-        # Drain any remaining data
         while not self._async_data_queue.empty():
             try:
                 data_point = self._async_data_queue.get_nowait()

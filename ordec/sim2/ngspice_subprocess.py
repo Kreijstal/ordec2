@@ -385,7 +385,6 @@ class NgspiceSubprocess:
             if any(x in line for x in ("---", "print all", "Transient Analysis")):
                 continue
 
-            # Check if this is a header line (contains "Index" and "time")
             if "Index" in line and "time" in line:
                 current_headers = tuple(line.split())
                 continue
@@ -393,7 +392,6 @@ class NgspiceSubprocess:
             if not current_headers:
                 continue
 
-            # Parse data row
             values = line.split()
             if len(values) < len(current_headers):
                 continue

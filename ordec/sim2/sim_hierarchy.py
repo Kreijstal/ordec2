@@ -195,55 +195,39 @@ class HighlevelSim:
                     except KeyError:
                         continue
 
-    def tran(self, tstep, tstop):
-        self.simhier.sim_type = SimType.TRAN
+    def _run_simulation(
+        self,
+        sim_type,
+        sim_method,
+        time_field,
+        voltage_attr,
+        current_attr,
+        process_signal_func,
+        *sim_args,
+        **sim_kwargs,
+    ):
+        """Common simulation execution logic for tran and ac analyses."""
+        self.simhier.sim_type = sim_type
         with Ngspice.launch(debug=False, backend=self.backend) as sim:
             for hook in self.sim_setup_hooks:
                 hook(sim)
 
             sim.load_netlist(self.netlister.out())
-            data = sim.tran(tstep, tstop)
-            self.simhier.time = tuple(data.time)
+            data = getattr(sim, sim_method)(*sim_args, **sim_kwargs)
+            setattr(
+                self.simhier,
+                time_field,
+                tuple(data.time if hasattr(data, "time") else data.freq),
+            )
             for name, signal_array in data.signals.items():
                 try:
                     # Check if this is a voltage signal (node voltage)
                     if signal_array.kind == SignalKind.VOLTAGE:
                         simnet = self.str_to_simobj[name]
-                        simnet.trans_voltage = tuple(signal_array.values)
-                    # Check if this is a current signal (device current or branch current)
-                    elif signal_array.kind == SignalKind.CURRENT:
-                        # Try to find matching SimInstance for device currents
-                        if name.startswith("@") and "[" in name:
-                            # Device current like "@m.xi0.mpd[id]" - extract device name
-                            device_name = name.split("[")[0][
-                                1:
-                            ]  # Remove @ and get device part
-                            siminstance = self.str_to_simobj[device_name]
-                            siminstance.trans_current = tuple(signal_array.values)
-                        elif name.endswith("#branch"):
-                            # Branch current like "vi3#branch" - extract branch name
-                            branch_name = name.replace("#branch", "")
-                            siminstance = self.str_to_simobj[branch_name]
-                            siminstance.trans_current = tuple(signal_array.values)
-                except KeyError:
-                    continue
-
-    def ac(self, *args, wrdata_file: Optional[str] = None):
-        self.simhier.sim_type = SimType.AC
-        with Ngspice.launch(debug=False, backend=self.backend) as sim:
-            for hook in self.sim_setup_hooks:
-                hook(sim)
-
-            sim.load_netlist(self.netlister.out())
-            data = sim.ac(*args, wrdata_file=wrdata_file)
-            self.simhier.freq = tuple(data.freq)
-            for name, signal_array in data.signals.items():
-                try:
-                    # Check if this is a voltage signal (node voltage)
-                    if signal_array.kind == SignalKind.VOLTAGE:
-                        simnet = self.str_to_simobj[name]
-                        simnet.ac_voltage = tuple(
-                            (c.real, c.imag) for c in signal_array.values
+                        process_signal_func(
+                            simnet,
+                            voltage_attr,
+                            signal_array.values,
                         )
                     # Check if this is a current signal (device current or branch current)
                     elif signal_array.kind == SignalKind.CURRENT:
@@ -254,18 +238,52 @@ class HighlevelSim:
                                 1:
                             ]  # Remove @ and get device part
                             siminstance = self.str_to_simobj[device_name]
-                            siminstance.ac_current = tuple(
-                                (c.real, c.imag) for c in signal_array.values
+                            process_signal_func(
+                                siminstance,
+                                current_attr,
+                                signal_array.values,
                             )
                         elif name.endswith("#branch"):
                             # Branch current like "vi3#branch" - extract branch name
                             branch_name = name.replace("#branch", "")
                             siminstance = self.str_to_simobj[branch_name]
-                            siminstance.ac_current = tuple(
-                                (c.real, c.imag) for c in signal_array.values
+                            process_signal_func(
+                                siminstance,
+                                current_attr,
+                                signal_array.values,
                             )
                 except KeyError:
                     continue
+
+    def tran(self, tstep, tstop):
+        def process_real(simobj, attr_name, values):
+            setattr(simobj, attr_name, tuple(values))
+
+        self._run_simulation(
+            SimType.TRAN,
+            "tran",
+            "time",
+            "trans_voltage",
+            "trans_current",
+            process_real,
+            tstep,
+            tstop,
+        )
+
+    def ac(self, *args, wrdata_file: Optional[str] = None):
+        def process_complex(simobj, attr_name, values):
+            setattr(simobj, attr_name, tuple((c.real, c.imag) for c in values))
+
+        self._run_simulation(
+            SimType.AC,
+            "ac",
+            "freq",
+            "ac_voltage",
+            "ac_current",
+            process_complex,
+            *args,
+            wrdata_file=wrdata_file,
+        )
 
     def _parse_timescale_factor(self, timescale: str) -> float:
         if not isinstance(timescale, str) or not timescale.strip():

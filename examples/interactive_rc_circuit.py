@@ -16,9 +16,6 @@ from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 from ordec.widgets import AnimatedFnWidget, VdcSliderWidget
 from ordec.sim2.ngspice_ffi import NgspiceFFI
 
-# Ensure FFI library is checked early so errors are raised visibly during import.
-# This surfaces linker/load issues immediately and makes debugging simpler.
-NgspiceFFI.find_library()
 
 class InteractiveRCCircuit(Cell):
     vdc_initial = Parameter(R, default=R(1.0))
@@ -35,25 +32,22 @@ class InteractiveRCCircuit(Cell):
 
         s.vdc = SchemInstance(
             Vdc(dc=R(self.vdc_initial)).symbol.portmap(p=s.vin, m=s.gnd),
-            pos=Vec2R(2, 4)
+            pos=Vec2R(2, 4),
         )
 
         s.resistor = SchemInstance(
-            Res(r=R(self.resistance)).symbol.portmap(p=s.vin, m=s.vout),
-            pos=Vec2R(6, 4)
+            Res(r=R(self.resistance)).symbol.portmap(p=s.vin, m=s.vout), pos=Vec2R(6, 4)
         )
 
         s.capacitor = SchemInstance(
             Cap(c=R(self.capacitance), ic=R(0)).symbol.portmap(p=s.vout, m=s.gnd),
-            pos=Vec2R(10, 4)
+            pos=Vec2R(10, 4),
         )
 
-        s.ground = SchemInstance(
-            Gnd().symbol.portmap(p=s.gnd),
-            pos=Vec2R(2, 1)
-        )
+        s.ground = SchemInstance(Gnd().symbol.portmap(p=s.gnd), pos=Vec2R(2, 1))
 
         return s
+
 
 class InteractiveSimulation:
     def __init__(self, circuit, plot_widget, vdc_slider, plot_all_signals=False):
@@ -77,17 +71,15 @@ class InteractiveSimulation:
 
         # FFI library is validated at module import time; no need to repeat here.
 
-        self.vdc_slider.observe(self._on_voltage_change, names='value')
+        self.vdc_slider.observe(self._on_voltage_change, names="value")
 
     def _on_voltage_change(self, change):
-        new_voltage = change['new']
+        new_voltage = change["new"]
         self._pending_voltage = new_voltage
         self._last_update_time = time.time()
 
         if self._debounce_task is None or self._debounce_task.done():
-            self._debounce_task = asyncio.create_task(
-                self._debounce_voltage_update()
-            )
+            self._debounce_task = asyncio.create_task(self._debounce_voltage_update())
 
     async def _debounce_voltage_update(self):
         try:
@@ -110,8 +102,7 @@ class InteractiveSimulation:
                 self.alter_session.halt_simulation(timeout=1.0)
 
             self.alter_session.alter_component(
-                self.circuit.schematic.vdc,
-                dc=new_voltage
+                self.circuit.schematic.vdc, dc=new_voltage
             )
 
             if not self.alter_session.is_running():
@@ -131,54 +122,65 @@ class InteractiveSimulation:
 
             sim_hierarchy = SimHierarchy()
             highlevel_sim = HighlevelSim(
-                self.circuit.schematic,
-                sim_hierarchy,
-                backend=NgspiceBackend.FFI
+                self.circuit.schematic, sim_hierarchy, backend=NgspiceBackend.FFI
             )
 
             if self.plot_all_signals:
-                self.plot_widget.update_config({
-                    "xMin": 0,
-                    "xMax": float(R(sim_time)),
-                    "yMin": -10,
-                    "yMax": 10,
-                    "xLabel": "Time (s)",
-                    "yLabel": "Voltage/Current",
-                    "series": {}
-                })
-                self._series_colors = ["#ff6b6b", "#4ecdc4", "#f39c12", "#9b59b6", "#2ecc71", "#e74c3c"]
+                self.plot_widget.update_config(
+                    {
+                        "xMin": 0,
+                        "xMax": float(R(sim_time)),
+                        "yMin": -10,
+                        "yMax": 10,
+                        "xLabel": "Time (s)",
+                        "yLabel": "Voltage/Current",
+                        "series": {},
+                    }
+                )
+                self._series_colors = [
+                    "#ff6b6b",
+                    "#4ecdc4",
+                    "#f39c12",
+                    "#9b59b6",
+                    "#2ecc71",
+                    "#e74c3c",
+                ]
                 self._series_count = 0
             else:
-                self.plot_widget.update_config({
-                    "xMin": 0,
-                    "xMax": float(R(sim_time)),
-                    "yMin": -0.5,
-                    "yMax": 5.5,
-                    "xLabel": "Time (s)",
-                    "yLabel": "Voltage (V)",
-                    "series": {
-                        "vin": {"label": "Input Voltage", "color": "#ff6b6b"},
-                        "vout": {"label": "Output Voltage", "color": "#4ecdc4"}
+                self.plot_widget.update_config(
+                    {
+                        "xMin": 0,
+                        "xMax": float(R(sim_time)),
+                        "yMin": -0.5,
+                        "yMax": 5.5,
+                        "xLabel": "Time (s)",
+                        "yLabel": "Voltage (V)",
+                        "series": {
+                            "vin": {"label": "Input Voltage", "color": "#ff6b6b"},
+                            "vout": {"label": "Output Voltage", "color": "#4ecdc4"},
+                        },
                     }
-                })
+                )
 
             with highlevel_sim.alter_session(backend=NgspiceBackend.FFI) as alter:
                 self.alter_session = alter
 
-                async for data in self._run_async_simulation(time_step, sim_time, highlevel_sim):
+                async for data in self._run_async_simulation(
+                    time_step, sim_time, highlevel_sim
+                ):
                     if not self.is_running:
                         break
 
-                    time_point = data['time']
+                    time_point = data["time"]
 
                     if self.plot_all_signals:
                         # Plot all available signals
                         for signal_name, signal_value in data.items():
-                            if signal_name == 'time':
+                            if signal_name == "time":
                                 continue
 
                             # Create series label
-                            if signal_name.startswith('@'):
+                            if signal_name.startswith("@"):
                                 # Current signal
                                 clean_name = signal_name[1:]  # Remove @
                                 series_label = f"I({clean_name})"
@@ -191,32 +193,41 @@ class InteractiveSimulation:
                             # Get or create series color
                             series_config = self.plot_widget.config.get("series", {})
                             if signal_name not in series_config:
-                                color = self._series_colors[self._series_count % len(self._series_colors)]
+                                color = self._series_colors[
+                                    self._series_count % len(self._series_colors)
+                                ]
                                 self._series_count += 1
-                                self.plot_widget.update_config({
-                                    "series": {
-                                        signal_name: {"label": series_label, "color": color}
+                                self.plot_widget.update_config(
+                                    {
+                                        "series": {
+                                            signal_name: {
+                                                "label": series_label,
+                                                "color": color,
+                                            }
+                                        }
                                     }
-                                })
+                                )
 
-                            self.plot_widget.add_points(signal_name, [time_point], [signal_value])
+                            self.plot_widget.add_points(
+                                signal_name, [time_point], [signal_value]
+                            )
                     else:
                         # Original voltage-only plotting
                         vin_voltage = None
                         vout_voltage = None
 
                         for signal_name, voltage_value in data.items():
-                            if signal_name == 'time':
+                            if signal_name == "time":
                                 continue
 
                             # Map signal name to SimNet using HighlevelSim mapping
                             if signal_name in highlevel_sim.str_to_simobj:
                                 simnet = highlevel_sim.str_to_simobj[signal_name]
-                                net_name = simnet.eref.full_path_str().split('.')[-1]
+                                net_name = simnet.eref.full_path_str().split(".")[-1]
 
-                                if net_name == 'vin':
+                                if net_name == "vin":
                                     vin_voltage = voltage_value
-                                elif net_name == 'vout':
+                                elif net_name == "vout":
                                     vout_voltage = voltage_value
 
                         # Use circuit VDC as fallback for vin if not found
@@ -226,7 +237,9 @@ class InteractiveSimulation:
                             vout_voltage = 0.0
 
                         self.plot_widget.add_points("vin", [time_point], [vin_voltage])
-                        self.plot_widget.add_points("vout", [time_point], [vout_voltage])
+                        self.plot_widget.add_points(
+                            "vout", [time_point], [vout_voltage]
+                        )
 
                     await asyncio.sleep(0.01)
 
@@ -247,12 +260,12 @@ class InteractiveSimulation:
         data_queue = self.alter_session.start_async_tran(time_step, sim_time)
         start_time = time.time()
 
-        if 'm' in sim_time:
-            sim_duration = float(sim_time.replace('m', '')) * 1e-3
-        elif 'u' in sim_time:
-            sim_duration = float(sim_time.replace('u', '')) * 1e-6
-        elif 'n' in sim_time:
-            sim_duration = float(sim_time.replace('n', '')) * 1e-9
+        if "m" in sim_time:
+            sim_duration = float(sim_time.replace("m", "")) * 1e-3
+        elif "u" in sim_time:
+            sim_duration = float(sim_time.replace("u", "")) * 1e-6
+        elif "n" in sim_time:
+            sim_duration = float(sim_time.replace("n", "")) * 1e-9
         else:
             sim_duration = float(sim_time)
 
@@ -262,18 +275,23 @@ class InteractiveSimulation:
             try:
                 data_point = data_queue.get_nowait()
 
-                if isinstance(data_point, dict) and 'data' in data_point:
-                    data = data_point['data']
+                if isinstance(data_point, dict) and "data" in data_point:
+                    data = data_point["data"]
 
                     if self.plot_all_signals:
                         # Include all signals when plot_all_signals is True
-                        filtered_data = {k: v for k, v in data.items() if '#branch' not in k}
+                        filtered_data = {
+                            k: v for k, v in data.items() if "#branch" not in k
+                        }
                     else:
                         # Filter out current signals and keep only voltages
-                        filtered_data = {k: v for k, v in data.items()
-                                       if not k.startswith('@') and '#branch' not in k}
+                        filtered_data = {
+                            k: v
+                            for k, v in data.items()
+                            if not k.startswith("@") and "#branch" not in k
+                        }
 
-                    if 'time' in filtered_data:
+                    if "time" in filtered_data:
                         yield filtered_data
 
             except queue.Empty:
@@ -287,7 +305,9 @@ class InteractiveSimulation:
     def stop_simulation(self):
         self.is_running = False
 
-    def start_vcd_recording(self, filename="interactive_simulation.vcd", timescale="1u"):
+    def start_vcd_recording(
+        self, filename="interactive_simulation.vcd", timescale="1u"
+    ):
         """
         Start recording simulation data for VCD export with streaming to file.
 
@@ -296,7 +316,7 @@ class InteractiveSimulation:
             timescale: VCD timescale (e.g., "1u", "1n")
         """
         try:
-            self._vcd_file = open(filename, 'w')
+            self._vcd_file = open(filename, "w")
             self._vcd_recording = True
             self._vcd_signals = set()
             self._vcd_signal_chars = {}
@@ -306,6 +326,7 @@ class InteractiveSimulation:
 
             # Buffer VCD header until all signals are discovered
             import time
+
             self._vcd_header_buffer = [
                 "$date\n",
                 f"   {time.strftime('%Y-%m-%d %H:%M:%S')}\n",
@@ -314,7 +335,7 @@ class InteractiveSimulation:
                 "   ORDeC Interactive VCD Generator\n",
                 "$end\n",
                 f"$timescale {timescale} $end\n",
-                "$scope module top $end\n"
+                "$scope module top $end\n",
             ]
             self._vcd_initial_values = []
 
@@ -343,11 +364,11 @@ class InteractiveSimulation:
         if not self._vcd_file or not self._vcd_recording:
             return
 
-        time_val = data_point.get('time', 0)
+        time_val = data_point.get("time", 0)
 
         # Process each signal
         for signal_name, value in data_point.items():
-            if signal_name == 'time':
+            if signal_name == "time":
                 continue
 
             # Add signal to tracking if new
@@ -361,7 +382,7 @@ class InteractiveSimulation:
                     self._vcd_signal_chars[signal_name] = char
 
                     # Buffer variable definition for header
-                    if signal_name.startswith('@'):
+                    if signal_name.startswith("@"):
                         clean_name = signal_name[1:]  # Remove @ for current
                         var_def = f"$var real 64 {char} I({clean_name}) $end\n"
                     else:
@@ -370,16 +391,17 @@ class InteractiveSimulation:
                     self._vcd_header_buffer.append(var_def)
                     self._vcd_initial_values.append(f"r{value} {char}\n")
                 else:
-                    print(f"Warning: Too many signals for VCD format, skipping {signal_name}")
+                    print(
+                        f"Warning: Too many signals for VCD format, skipping {signal_name}"
+                    )
                     continue
 
         # Write header and initial values when we have signals but haven't written header yet
         if self._vcd_signals and not self._vcd_header_written:
             # Complete the header
-            self._vcd_header_buffer.extend([
-                "$upscope $end\n",
-                "$enddefinitions $end\n"
-            ])
+            self._vcd_header_buffer.extend(
+                ["$upscope $end\n", "$enddefinitions $end\n"]
+            )
 
             # Write the complete header
             for line in self._vcd_header_buffer:
@@ -395,7 +417,7 @@ class InteractiveSimulation:
         # Write value changes for existing signals (after header is written)
         if self._vcd_header_written:
             for signal_name, value in data_point.items():
-                if signal_name == 'time':
+                if signal_name == "time":
                     continue
 
                 char = self._vcd_signal_chars.get(signal_name)
@@ -410,6 +432,7 @@ class InteractiveSimulation:
     def export_to_vcd(self, filename="interactive_simulation.vcd", timescale="1u"):
         return self.start_vcd_recording(filename, timescale)
 
+
 def main(plot_all_signals=False):
     circuit = InteractiveRCCircuit(vdc_initial=1.0, resistance=1000, capacitance=1e-6)
 
@@ -422,11 +445,13 @@ def main(plot_all_signals=False):
             "enableZoom": True,
             "enablePan": True,
             "legendVisible": True,
-            "legendPosition": "top-right"
-        }
+            "legendPosition": "top-right",
+        },
     )
 
-    interactive_sim = InteractiveSimulation(circuit, plot_widget, vdc_slider, plot_all_signals)
+    interactive_sim = InteractiveSimulation(
+        circuit, plot_widget, vdc_slider, plot_all_signals
+    )
 
     display(vdc_slider)
     display(plot_widget)
@@ -440,6 +465,7 @@ def main(plot_all_signals=False):
     simulation_task = asyncio.create_task(run_demo())
 
     return interactive_sim, plot_widget, simulation_task
+
 
 if __name__ == "__main__":
     # Set plot_all_signals=True to plot all voltages and currents
