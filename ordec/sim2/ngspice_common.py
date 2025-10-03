@@ -158,10 +158,8 @@ class NgspiceTransientResult(NgspiceResultBase):
                     except (ValueError, TypeError, IndexError):
                         # Skip rows that can't be converted to float or are malformed
                         continue
-
-            # Only add signal if we got valid data
+S
             if signal_data:
-                # Wrap the array in SignalArray with a best-effort kind classification
                 kind = self.categorize_signal(signal_name)
                 self.signals[signal_name] = SignalArray(kind=kind, values=signal_data)
 
@@ -171,7 +169,6 @@ class NgspiceTransientResult(NgspiceResultBase):
         name = signal_name.lower()
         if name in ("time", "index"):
             return SignalKind.TIME
-        # Delegate to base class for common patterns
         return super().categorize_signal(signal_name)
 
     def __getitem__(self, key):
@@ -229,11 +226,9 @@ def check_errors(ngspice_out):
         if m and first_error_msg is None:
             first_error_msg = "Error: " + m.group(1)
 
-        # Check if this line indicates a fatal error
         if "cannot recover" in line or "awaits to be reset" in line:
             has_fatal_indicator = True
 
-    # Raise appropriate exception if we found an error
     if first_error_msg:
         if has_fatal_indicator:
             raise NgspiceFatalError(first_error_msg)
