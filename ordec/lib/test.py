@@ -463,9 +463,12 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
         # Determine progress, enforce monotonicity
         progress = data_point.get("progress", 0.0)
         if progress < last_progress:
+            # Log a warning about non-monotonic progress to aid debugging.
+            # import logging; logging.warning(f"Non-monotonic progress detected: {progress} < {last_progress}")
             progress = last_progress
         else:
             last_progress = progress
+
 
         # Persist last progress back to simbase for cross-yield consistency
         simbase._sim_tran_last_progress = last_progress
