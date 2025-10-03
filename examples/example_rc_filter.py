@@ -20,7 +20,7 @@ def plot_sixel(time_data, voltage_in, voltage_out, title="RC Circuit Response"):
     try:
         import matplotlib
         import matplotlib.pyplot as plt
-        from PIL import Image  # Import Pillow
+        from PIL import Image
 
         matplotlib.use("Agg")  # Use an image backend
 
@@ -43,12 +43,10 @@ def plot_sixel(time_data, voltage_in, voltage_out, title="RC Circuit Response"):
         plt.grid(True, color="gray", linestyle="--", linewidth=0.5)
         plt.tight_layout()
 
-        # Save the plot to a BytesIO object as PNG
         buf = BytesIO()
         plt.savefig(buf, format="png")
         buf.seek(0)
 
-        # Use sixel library to convert and print to terminal
         try:
             import sixel
 
@@ -114,7 +112,6 @@ def plot_ascii(
     plot_height = height - 1
     grid = [[" " for _ in range(width)] for _ in range(height)]
 
-    # Draw both lines
     for i in range(len(time_data) - 1):
         for j, (v_data, char) in enumerate([(voltage_in, "I"), (voltage_out, "O")]):
             t1, v1 = time_data[i], v_data[i]
@@ -175,7 +172,6 @@ def _query_sixel_support_from_terminal():
         sys.stdout.flush()
         ready, _, _ = select.select([sys.stdin], [], [], 0.2)  # 200ms timeout
         if ready:
-            # Read with timeout to prevent hanging
             response = b""
             start_time = time.time()
             while time.time() - start_time < 0.2 and len(response) < 10:
@@ -218,7 +214,6 @@ def detect_terminal_capabilities():
     # Check if we're running in an X11 environment
     x11_available = False
     try:
-        # Check DISPLAY environment variable (common on Linux/Unix)
         if os.environ.get("DISPLAY"):
             x11_available = True
             try:
@@ -257,7 +252,6 @@ class RCSquareWaveTb(Cell):
         s.vout = Net()
         s.gnd = Net()
 
-        # Square wave source: 1kHz, 0-1V, 50% duty cycle
         s.source = SchemInstance(
             PulseVoltageSource(
                 initial_value=R(0),
@@ -289,15 +283,9 @@ def run_rc_square_wave_simulation_with_vcd():
     s = SimHierarchy(cell=tb)
     sim = HighlevelSim(tb.schematic, s)
 
-    # The FFI library is checked at module import, so we can directly use the FFI backend.
     backend_to_use = NgspiceBackend.FFI
-    print("Using FFI backend for faster simulation")
 
-    # Set backend for HighLevelSim
     sim.backend = backend_to_use
-
-    # Simulate for 5 periods to see the integration curve clearly
-    print("Running transient simulation for 5m using HighLevelSim...")
     sim.tran("10u", "5m")
 
     time_data = s.time
