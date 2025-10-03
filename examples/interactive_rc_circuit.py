@@ -68,9 +68,6 @@ class InteractiveSimulation:
         self._vcd_signal_chars = {}
         self._vcd_header_buffer = []
         self._vcd_initial_values = []
-
-        # FFI library is validated at module import time; no need to repeat here.
-
         self.vdc_slider.observe(self._on_voltage_change, names="value")
 
     def _on_voltage_change(self, change):
@@ -174,23 +171,18 @@ class InteractiveSimulation:
                     time_point = data["time"]
 
                     if self.plot_all_signals:
-                        # Plot all available signals
                         for signal_name, signal_value in data.items():
                             if signal_name == "time":
                                 continue
 
-                            # Create series label
                             if signal_name.startswith("@"):
-                                # Current signal
                                 clean_name = signal_name[1:]  # Remove @
                                 series_label = f"I({clean_name})"
                                 unit = "A"
                             else:
-                                # Voltage signal
                                 series_label = f"V({signal_name})"
                                 unit = "V"
 
-                            # Get or create series color
                             series_config = self.plot_widget.config.get("series", {})
                             if signal_name not in series_config:
                                 color = self._series_colors[
@@ -212,15 +204,12 @@ class InteractiveSimulation:
                                 signal_name, [time_point], [signal_value]
                             )
                     else:
-                        # Original voltage-only plotting
                         vin_voltage = None
                         vout_voltage = None
 
                         for signal_name, voltage_value in data.items():
                             if signal_name == "time":
                                 continue
-
-                            # Map signal name to SimNet using HighlevelSim mapping
                             if signal_name in highlevel_sim.str_to_simobj:
                                 simnet = highlevel_sim.str_to_simobj[signal_name]
                                 net_name = simnet.eref.full_path_str().split(".")[-1]
@@ -229,8 +218,6 @@ class InteractiveSimulation:
                                     vin_voltage = voltage_value
                                 elif net_name == "vout":
                                     vout_voltage = voltage_value
-
-                        # Use circuit VDC as fallback for vin if not found
                         if vin_voltage is None:
                             vin_voltage = float(self.circuit.vdc_initial)
                         if vout_voltage is None:
@@ -243,7 +230,6 @@ class InteractiveSimulation:
 
                     await asyncio.sleep(0.01)
 
-                    # Record data for VCD if recording is enabled
                     if self._vcd_recording and self._vcd_file:
                         self._record_vcd_data(data)
 
@@ -272,12 +258,10 @@ class InteractiveSimulation:
                     data = data_point["data"]
 
                     if self.plot_all_signals:
-                        # Include all signals when plot_all_signals is True
                         filtered_data = {
                             k: v for k, v in data.items() if "#branch" not in k
                         }
                     else:
-                        # Filter out current signals and keep only voltages
                         filtered_data = {
                             k: v
                             for k, v in data.items()
@@ -301,13 +285,6 @@ class InteractiveSimulation:
     def start_vcd_recording(
         self, filename="interactive_simulation.vcd", timescale="1u"
     ):
-        """
-        Start recording simulation data for VCD export with streaming to file.
-
-        Args:
-            filename: Output VCD filename
-            timescale: VCD timescale (e.g., "1u", "1n")
-        """
         try:
             self._vcd_file = open(filename, "w")
             self._vcd_recording = True
@@ -359,24 +336,20 @@ class InteractiveSimulation:
 
         time_val = data_point.get("time", 0)
 
-        # Process each signal
         for signal_name, value in data_point.items():
             if signal_name == "time":
                 continue
 
-            # Add signal to tracking if new
             if signal_name not in self._vcd_signals:
                 self._vcd_signals.add(signal_name)
 
-                # Assign a character for this signal
                 signal_chars = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
                 if len(self._vcd_signal_chars) < len(signal_chars):
                     char = signal_chars[len(self._vcd_signal_chars)]
                     self._vcd_signal_chars[signal_name] = char
 
-                    # Buffer variable definition for header
                     if signal_name.startswith("@"):
-                        clean_name = signal_name[1:]  # Remove @ for current
+                        clean_name = signal_name[1:]
                         var_def = f"$var real 64 {char} I({clean_name}) $end\n"
                     else:
                         var_def = f"$var real 64 {char} V({signal_name}) $end\n"
@@ -389,25 +362,20 @@ class InteractiveSimulation:
                     )
                     continue
 
-        # Write header and initial values when we have signals but haven't written header yet
         if self._vcd_signals and not self._vcd_header_written:
-            # Complete the header
             self._vcd_header_buffer.extend(
                 ["$upscope $end\n", "$enddefinitions $end\n"]
             )
 
-            # Write the complete header
             for line in self._vcd_header_buffer:
                 self._vcd_file.write(line)
 
-            # Write initial values at time 0
             self._vcd_file.write("#0\n")
             for initial_value in self._vcd_initial_values:
                 self._vcd_file.write(initial_value)
 
             self._vcd_header_written = True
 
-        # Write value changes for existing signals (after header is written)
         if self._vcd_header_written:
             for signal_name, value in data_point.items():
                 if signal_name == "time":
@@ -415,9 +383,8 @@ class InteractiveSimulation:
 
                 char = self._vcd_signal_chars.get(signal_name)
                 if char:
-                    # Write time stamp if this is a new time point
                     if time_val > 0:
-                        time_units = int(time_val * 1e6)  # Convert to microseconds
+                        time_units = int(time_val * 1e6)
                         self._vcd_file.write(f"#{time_units}\n")
 
                     self._vcd_file.write(f"r{value} {char}\n")
@@ -463,12 +430,6 @@ def main(plot_all_signals=False):
 if __name__ == "__main__":
     # Set plot_all_signals=True to plot all voltages and currents
     interactive_sim, plot_widget, task = main(plot_all_signals=False)
-
-    # Example usage for VCD recording:
-    # interactive_sim.start_vcd_recording()  # Call this to start recording
-    # # Run simulation...
-    # interactive_sim.stop_vcd_recording()   # Call this to stop recording
-    # interactive_sim.export_to_vcd("my_simulation.vcd")  # Export to VCD
 
 InteractiveRCCircuit().schematic
 
