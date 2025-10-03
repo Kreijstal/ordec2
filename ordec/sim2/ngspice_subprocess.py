@@ -24,9 +24,11 @@ from .ngspice_common import (
     NgspiceFatalError,
     NgspiceTransientResult,
     NgspiceAcResult,
+    NgspiceResultBase,
     check_errors,
     NgspiceTable,
     SignalKind,
+    SignalArray,
 )
 
 NgspiceVector = namedtuple(
@@ -179,7 +181,7 @@ class NgspiceSubprocess:
         print_all_res = self.command("print all")
         # Check if the result contains the warning about zero-length vectors
         if "is not available or has zero length" in print_all_res:
-            # Fallback: get list of available vectors and print only valid ones
+            # get list of available vectors and print only valid ones
             display_output = self.command("display")
 
             # Parse vector list and print only vectors with length > 0
@@ -311,63 +313,53 @@ class NgspiceSubprocess:
                 table.data = data
                 result.add_table(table)
 
-        # Try to get vector info from ngspice to improve signal type detection
-        try:
-            vectors_info = self.vector_info()
-            for vec_info in vectors_info:
-                if vec_info.name in result.signals:
-                    # Use vector quantity information when available
-                    if hasattr(vec_info, "quantity") and vec_info.quantity:
-                        # Map ngspice vector quantities to SignalKind
-                        if vec_info.quantity.lower() in ("time", "index"):
-                            result.signals[vec_info.name].kind = SignalKind.TIME
-                        elif vec_info.quantity.lower() in ("voltage", "v"):
-                            result.signals[vec_info.name].kind = SignalKind.VOLTAGE
-                        elif vec_info.quantity.lower() in ("current", "i"):
-                            result.signals[vec_info.name].kind = SignalKind.CURRENT
-        except Exception:
-            # Fallback to existing heuristics if vector info is not available
-            pass
+        self._update_signal_kinds_from_vector_info(result)
 
         return result
 
-    def tran_async(self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1) -> "queue.Queue[dict]":
-        """
-        Start asynchronous transient analysis using chunked simulation.
+    def _update_signal_kinds_from_vector_info(self, result):
+        vectors_info = self.vector_info()
+        for vec_info in vectors_info:
+            if vec_info.name in result.signals:
+                if hasattr(vec_info, "quantity") and vec_info.quantity:
+                    if vec_info.quantity.lower() in ("time", "index"):
+                        result.signals[vec_info.name].kind = SignalKind.TIME
+                    elif vec_info.quantity.lower() in ("voltage", "v"):
+                        result.signals[vec_info.name].kind = SignalKind.VOLTAGE
+                    elif vec_info.quantity.lower() in ("current", "i"):
+                        result.signals[vec_info.name].kind = SignalKind.CURRENT
 
-        New strict signature: explicit `tstep` and optional `tstop`. Additional
-        tran tokens may be passed via `extra_args`. Time parsing uses the
-        project's Rational parser `R` (which understands SI suffixes).
-        """
+    def tran_async(
+        self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1
+    ) -> "queue.Queue[dict]":
         if self._async_running:
             raise RuntimeError("Async simulation is already running")
 
-        # We do NOT normalize or strip trailing 's' from unit strings here.
-        # Callers must provide single-letter SI suffixes (e.g. "5u", "10m", "1n"),
-        # not forms with a trailing 's' (e.g. "5us"). Parse directly with R.
         tstep_str = str(tstep).strip()
-        if tstop is None:
-            raise ValueError("tran_async requires tstop argument")
-        tstop_str = str(tstop).strip()
+        tstop_str = None
+        tstop_val = None
+        if tstop is not None:
+            tstop_str = str(tstop).strip()
+
         try:
             tstep_val = float(R(tstep_str))
-            tstop_val = float(R(tstop_str))
+            if tstop_str is not None:
+                tstop_val = float(R(tstop_str))
         except Exception as e:
             raise ValueError(f"Invalid time format: {e}")
 
-        # Create queue for results
         self._async_queue = queue.Queue()
         self._async_halt_requested = False
         self._async_running = True
         self._data_points_sent = 0
 
-        # Build command parts (explicit tstep/tstop plus any extra args)
-        cmd_parts = [tstep_str, str(tstop)]
+        cmd_parts = [tstep_str]
+        if tstop_str is not None:
+            cmd_parts.append(tstop_str)
         if extra_args:
             cmd_parts += [str(a) for a in extra_args]
-        cmd_tstep_str = tstep_str  # keep original user-facing tstep string for print/commands
+        cmd_tstep_str = tstep_str
 
-        # Start background thread for chunked simulation
         self._async_thread = threading.Thread(
             target=self._run_chunked_simulation,
             args=(tstep_val, tstop_val, cmd_tstep_str, throttle_interval),
@@ -377,74 +369,60 @@ class NgspiceSubprocess:
 
         return self._async_queue
 
-
-    def _parse_and_enqueue_from_lines(self, lines: list, current_time: float, chunk_end: float, tstop: float) -> None:
-        # Parse the lines directly instead of calling _collect_all_signal_data 
-        # to avoid redundant "print all" command execution
+    def _parse_and_enqueue_from_lines(
+        self, lines: list, current_time: float, chunk_end: float, tstop: float | None
+    ) -> None:
         signal_data = {}
         signal_kinds = {}
         tables = {}
         current_headers = None
-        
-        # Parse signal data from lines (similar to _collect_all_signal_data logic)
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-            
-            # Skip separator lines and command echoes
+
             if any(x in line for x in ("---", "print all", "Transient Analysis")):
                 continue
-                
+
             # Check if this is a header line (contains "Index" and "time")
             if "Index" in line and "time" in line:
                 current_headers = tuple(line.split())
                 continue
-                
+
             if not current_headers:
                 continue
-                
+
             # Parse data row
             values = line.split()
             if len(values) < len(current_headers):
                 continue
-                
+
             try:
-                # First column should be index, second should be time
                 time_val = float(values[1])
-            except (ValueError, IndexError):
+            except (ValueError, IndexError):  # TODO handle
                 continue
-                
+
             if time_val not in signal_data:
                 signal_data[time_val] = {}
-                
-            # Parse each column according to headers
-            for i, header in enumerate(current_headers[2:], start=2):  # Skip Index and time columns
-                if i < len(values):
-                    try:
-                        signal_val = float(values[i])
-                        signal_data[time_val][header] = signal_val
-                        
-                        # Categorize signal type based on name patterns (matching FFI implementation)
-                        if header.startswith("@") and "[" in header:
-                            signal_kinds[header] = SignalKind.CURRENT
-                        elif header.endswith("#branch"):
-                            signal_kinds[header] = SignalKind.CURRENT
-                        else:
-                            signal_kinds[header] = SignalKind.VOLTAGE
-                            
-                    except (ValueError, IndexError):
-                        continue
 
-        # Now create data points from the parsed signal data
+            for i, header in enumerate(current_headers[2:], start=2):
+                if i < len(values):
+                    signal_val = float(values[i])
+                    signal_data[time_val][header] = signal_val
+
+                    temp_result = NgspiceResultBase()
+                    signal_kinds[header] = temp_result.categorize_signal(header)
+
         for time_val, time_signals in signal_data.items():
             with self._async_lock:
                 if self._async_halt_requested:
                     if self.debug:
-                        print(f"DEBUG: Breaking due to halt request in chunk starting at {current_time}")
+                        print(
+                            f"DEBUG: Breaking due to halt request in chunk starting at {current_time}"
+                        )
                     break
 
-            # Only include points in our time range
             if not (current_time <= time_val <= chunk_end):
                 continue
 
@@ -453,46 +431,58 @@ class NgspiceSubprocess:
                 "data": {"time": time_val},
                 "signal_kinds": {"time": SignalKind.TIME},
                 "index": self._data_points_sent,
-                "progress": min(1.0, time_val / tstop) if tstop > 0 else 0.0,
+                "progress": min(1.0, time_val / tstop)
+                if tstop is not None and tstop > 0
+                else 0.0,
             }
 
-            # Add all signal values for this time point
             for signal_name, signal_val in time_signals.items():
                 if signal_name == "time":
                     continue
                 data_point["data"][signal_name] = signal_val
-                # Use the proper signal kind classification
-                data_point["signal_kinds"][signal_name] = signal_kinds.get(signal_name, SignalKind.VOLTAGE)
+                data_point["signal_kinds"][signal_name] = signal_kinds.get(
+                    signal_name, SignalKind.VOLTAGE
+                )
 
             if self.debug and self._data_points_sent < 3:
                 print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")
 
-            # Add to queue
             if self._async_queue:
                 self._async_queue.put(data_point)
             self._data_points_sent += 1
 
     def _run_chunked_simulation(
-        self, tstep: float, tstop: float, tstep_str: str, throttle_interval: float
+        self,
+        tstep: float,
+        tstop: float | None,
+        tstep_str: str,
+        throttle_interval: float,
     ):
-        """Run simulation in chunks to provide async-like behavior with halt support.
-
-        The loop is now short and delegates parsing + enqueueing to helpers.
-        """
         try:
-            chunk_time = min(tstop / 100, max(tstep * 5, 1e-9))
+            if tstop is not None:
+                chunk_time = min(tstop / 100, max(tstep * 5, 1e-9))
+            else:
+                chunk_time = max(tstep * 10, 1e-6)
+
             current_time = self._async_current_time
 
-            while current_time < tstop and not self._async_halt_requested:
-                # Quick check for halt request before expensive work
+            while not self._async_halt_requested and (
+                tstop is None or current_time < tstop
+            ):
                 with self._async_lock:
                     if self._async_halt_requested:
                         if self.debug:
-                            print(f"DEBUG: Halt requested before starting chunk at {current_time}")
+                            print(
+                                f"DEBUG: Halt requested before starting chunk at {current_time}"
+                            )
                         break
 
                 self._async_current_time = current_time
-                chunk_end = min(current_time + chunk_time, tstop)
+                if tstop is not None:
+                    chunk_end = min(current_time + chunk_time, tstop)
+                else:
+                    chunk_end = current_time + chunk_time
+
                 if current_time == 0:
                     tran_cmd = f"tran {tstep_str} {chunk_end}"
                 else:
@@ -504,29 +494,29 @@ class NgspiceSubprocess:
                     if chunk_time > tstep * 10:
                         chunk_time /= 2
                         if self.debug:
-                            print(f"DEBUG: Chunk failed with {e}; reducing chunk_time to {chunk_time} and continuing")
+                            print(
+                                f"DEBUG: Chunk failed with {e}; reducing chunk_time to {chunk_time} and continuing"
+                            )
                         continue
                     error_data = {"error": f"Simulation failed (tran): {str(e)}"}
                     if self._async_queue:
                         self._async_queue.put(error_data)
                     break
 
-                # Collect printed tables and parse them into data points
                 try:
                     print_all_res = "\n".join(self.print_all())
                 except NgspiceError:
                     print_all_res = ""
 
                 lines = print_all_res.split("\n") if print_all_res else []
-                # Delegate parsing and enqueueing to helper
-                self._parse_and_enqueue_from_lines(lines, current_time, chunk_end, tstop)
+                self._parse_and_enqueue_from_lines(
+                    lines, current_time, chunk_end, tstop
+                )
 
-                # Advance time and store state for resume
                 current_time = chunk_end
                 self._async_current_time = current_time
 
-                # Throttle to avoid overwhelming the queue but ensure responsiveness
-                time.sleep(min(throttle_interval, 0.05))  # Cap at 50ms for better responsiveness
+                time.sleep(min(throttle_interval, 0.05))
 
             if not self._async_halt_requested:
                 if self.debug:
@@ -552,7 +542,6 @@ class NgspiceSubprocess:
     def safe_halt_simulation(
         self, max_attempts: int = 3, wait_time: float = 0.2
     ) -> bool:
-        """Halt async simulation safely."""
         if self.debug:
             print(
                 f"DEBUG: safe_halt_simulation called, async_running={self._async_running}, halt_requested={self._async_halt_requested}, thread_alive={self._async_thread and self._async_thread.is_alive() if self._async_thread else False}"
@@ -565,9 +554,7 @@ class NgspiceSubprocess:
             if self.debug:
                 print("DEBUG: Set async_halt_requested=True")
 
-        # Wait for thread to respond to halt request
         for attempt in range(max_attempts):
-            # Check if thread has paused (not running but still alive)
             if (
                 self._async_thread
                 and self._async_thread.is_alive()
@@ -599,15 +586,11 @@ class NgspiceSubprocess:
         if self.debug:
             print(f"DEBUG: Simulation resumed, halt flag cleared")
 
-        # For subprocess backend, resuming means continuing chunked simulation
-        # The _run_chunked_simulation method will naturally continue from current_time
-        # stored in self._async_current_time
         return True
 
     def safe_resume_simulation(
         self, max_attempts: int = 3, wait_time: float = 2.0
     ) -> bool:
-        """Resume a halted simulation safely."""
         if self.debug:
             print(
                 f"DEBUG: safe_resume_simulation called, async_running={self._async_running}, halt_requested={self._async_halt_requested}"
@@ -666,25 +649,10 @@ class NgspiceSubprocess:
                 imag_parts = data[:, imag_col_idx]
 
                 complex_data = [complex(r, i) for r, i in zip(real_parts, imag_parts)]
-                result._categorize_signal(vec_name, complex_data)
+                kind = result.categorize_signal(vec_name)
+                result.signals[vec_name] = SignalArray(kind=kind, values=complex_data)
 
-        # Try to get vector info from ngspice to improve signal type detection
-        try:
-            vectors_info = self.vector_info()
-            for vec_info in vectors_info:
-                if vec_info.name in result.signals:
-                    # Use vector quantity information when available
-                    if hasattr(vec_info, "quantity") and vec_info.quantity:
-                        # Map ngspice vector quantities to SignalKind
-                        if vec_info.quantity.lower() in ("frequency", "freq"):
-                            result.signals[vec_info.name].kind = SignalKind.TIME
-                        elif vec_info.quantity.lower() in ("voltage", "v"):
-                            result.signals[vec_info.name].kind = SignalKind.VOLTAGE
-                        elif vec_info.quantity.lower() in ("current", "i"):
-                            result.signals[vec_info.name].kind = SignalKind.CURRENT
-        except Exception:
-            # Fallback to existing heuristics if vector info is not available
-            pass
+        self._update_signal_kinds_from_vector_info(result)
 
         return result
 
@@ -730,28 +698,10 @@ class NgspiceSubprocess:
                 if not signal_data:
                     continue
 
-                result._categorize_signal(vector_name, signal_data)
+                kind = result.categorize_signal(vector_name)
+                result.signals[vector_name] = SignalArray(kind=kind, values=signal_data)
 
-            # Keep freq as list for compatibility with NgspiceAcResult
-            # The tuple conversion was causing type issues
-
-            # Try to get vector info from ngspice to improve signal type detection
-            try:
-                vectors_info = self.vector_info()
-                for vec_info in vectors_info:
-                    if vec_info.name in result.signals:
-                        # Use vector quantity information when available
-                        if hasattr(vec_info, "quantity") and vec_info.quantity:
-                            # Map ngspice vector quantities to SignalKind
-                            if vec_info.quantity.lower() in ("frequency", "freq"):
-                                result.signals[vec_info.name].kind = SignalKind.TIME
-                            elif vec_info.quantity.lower() in ("voltage", "v"):
-                                result.signals[vec_info.name].kind = SignalKind.VOLTAGE
-                            elif vec_info.quantity.lower() in ("current", "i"):
-                                result.signals[vec_info.name].kind = SignalKind.CURRENT
-            except Exception:
-                # Fallback to existing heuristics if vector info is not available
-                pass
+            self._update_signal_kinds_from_vector_info(result)
 
             return result
         else:

@@ -433,8 +433,6 @@ class RingoscTb(Cell):
         return s
 
 
-
-
 def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
     fallback_grace_period = 2.0
     completion_time = None
@@ -487,7 +485,9 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
         while remaining_items < max_items:
             try:
                 data_point = data_queue.get_nowait()
-                kind, payload, last_progress = process_data_point(data_point, last_progress)
+                kind, payload, last_progress = process_data_point(
+                    data_point, last_progress
+                )
                 if kind == "sentinel":
                     return ("sentinel", last_progress, results)
                 if kind == "result":
@@ -498,7 +498,11 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
         return ("done", last_progress, results)
 
     # Track last progress locally to enforce monotonicity while yielding.
-    last_progress = simbase._sim_tran_last_progress if hasattr(simbase, "_sim_tran_last_progress") else 0.0
+    last_progress = (
+        simbase._sim_tran_last_progress
+        if hasattr(simbase, "_sim_tran_last_progress")
+        else 0.0
+    )
 
     with _futures.ThreadPoolExecutor(max_workers=2) as executor:
         while True:
@@ -509,14 +513,18 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
             data_available = False
 
             try:
-                done_futures = _futures.as_completed([data_future, status_future], timeout=0.1)
+                done_futures = _futures.as_completed(
+                    [data_future, status_future], timeout=0.1
+                )
                 for future in done_futures:
                     if future == data_future:
                         data_point = future.result()
                         if data_point is not None:
                             data_available = True
 
-                            kind, payload, last_progress = process_data_point(data_point, last_progress)
+                            kind, payload, last_progress = process_data_point(
+                                data_point, last_progress
+                            )
 
                             if kind == "sentinel":
                                 return
@@ -547,7 +555,9 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
                     # Simulation finished, check grace period
                     if _time.time() - completion_time >= fallback_grace_period:
                         # Try to drain any remaining items quickly
-                        state, last_progress, results = drain_remaining_items(last_progress)
+                        state, last_progress, results = drain_remaining_items(
+                            last_progress
+                        )
                         if state == "sentinel":
                             return
                         for tr in results:
@@ -604,7 +614,6 @@ class SimBase(Cell):
             throttle_interval: Minimum time between callbacks (seconds)
         """
 
-
         node = SimHierarchy()
         hl_backend = backend if backend is not None else self.backend
         highlevel_sim = HighlevelSim(
@@ -620,10 +629,14 @@ class SimBase(Cell):
             sim.load_netlist(highlevel_sim.netlister.out())
 
             # Get the queue from the new queue-based tran_async
-            data_queue = sim.tran_async(tstep, tstop, throttle_interval=throttle_interval)
+            data_queue = sim.tran_async(
+                tstep, tstop, throttle_interval=throttle_interval
+            )
 
             # Stream results using the module-level stream function
-            yield from stream_from_queue(self, sim, data_queue, highlevel_sim, node, callback)
+            yield from stream_from_queue(
+                self, sim, data_queue, highlevel_sim, node, callback
+            )
 
     def sim_tran(self, tstep, tstop, backend=None, **kwargs):
         """Run sync transient simulation.
@@ -633,7 +646,6 @@ class SimBase(Cell):
             tstop: Stop time for the simulation
             enable_savecurrents: If True (default), enables .option savecurrents
         """
-
 
         s = SimHierarchy(cell=self)
         chosen_backend = backend if backend is not None else self.backend
