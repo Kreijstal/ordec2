@@ -25,7 +25,6 @@ def test_highlevel_async_tran_basic(backend):
         data_points.append(result)
         time_values.append(result.time)
 
-        # Verify hierarchical access works; result.a is a SignalValue struct containing the signal
         assert hasattr(result, "a")
         assert hasattr(result.a, "value")
         assert hasattr(result.a, "kind")
@@ -325,9 +324,7 @@ def test_async_alter_resume(backend):
         """Test multiple aspects of async alter functionality"""
         with sim.alter_session(backend=backend) as alter:
             # Start async transient simulation
-            data_queue = alter.start_async_tran(
-                "10u", "100m"
-            )  # 10us steps, 100ms total
+            data_queue = alter.start_async_tran("10u", "100m")
             initial_data = []
             found_signals = set()
             mapped_signals = {}
