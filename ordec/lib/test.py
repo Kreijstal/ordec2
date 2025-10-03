@@ -460,15 +460,7 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
         data = data_point.get("data", {})
         signal_kinds = data_point.get("signal_kinds", {})
 
-        # Determine progress, enforce monotonicity
         progress = data_point.get("progress", 0.0)
-        if progress < last_progress:
-            # Log a warning about non-monotonic progress to aid debugging.
-            # import logging; logging.warning(f"Non-monotonic progress detected: {progress} < {last_progress}")
-            progress = last_progress
-        else:
-            last_progress = progress
-
 
         # Persist last progress back to simbase for cross-yield consistency
         simbase._sim_tran_last_progress = last_progress
@@ -541,23 +533,17 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
                             completion_time = _time.time()
 
             except _futures.TimeoutError:
-                # No immediate results, check simulation status
                 if not sim.is_running() and completion_time is None:
                     completion_time = _time.time()
 
-            # Clean up futures
             if not data_future.done():
                 data_future.cancel()
             if not status_future.done():
                 status_future.cancel()
 
-            # Check termination conditions
             if not data_available:
-                # No data received, check if we should continue
                 if completion_time is not None:
-                    # Simulation finished, check grace period
                     if _time.time() - completion_time >= fallback_grace_period:
-                        # Try to drain any remaining items quickly
                         state, last_progress, results = drain_remaining_items(
                             last_progress
                         )
@@ -567,12 +553,7 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
                             yield tr
                         break
                 elif not sim.is_running():
-                    # Just finished, start grace period
                     completion_time = _time.time()
-
-
-# Cells for sim2 testing
-# ----------------------
 
 
 class SimBase(Cell):
@@ -631,12 +612,10 @@ class SimBase(Cell):
         with Ngspice.launch(backend=hl_backend) as sim:
             sim.load_netlist(highlevel_sim.netlister.out())
 
-            # Get the queue from the new queue-based tran_async
             data_queue = sim.tran_async(
                 tstep, tstop, throttle_interval=throttle_interval
             )
 
-            # Stream results using the module-level stream function
             yield from stream_from_queue(
                 self, sim, data_queue, highlevel_sim, node, callback
             )
