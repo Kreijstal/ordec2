@@ -158,7 +158,7 @@ class NgspiceTransientResult(NgspiceResultBase):
                     except (ValueError, TypeError, IndexError):
                         # Skip rows that can't be converted to float or are malformed
                         continue
-S
+
             if signal_data:
                 kind = self.categorize_signal(signal_name)
                 self.signals[signal_name] = SignalArray(kind=kind, values=signal_data)

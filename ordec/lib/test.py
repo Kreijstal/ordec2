@@ -462,7 +462,6 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
 
         progress = data_point.get("progress", 0.0)
 
-        # Persist last progress back to simbase for cross-yield consistency
         simbase._sim_tran_last_progress = last_progress
 
         tr = TranResult(
@@ -492,16 +491,10 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
                 break
         return ("done", last_progress, results)
 
-    # Track last progress locally to enforce monotonicity while yielding.
-    last_progress = (
-        simbase._sim_tran_last_progress
-        if hasattr(simbase, "_sim_tran_last_progress")
-        else 0.0
-    )
+    last_progress = simbase._sim_tran_last_progress
 
     with _futures.ThreadPoolExecutor(max_workers=2) as executor:
         while True:
-            # Race condition: submit both data fetch and status check
             data_future = executor.submit(get_data_with_timeout, 0.05)
             status_future = executor.submit(check_simulation_status)
 
@@ -606,8 +599,6 @@ class SimBase(Cell):
             enable_savecurrents=enable_savecurrents,
             backend=hl_backend,
         )
-
-        # helper moved to module-level function `stream_from_queue`
 
         with Ngspice.launch(backend=hl_backend) as sim:
             sim.load_netlist(highlevel_sim.netlister.out())
