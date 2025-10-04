@@ -433,6 +433,7 @@ class RingoscTb(Cell):
         return s
 
 
+# not reentrant
 def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
     fallback_grace_period = 2.0
     completion_time = None
@@ -491,7 +492,7 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
                 break
         return ("done", last_progress, results)
 
-    last_progress = simbase._sim_tran_last_progress
+    last_progress = 0.0
 
     with _futures.ThreadPoolExecutor(max_workers=2) as executor:
         while True:
