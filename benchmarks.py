@@ -27,7 +27,7 @@ SIMULATION_TIMEOUT = 300 # Timeout in seconds
 # --- Base Class & New Testbenches (for self-containment) ---
 class SimBase(lib_test.SimBase): pass
 class LargeRingOsc(SimBase):
-    stages = Parameter(int, default=51)
+    stages = Parameter(int, default=21)
     @helpers.generate
     def schematic(self):
         from ordec.lib.generic_mos import Inv
@@ -111,46 +111,28 @@ def run_ac(tb_class, backend, ptype, n, start, stop):
 
 def run_tran_async(tb_class, backend, tstep, tstop):
     """
-    DEFINITIVE ROBUST IMPLEMENTATION: This function bypasses the flawed library generator
-    and uses a consumer loop that is immune to race conditions.
+    Run async transient simulation using the library's built-in generator.
+    Only works with ffi and mp backends.
     """
+    if backend == "subprocess":
+        # Skip async tests for subprocess backend as they're not supported
+        return "Skipped (not supported)", 0
+    
     total_start_time = time.time()
     tb_instance = tb_class(backend=backend)
 
-    node = SimHierarchy()
-    highlevel_sim = HighlevelSim(tb_instance.schematic, node, backend=backend)
-
     sample_count = 0
-    with Ngspice.launch(backend=backend) as sim:
-        for hook in highlevel_sim.sim_setup_hooks:
-            hook(sim)
-        sim.load_netlist(highlevel_sim.netlister.out())
-
-        data_queue = sim.tran_async(tstep, tstop)
-        sim_start_time = time.time()
-
-        # This loop condition is the key to fixing the race condition.
-        # It continues as long as the simulation is producing data OR there is data left to consume.
-        while sim.is_running() or not data_queue.empty():
-            try:
-                data_point = data_queue.get(timeout=0.05) # Small timeout to prevent deadlocks
-
-                if data_point == "---ASYNC_SIM_SENTINEL---":
-                    continue # Ignore sentinel, rely on the main loop condition
-
-                if isinstance(data_point, dict) and "data" in data_point:
-                    sample_count += 1
-                    if sample_count % 1000 == 0:
-                        progress = data_point.get("progress", 0.0) * 100
-                        sim_time = data_point.get("data", {}).get("time", 0)
-                        logger.info(
-                            f"[{tb_class.__name__}/{backend}] Progress: {progress:.2f}% | "
-                            f"Real Time: {time.time() - sim_start_time:.2f}s | Sim Time: {sim_time:.3e}s"
-                        )
-            except queue.Empty:
-                # If the queue is empty, the loop will re-check sim.is_running().
-                # If the sim is also finished, the loop terminates. Otherwise, it continues to wait.
-                pass
+    try:
+        # Use the built-in sim_tran_async method
+        for i, result in enumerate(tb_instance.sim_tran_async(tstep, tstop)):
+            sample_count += 1
+            if sample_count % 1000 == 0:
+                logger.info(
+                    f"[{tb_class.__name__}/{backend}] Collected {sample_count} samples"
+                )
+    except Exception as e:
+        logger.error(f"Async simulation failed: {e}", exc_info=True)
+        return f"Failed: {e}", 0
 
     time_taken = time.time() - total_start_time
     return time_taken, sample_count
@@ -212,18 +194,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     all_benchmarks = [
-        Benchmark("ResdivFlatTb", TESTBENCH_CLASSES["ResdivFlatTb"]).add_transient_test("0.1u", "5u"),
-        Benchmark("ResdivHierTb", TESTBENCH_CLASSES["ResdivHierTb"]).add_transient_test("0.1u", "5u"),
-        Benchmark("NmosSourceFollowerTb", TESTBENCH_CLASSES["NmosSourceFollowerTb"]).add_transient_test("0.1u", "2u"),
-        Benchmark("InvTb", TESTBENCH_CLASSES["InvTb"]).add_transient_test("0.1u", "2u"),
-        Benchmark("InvSkyTb", TESTBENCH_CLASSES["InvSkyTb"])
-            .add_transient_test("0.01u", "1u")
-            .add_transient_test("0.01u", "50u", name_suffix="(5k samples)"),
-        Benchmark("InvIhpTb", TESTBENCH_CLASSES["InvIhpTb"]).add_transient_test("0.01u", "1u"),
-        Benchmark("RcFilterTb", TESTBENCH_CLASSES["RcFilterTb"]).add_transient_test("10u", "1m").add_ac_test('dec', '10', '1', '1G'),
-        Benchmark("LargeRingOsc", TESTBENCH_CLASSES["LargeRingOsc"]).add_transient_test("100p", "50n"),
-        Benchmark("Sky130Inverter", TESTBENCH_CLASSES["Sky130Inverter"]).add_transient_test("100p", "30n"),
-        Benchmark("IHP130Inverter", TESTBENCH_CLASSES["IHP130Inverter"]).add_transient_test("100p", "30n"),
+        Benchmark("ResdivFlatTb", TESTBENCH_CLASSES["ResdivFlatTb"]).add_transient_test("0.1u", "1u"),
+        Benchmark("ResdivHierTb", TESTBENCH_CLASSES["ResdivHierTb"]).add_transient_test("0.1u", "1u"),
+        Benchmark("NmosSourceFollowerTb", TESTBENCH_CLASSES["NmosSourceFollowerTb"]).add_transient_test("0.1u", "1u"),
+        Benchmark("InvTb", TESTBENCH_CLASSES["InvTb"]).add_transient_test("0.1u", "1u"),
+        Benchmark("InvSkyTb", TESTBENCH_CLASSES["InvSkyTb"]).add_transient_test("0.01u", "0.5u"),
+        Benchmark("InvIhpTb", TESTBENCH_CLASSES["InvIhpTb"]).add_transient_test("0.01u", "0.5u"),
+        Benchmark("RcFilterTb", TESTBENCH_CLASSES["RcFilterTb"]).add_transient_test("10u", "100u").add_ac_test('dec', '10', '1', '1G'),
+        Benchmark("LargeRingOsc", TESTBENCH_CLASSES["LargeRingOsc"]).add_transient_test("100p", "10n"),
+        Benchmark("Sky130Inverter", TESTBENCH_CLASSES["Sky130Inverter"]).add_transient_test("100p", "10n"),
+        Benchmark("IHP130Inverter", TESTBENCH_CLASSES["IHP130Inverter"]).add_transient_test("100p", "10n"),
         Benchmark("SimpleRCFilter", TESTBENCH_CLASSES["SimpleRCFilter"]).add_ac_test('dec', '20', '1', '1G'),
     ]
 
@@ -263,9 +243,9 @@ if __name__ == "__main__":
                 results[backend][benchmark.name][test_name] = result_value
 
                 if test_name.startswith('Async Transient') and isinstance(result_value, tuple):
-                    logger.info(f"Finished test: '{test_name}'. Time: {result_value[0]} seconds, Samples: {result_value[1]}")
+                    logger.info(f"Finished test: '{test_name}'. Time: {result_value[0]}, Samples: {result_value[1]}")
                 else:
-                    logger.info(f"Finished test: '{test_name}'. Time: {result_value} seconds")
+                    logger.info(f"Finished test: '{test_name}'. Result: {result_value}")
 
     if results:
         print("\n" + "="*50 + "\n" + " " * 15 + "BENCHMARK SUMMARY" + "\n" + "="*50)
@@ -277,7 +257,10 @@ if __name__ == "__main__":
                     result_value = sim_results[sim_type]
                     if sim_type.startswith("Async Transient") and isinstance(result_value, tuple):
                         time_taken, sample_count = result_value
-                        print(f"    - {sim_type:<25}: {time_taken:.4f} seconds ({sample_count} samples)")
+                        if isinstance(time_taken, (int, float)):
+                            print(f"    - {sim_type:<25}: {time_taken:.4f} seconds ({sample_count} samples)")
+                        else:
+                            print(f"    - {sim_type:<25}: {time_taken} ({sample_count} samples)")
                     elif isinstance(result_value, float):
                         print(f"    - {sim_type:<25}: {result_value:.4f} seconds")
                     else:
