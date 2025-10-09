@@ -129,6 +129,8 @@ class NgspiceFFI(NgspiceBase):
         self._last_progress = 0.0
         self._data_points_sent = 0
         self._sim_tstop = 0.0
+        self._total_samples_produced = 0
+        self._total_data_points = 0
 
         # Keep references to callbacks
         self._send_char_cb = self._SendChar(self._send_char_handler)
@@ -602,6 +604,8 @@ class NgspiceFFI(NgspiceBase):
                         # Build a list of sample indices so we can compute ordinal progress
                         sample_list = list(sample_indices)
                         sample_count = len(sample_list) if sample_list else 1
+                        self._total_samples_produced = sample_count
+                        self._total_data_points = num_points
 
                         for pos, i in enumerate(sample_list):
                             data_points = {}
@@ -968,3 +972,41 @@ class NgspiceFFI(NgspiceBase):
         except AttributeError:
             # Some ngspice versions might not have this function
             pass
+
+    def get_sample_count(self) -> dict:
+        """Get statistics about samples produced during simulation.
+
+        Returns:
+            dict: Dictionary containing sample statistics with keys:
+                - 'samples_produced': Number of samples actually sent to callbacks
+                - 'total_data_points': Total number of data points available
+                - 'sampling_rate': Ratio of samples produced to total data points
+                - 'throttle_interval': Current throttle interval in seconds
+        """
+        sampling_rate = 0.0
+        if self._total_data_points > 0:
+            sampling_rate = self._total_samples_produced / self._total_data_points
+
+        return {
+            "samples_produced": self._total_samples_produced,
+            "total_data_points": self._total_data_points,
+            "sampling_rate": sampling_rate,
+            "throttle_interval": self._async_throttle_interval,
+        }
+
+    def get_throttle_info(self) -> dict:
+        """Get information about the current throttling configuration.
+
+        Returns:
+            dict: Dictionary containing throttle information with keys:
+                - 'throttle_interval': Current throttle interval in seconds
+                - 'data_points_sent': Number of data points sent to callbacks
+                - 'last_callback_time': Timestamp of last callback
+                - 'is_running': Whether async simulation is currently running
+        """
+        return {
+            "throttle_interval": self._async_throttle_interval,
+            "data_points_sent": self._data_points_sent,
+            "last_callback_time": self._last_callback_time,
+            "is_running": self._is_running,
+        }

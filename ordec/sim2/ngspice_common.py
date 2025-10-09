@@ -10,15 +10,42 @@ from abc import ABC, abstractmethod
 
 NgspiceValue = namedtuple("NgspiceValue", ["type", "name", "subname", "value"])
 
+
 class NgspiceBase(ABC):
     @classmethod
     @abstractmethod
     def launch(cls, debug: bool):
         pass
 
+    @abstractmethod
+    def get_sample_count(self) -> dict:
+        """Get statistics about samples produced during simulation.
+
+        Returns:
+            dict: Dictionary containing sample statistics with keys:
+                - 'samples_produced': Number of samples actually sent to callbacks
+                - 'total_data_points': Total number of data points available
+                - 'sampling_rate': Ratio of samples produced to total data points
+        """
+        pass
+
+    @abstractmethod
+    def get_throttle_info(self) -> dict:
+        """Get information about the current throttling configuration.
+
+        Returns:
+            dict: Dictionary containing throttle information with keys:
+                - 'throttle_interval': Current throttle interval in seconds
+                - 'data_points_sent': Number of data points sent to callbacks
+                - 'last_callback_time': Timestamp of last callback
+                - 'is_running': Whether async simulation is currently running
+        """
+        pass
+
     # More abstractmethod could be added here to document (and minimally
     # enforce) the interface compatilibity between different NgspiceBase
     # subclasses.
+
 
 class SignalKind(Enum):
     TIME = (1, "time")

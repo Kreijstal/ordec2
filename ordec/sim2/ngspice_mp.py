@@ -40,6 +40,8 @@ class FFIWorkerProcess:
         self._progress_lock = None
         self._last_progress = 0.0
         self.debug = debug
+        self._total_samples_produced = 0
+        self._total_data_points = 0
 
     def _handle_data_fallback(self):
         """Handle data retrieval fallback when normal callbacks don't work"""
@@ -70,6 +72,8 @@ class FFIWorkerProcess:
                     if num_points > 0 and "time" in vector_data_map:
                         # Sample every 10th point to avoid overwhelming the queue
                         sample_indices = range(0, num_points, max(1, num_points // 100))
+                        self._total_samples_produced = len(sample_indices)
+                        self._total_data_points = num_points
 
                         for i, sample_idx in enumerate(sample_indices):
                             data_points = {}
@@ -345,7 +349,9 @@ class FFIWorkerProcess:
                                             if "progress" not in data_point:
                                                 data_point["progress"] = 1.0
                                             else:
-                                                data_point["progress"] =self._last_progress
+                                                data_point["progress"] = (
+                                                    self._last_progress
+                                                )
                                             self._last_progress = data_point["progress"]
                                         finally:
                                             if self._progress_lock:
@@ -384,6 +390,44 @@ class FFIWorkerProcess:
 
         self._relay_thread = threading.Thread(target=relay_data, daemon=True)
         self._relay_thread.start()
+
+    def get_sample_count(self) -> dict:
+        """Get statistics about samples produced during simulation.
+
+        Returns:
+            dict: Dictionary containing sample statistics with keys:
+                - 'samples_produced': Number of samples actually sent to callbacks
+                - 'total_data_points': Total number of data points available
+                - 'sampling_rate': Ratio of samples produced to total data points
+        """
+        sampling_rate = 0.0
+        if self._total_data_points > 0:
+            sampling_rate = self._total_samples_produced / self._total_data_points
+
+        return {
+            "samples_produced": self._total_samples_produced,
+            "total_data_points": self._total_data_points,
+            "sampling_rate": sampling_rate,
+        }
+
+    def get_throttle_info(self) -> dict:
+        """Get information about the current throttling configuration.
+
+        Returns:
+            dict: Dictionary containing throttle information with keys:
+                - 'throttle_interval': Current throttle interval in seconds
+                - 'data_points_sent': Number of data points sent to callbacks
+                - 'last_callback_time': Timestamp of last callback
+                - 'is_running': Whether async simulation is currently running
+        """
+        # For multiprocessing backend, we don't have direct access to throttle info
+        # Return default values since this is handled by the FFI backend in the worker
+        return {
+            "throttle_interval": 0.1,
+            "data_points_sent": 0,
+            "last_callback_time": 0.0,
+            "is_running": False,
+        }
 
 
 class NgspiceIsolatedFFI(NgspiceBase):
@@ -714,3 +758,47 @@ class NgspiceIsolatedFFI(NgspiceBase):
         self._async_simulation_running = True
         self._call_worker("op_async", *args, **kwargs)
         return self.async_queue
+
+    def get_sample_count(self) -> dict:
+        """Get statistics about samples produced during simulation.
+
+        Returns:
+            dict: Dictionary containing sample statistics with keys:
+                - 'samples_produced': Number of samples actually sent to callbacks
+                - 'total_data_points': Total number of data points available
+                - 'sampling_rate': Ratio of samples produced to total data points
+        """
+        try:
+            return self._call_worker("get_sample_count")
+        except RuntimeError as e:
+            # If worker communication fails, return default values
+            if "Worker process communication" in str(e):
+                return {
+                    "samples_produced": 0,
+                    "total_data_points": 0,
+                    "sampling_rate": 0.0,
+                }
+            raise
+
+    def get_throttle_info(self) -> dict:
+        """Get information about the current throttling configuration.
+
+        Returns:
+            dict: Dictionary containing throttle information with keys:
+                - 'throttle_interval': Current throttle interval in seconds
+                - 'data_points_sent': Number of data points sent to callbacks
+                - 'last_callback_time': Timestamp of last callback
+                - 'is_running': Whether async simulation is currently running
+        """
+        try:
+            return self._call_worker("get_throttle_info")
+        except RuntimeError as e:
+            # If worker communication fails, return default values
+            if "Worker process communication" in str(e):
+                return {
+                    "throttle_interval": 0.1,
+                    "data_points_sent": 0,
+                    "last_callback_time": 0.0,
+                    "is_running": False,
+                }
+            raise
