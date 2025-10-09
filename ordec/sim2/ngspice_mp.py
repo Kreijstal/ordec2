@@ -488,6 +488,13 @@ class NgspiceIsolatedFFI(NgspiceBase):
 
     def close(self):
         try:
+            # Clean up async simulation if one is running
+            if self._async_simulation_running:
+                try:
+                    self.stop_async_simulation()
+                except Exception:
+                    pass  # Ignore cleanup errors on close
+            
             if not self.conn.closed:
                 self.conn.send({"type": "quit"})
         except BrokenPipeError:

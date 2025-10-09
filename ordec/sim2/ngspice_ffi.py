@@ -178,8 +178,30 @@ class NgspiceFFI(NgspiceBase):
                     # TODO
                     pass
 
-    def cleanup(self):  # TODO
-        pass
+    def cleanup(self):
+        """Clean up async simulation resources."""
+        try:
+            # Wait for simulation to finish if it's still running
+            if hasattr(self, '_is_running') and self._is_running:
+                timeout = 2.0
+                start_time = time.time()
+                while self._is_running and (time.time() - start_time) < timeout:
+                    time.sleep(0.1)
+            
+            # Wait for fallback thread to finish if it exists
+            if hasattr(self, '_fallback_thread') and self._fallback_thread and self._fallback_thread.is_alive():
+                self._fallback_thread.join(timeout=1.0)
+            
+            # Clear the async data queue to prevent stale data
+            if hasattr(self, '_async_data_queue'):
+                while not self._async_data_queue.empty():
+                    try:
+                        self._async_data_queue.get_nowait()
+                    except:
+                        break
+        except:
+            # Ignore all errors during cleanup to avoid crashes
+            pass
 
     def _send_char_handler(self, message: bytes, ident: int, user_data) -> int:
         if message:
