@@ -105,6 +105,7 @@ class FFIWorkerProcess:
 
         # Initialize thread synchronization objects (can't pickle these)
         self._shutdown_event = threading.Event()
+        self._relay_shutdown_event = threading.Event()  # Separate event for relay thread
         self._progress_lock = threading.Lock()
         self._command_queue = queue.Queue()
         self._response_queue = queue.Queue()
@@ -255,8 +256,8 @@ class FFIWorkerProcess:
                     # Handle explicit async simulation cleanup
                     try:
                         if self._relay_thread and self._relay_thread.is_alive():
-                            # Signal the thread to shut down
-                            self._shutdown_event.set()
+                            # Signal the relay thread to shut down
+                            self._relay_shutdown_event.set()
                             # Wait for the thread to finish
                             self._relay_thread.join(timeout=2.0)
                             if self._relay_thread.is_alive():
@@ -266,7 +267,7 @@ class FFIWorkerProcess:
                         
                         # Reset for the next run
                         self._relay_thread = None
-                        self._shutdown_event.clear()  # Prepare the event for the next simulation
+                        self._relay_shutdown_event.clear()  # Prepare the event for the next simulation
                         
                         self._response_queue.put({"type": "result", "data": pickle.dumps(True)})
                     except Exception as e:
@@ -310,7 +311,7 @@ class FFIWorkerProcess:
     def _start_relay_thread(self, ffi_queue):
         """Start a relay thread with proper synchronization"""
         # Ensure the event is in a non-signaled state for the new thread
-        self._shutdown_event.clear()
+        self._relay_shutdown_event.clear()
 
         def relay_data():
             """Relay data from FFI queue to multiprocess queue with proper synchronization"""
@@ -319,7 +320,7 @@ class FFIWorkerProcess:
             progress_counter = 0
 
             try:
-                while not self._shutdown_event.is_set() and self._async_active.is_set():
+                while not self._relay_shutdown_event.is_set() and self._async_active.is_set():
                     try:
                         # Block until data is available with timeout
                         data_point = ffi_queue.get(timeout=0.5)
