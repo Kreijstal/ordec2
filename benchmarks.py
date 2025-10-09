@@ -1,3 +1,22 @@
+#!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2025 ORDeC contributors
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+ORDeC2 Simulation Benchmarks
+
+This script provides comprehensive benchmarking for the ORDeC2 simulation framework.
+It tests various circuit testbenches across different Ngspice backends (subprocess, ffi, mp).
+
+Usage:
+    python benchmarks.py                              # Run all benchmarks
+    python benchmarks.py --list-tests                 # List available testbenches
+    python benchmarks.py --match ResdivFlatTb         # Run specific testbenches
+    python benchmarks.py --backend ffi mp             # Run on specific backends
+
+See BENCHMARKS.md for detailed documentation.
+"""
+
 import multiprocessing
 import time
 import logging
