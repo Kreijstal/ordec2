@@ -253,6 +253,33 @@ class FFIWorkerProcess:
                             }
                         )
 
+                elif cmd == "stop_async_simulation":
+                    # Handle explicit async simulation cleanup
+                    try:
+                        if self._relay_thread and self._relay_thread.is_alive():
+                            # Signal the thread to shut down
+                            self._shutdown_event.set()
+                            # Wait for the thread to finish
+                            self._relay_thread.join(timeout=2.0)
+                            if self._relay_thread.is_alive():
+                                # This would be an error condition, log it if debugging
+                                if self.debug:
+                                    print("[ngspice-mp] WARNING: Relay thread did not terminate in time.")
+                        
+                        # Reset for the next run
+                        self._relay_thread = None
+                        self._shutdown_event.clear()  # Prepare the event for the next simulation
+                        
+                        self._response_queue.put({"type": "result", "data": pickle.dumps(True)})
+                    except Exception as e:
+                        self._response_queue.put(
+                            {
+                                "type": "error",
+                                "data": pickle.dumps(e),
+                                "traceback": traceback.format_exc(),
+                            }
+                        )
+
                 else:
                     # Handle regular commands
                     try:
@@ -284,11 +311,8 @@ class FFIWorkerProcess:
 
     def _start_relay_thread(self, ffi_queue):
         """Start a relay thread with proper synchronization"""
-        # Check if a relay thread is already running
-        if self._relay_thread is not None and self._relay_thread.is_alive():
-            # Stop the existing thread before starting a new one
-            self._shutdown_event.set()
-            self._relay_thread.join(timeout=1.0)
+        # Ensure the event is in a non-signaled state for the new thread
+        self._shutdown_event.clear()
 
         # Debug: track relay thread starts
         print(f"[DEBUG] Starting relay thread, existing thread: {self._relay_thread is not None}")
@@ -568,34 +592,46 @@ class NgspiceIsolatedFFI(NgspiceBase):
         timeout_count = 0
         max_timeouts = 100  # Allow some timeouts before giving up
 
-        while True:
-            try:
-                # Use timeout to prevent hanging forever
-                item = self.async_queue.get(timeout=0.5)
-                timeout_count = 0  # Reset timeout counter on successful get
+        try:
+            while True:
+                try:
+                    # Use timeout to prevent hanging forever
+                    item = self.async_queue.get(timeout=0.5)
+                    timeout_count = 0  # Reset timeout counter on successful get
 
-                if item == _ASYNC_SIM_SENTINEL:
-                    self._async_simulation_running = False
-                    break
-                yield item
-            except queue.Empty:
-                timeout_count += 1
-                if timeout_count > max_timeouts:
-                    # Been waiting too long, check if worker is still alive
-                    if not self.process.is_alive():
+                    if item == _ASYNC_SIM_SENTINEL:
                         self._async_simulation_running = False
                         break
-                    # Reset counter and continue waiting
-                    timeout_count = 0
-                continue
-            except (EOFError, BrokenPipeError):
-                self._async_simulation_running = False
-                break
-            except Exception as e:
-                # Log unexpected errors but continue
-                if hasattr(self, "_debug") and self._debug:
-                    print(f"[ngspice-mp] Async generator error: {e}")
-                break
+                    yield item
+                except queue.Empty:
+                    timeout_count += 1
+                    if timeout_count > max_timeouts:
+                        # Been waiting too long, check if worker is still alive
+                        if not self.process.is_alive():
+                            self._async_simulation_running = False
+                            break
+                        # Reset counter and continue waiting
+                        timeout_count = 0
+                    continue
+                except (EOFError, BrokenPipeError):
+                    self._async_simulation_running = False
+                    break
+                except Exception as e:
+                    # Log unexpected errors but continue
+                    if hasattr(self, "_debug") and self._debug:
+                        print(f"[ngspice-mp] Async generator error: {e}")
+                    break
+        finally:
+            # This code will run when the generator is closed/exhausted.
+            self._async_simulation_running = False
+            try:
+                # Send the explicit cleanup command to the worker
+                self._call_worker("stop_async_simulation", timeout=5.0)
+            except RuntimeError as e:
+                # Log if the cleanup fails, but don't raise an exception
+                # as it might hide the original exception that caused the exit.
+                if hasattr(self, "debug") and self.debug:
+                    print(f"[ngspice-mp] Error during async cleanup: {e}")
 
     def command(self, command: str) -> str:
         return self._call_worker("command", command)
@@ -624,6 +660,10 @@ class NgspiceIsolatedFFI(NgspiceBase):
 
     def resume_simulation(self, timeout=2.0):
         return self._call_worker("resume_simulation", timeout=timeout)
+
+    def stop_async_simulation(self):
+        """Tell the worker to clean up the async simulation resources."""
+        return self._call_worker("stop_async_simulation")
 
     def reset(self):
         return self._call_worker("reset")
