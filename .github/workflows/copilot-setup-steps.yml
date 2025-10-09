@@ -47,7 +47,7 @@ jobs:
       - name: Install ngspice 44.2
         run: |
           cd /tmp
-          wget -q https://netcologne.dl.sourceforge.net/project/ngspice/ng-spice-rework/44.2/ngspice-44.2.tar.gz
+          wget -q -O ngspice-44.2.tar.gz https://sourceforge.net/projects/ngspice/files/ng-spice-rework/44.2/ngspice-44.2.tar.gz/download
           echo "e7dadfb7bd5474fd22409c1e5a67acdec19f77e597df68e17c5549bc1390d7fd ngspice-44.2.tar.gz" | sha256sum -c
           tar xf ngspice-44.2.tar.gz
           cd ngspice-44.2
