@@ -663,16 +663,18 @@ class NgspiceFFI(NgspiceBase):
             def check_completion_status():
                 return not self._is_running
 
-            while True:
-                completion_future = fallback_executor.submit(check_completion_status)
-                try:
-                    if completion_future.result(timeout=0.05):
-                        break
-                except concurrent.futures.TimeoutError:
-                    pass
-                finally:
-                    if not completion_future.done():
-                        completion_future.cancel()
+            # Create executor outside the loop to prevent shutdown issues
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as completion_executor:
+                while True:
+                    completion_future = completion_executor.submit(check_completion_status)
+                    try:
+                        if completion_future.result(timeout=0.05):
+                            break
+                    except concurrent.futures.TimeoutError:
+                        pass
+                    finally:
+                        if not completion_future.done():
+                            completion_future.cancel()
 
         # Small delay to ensure simulation is fully complete
         time.sleep(0.1)

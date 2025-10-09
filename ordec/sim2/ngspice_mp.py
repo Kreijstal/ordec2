@@ -444,6 +444,9 @@ class NgspiceIsolatedFFI(NgspiceBase):
         if self.conn.closed:
             raise RuntimeError("Connection to FFI worker process is closed.")
 
+        # Extract timeout from kwargs if present, otherwise use default
+        timeout_seconds = kwargs.pop('timeout', 30.0)
+
         # Use a lock to ensure atomic send/receive operations
         if not hasattr(self, "_comm_lock"):
             self._comm_lock = threading.Lock()
@@ -467,7 +470,6 @@ class NgspiceIsolatedFFI(NgspiceBase):
 
                 # Wait for response with proper timeout handling
                 response = None
-                timeout_seconds = 30
                 poll_interval = 0.1
                 elapsed = 0
 
