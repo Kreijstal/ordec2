@@ -14,7 +14,7 @@ from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 from ordec.sim2.ngspice import Ngspice
 
 
-def test_subprocess_long_debug():
+def test_ffi_long_run_debug():
     """Longer debug test that runs the FFI backend for a large, predictable
     number of data points to help reproduce duplicate/extra-point behaviour.
 
