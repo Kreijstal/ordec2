@@ -579,11 +579,11 @@ class SimBase(Cell):
         tstep,
         tstop,
         callback=None,
-        throttle_interval=0.1,
+        buffer_size=10,
         enable_savecurrents=True,
         backend=None,
         fallback_sampling_ratio=100,
-        disable_throttling=False,
+        disable_buffering=False,
     ):
         """Run async transient simulation.
 
@@ -591,7 +591,7 @@ class SimBase(Cell):
             tstep: Time step for the simulation
             tstop: Stop time for the simulation
             callback: Optional callback function for data updates
-            throttle_interval: Minimum time between callbacks (seconds)
+            buffer_size: Number of data points to buffer before sending
         """
 
         node = SimHierarchy()
@@ -611,7 +611,7 @@ class SimBase(Cell):
             sim.load_netlist(highlevel_sim.netlister.out())
 
             data_queue = sim.tran_async(
-                tstep, tstop, throttle_interval=throttle_interval, fallback_sampling_ratio=fallback_sampling_ratio, disable_throttling=disable_throttling
+                tstep, tstop, buffer_size=buffer_size, fallback_sampling_ratio=fallback_sampling_ratio, disable_buffering=disable_buffering
             )
 
             yield from stream_from_queue(

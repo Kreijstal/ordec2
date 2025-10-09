@@ -121,7 +121,7 @@ def test_highlevel_async_tran_with_callback(backend):
 
     data_count = 0
     for result in h.sim_tran_async(
-        "0.1u", "5u", callback=progress_callback, throttle_interval=0.1
+        "0.1u", "5u", callback=progress_callback, buffer_size=10
     ):
         data_count += 1
 
@@ -158,7 +158,7 @@ def test_sky130_streaming_without_savecurrents(backend):
             "0.5u",
             enable_savecurrents=False,
             callback=count_callback,
-            throttle_interval=0.05,
+            buffer_size=5,
         )
     ):
         data_points.append(result)
@@ -191,7 +191,7 @@ def test_sky130_streaming_with_savecurrents(backend):
             "0.5u",
             enable_savecurrents=True,
             callback=count_callback,
-            throttle_interval=0.05,
+            buffer_size=5,
         )
     ):
         data_points.append(result)
@@ -533,9 +533,9 @@ def test_async_drain_exact_points(backend):
     last_result = None
     seen_times = set()
 
-    # For ffi and mp backends, disable throttling to get all data points instead of sampled subset
+    # For ffi and mp backends, disable buffering to get all data points instead of sampled subset
     if backend in ["ffi", "mp"]:
-        for result in h.sim_tran_async(tstep_str, tstop_str, disable_throttling=True):
+        for result in h.sim_tran_async(tstep_str, tstop_str, disable_buffering=True):
             # Fast fail on duplicate time values
             time_val = result.time.value
             if time_val in seen_times:

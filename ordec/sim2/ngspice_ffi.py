@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ctypes
-import os
+
 import re
 import sys
 import queue
@@ -29,6 +29,8 @@ from .ngspice_common import (
 )
 
 from ..core import R
+
+
 
 
 class NgspiceFFI(NgspiceBase):
@@ -122,9 +124,13 @@ class NgspiceFFI(NgspiceBase):
         # Async simulation state
         self._is_running = False
         self._async_callback = None
-        self._async_throttle_interval = 0.1  # Default 100ms throttle
-        self._last_callback_time = 0.0
         self._async_data_queue = queue.Queue()
+        # Buffering parameters
+        self._buffer_enabled = True
+        self._buffer_size = 10  # Number of data points to buffer before sending
+        self._data_buffer = []  # Buffer to collect data points
+        self._last_buffer_flush_time = 0.0
+        self._simulation_start_time = 0.0
         self._simulation_info = None
         self._last_progress = 0.0
         self._data_points_sent = 0
@@ -200,85 +206,116 @@ class NgspiceFFI(NgspiceBase):
             if self.debug:
                 print(f"[ngspice-ffi] Normal callback received: count={self._normal_callbacks_received}, time={current_time}")
 
-            # Throttle callbacks to prevent overwhelming Python
-            if not self._disable_throttling and current_time - self._last_callback_time < self._async_throttle_interval:
-                return 0
+            # Buffering logic
+            if self._buffer_enabled:
+                # Collect data point in buffer
+                data_point = self._process_data_point(vec_data, vec_count, current_time)
+                if data_point:
+                    self._data_buffer.append(data_point)
 
-            self._last_callback_time = current_time
+                    # Check if buffer should be flushed
+                    should_flush = (
+                        len(self._data_buffer) >= self._buffer_size or
+                        current_time - self._last_buffer_flush_time > 0.5  # Max 0.5s between flushes
+                    )
 
-            if vec_data and vec_count > 0:
-                data_points = {}
-                vec_data_content = vec_data.contents
-
-                for i in range(vec_data_content.veccount):
-                    vec_ptr = vec_data_content.vecsa[i]
-                    if vec_ptr:
-                        vec = vec_ptr.contents
-                        name = vec.name.decode("utf-8") if vec.name else f"vec_{i}"
-
-                        if vec.is_complex:
-                            value = complex(vec.creal, vec.cimag)
-                        else:
-                            value = vec.creal
-
-                        data_points[name] = value
-
-                # Calculate progress based on simulation time if available
-                progress = 0.0
-                if "time" in data_points and self._sim_tstop:
-                    sim_time = data_points["time"]
-                    progress = min(max(sim_time / self._sim_tstop, 0.0), 1.0)
-                    # Ensure progress is monotonic
-                    progress = max(progress, self._last_progress)
-                    self._last_progress = progress
-                else:
-                    # TODO find if this can be safely deleted.
-                    self._data_points_sent += 1
-                    progress = min(self._data_points_sent * 0.05, 0.95)
-                    progress = max(progress, self._last_progress)
-                    self._last_progress = progress
-
-                signal_kinds = {}
-                for vec_name in data_points:
-                    if vec_name != "time":
-                        vec_info = self._get_vector_info(vec_name)
-                        if vec_info:
-                            signal_kinds[vec_name] = SignalKind.from_vtype(
-                                int(vec_info.v_type)
-                            )
-
-                # Store in queue for safe retrieval
-                if data_points:
-                    try:
-                        self._async_data_queue.put_nowait(
-                            {
-                                "timestamp": current_time,
-                                "data": data_points,
-                                "signal_kinds": signal_kinds,
-                                "index": vec_count,
-                                "progress": progress,
-                            }
-                        )
-                    except queue.Full:
-                        # Drop oldest data if queue is full
-                        try:
-                            self._async_data_queue.get_nowait()
-                            self._async_data_queue.put_nowait(
-                                {
-                                    "timestamp": current_time,
-                                    "data": data_points,
-                                    "index": vec_count,
-                                    "progress": progress,
-                                }
-                            )
-                        except queue.Empty:
-                            pass
+                    if should_flush:
+                        self._flush_buffer()
+                        self._last_buffer_flush_time = current_time
+            else:
+                # No buffering - process and send immediately
+                data_point = self._process_data_point(vec_data, vec_count, current_time)
+                if data_point:
+                    self._send_data_point(data_point)
 
         except Exception:
             if self.debug:
                 print(
                     f"[ngspice-ffi] Error in _send_data_handler: {traceback.format_exc()}"
                 )
+
+        return 0
+
+    def _process_data_point(self, vec_data, vec_count, current_time):
+        """Process raw vector data into a structured data point."""
+        if vec_data and vec_count > 0:
+            data_points = {}
+            vec_data_content = vec_data.contents
+
+            for i in range(vec_data_content.veccount):
+                vec_ptr = vec_data_content.vecsa[i]
+                if vec_ptr:
+                    vec = vec_ptr.contents
+                    name = vec.name.decode("utf-8") if vec.name else f"vec_{i}"
+
+                    if vec.is_complex:
+                        value = complex(vec.creal, vec.cimag)
+                    else:
+                        value = vec.creal
+
+                    data_points[name] = value
+
+            # Calculate progress based on simulation time if available
+            progress = 0.0
+            if "time" in data_points and self._sim_tstop:
+                sim_time = data_points["time"]
+                progress = min(max(sim_time / self._sim_tstop, 0.0), 1.0)
+                # Ensure progress is monotonic
+                if self._last_progress is not None:
+                    progress = max(progress, self._last_progress)
+                self._last_progress = progress
+            else:
+                # TODO find if this can be safely deleted.
+                self._data_points_sent += 1
+                progress = min(self._data_points_sent * 0.05, 0.95)
+                if self._last_progress is not None:
+                    progress = max(progress, self._last_progress)
+                self._last_progress = progress
+
+            signal_kinds = {}
+            for vec_name in data_points:
+                if vec_name != "time":
+                    vec_info = self._get_vector_info(vec_name)
+                    if vec_info:
+                        signal_kinds[vec_name] = SignalKind.from_vtype(
+                            int(vec_info.v_type)
+                        )
+
+            return {
+                "timestamp": current_time,
+                "data": data_points,
+                "signal_kinds": signal_kinds,
+                "index": vec_count,
+                "progress": progress,
+            }
+        return None
+
+    def _send_data_point(self, data_point):
+        """Send a single data point to the async queue."""
+        try:
+            self._async_data_queue.put_nowait(data_point)
+        except queue.Full:
+            # Drop oldest data if queue is full
+            try:
+                self._async_data_queue.get_nowait()
+                self._async_data_queue.put_nowait(data_point)
+            except queue.Empty:
+                pass
+
+    def _flush_buffer(self):
+        """Flush buffered data points to the async queue."""
+        if not self._data_buffer:
+            return
+
+        if self.debug:
+            print(f"[ngspice-ffi] Flushing buffer with {len(self._data_buffer)} data points")
+
+        # Send all buffered data points
+        for data_point in self._data_buffer:
+            self._send_data_point(data_point)
+
+        # Clear buffer
+        self._data_buffer.clear()
 
         return 0
 
@@ -515,15 +552,17 @@ class NgspiceFFI(NgspiceBase):
 
         return result
 
-    def _setup_async_parameters(self, throttle_interval: float, disable_throttling: bool = False):
-        self._async_throttle_interval = throttle_interval
-        self._disable_throttling = disable_throttling
-        self._last_callback_time = 0.0
+    def _setup_async_parameters(self, buffer_size: int = 10, disable_buffering: bool = False):
+        self._buffer_size = buffer_size
+        self._buffer_enabled = not disable_buffering
+        self._data_buffer = []
+        self._last_buffer_flush_time = time.time()
         self._data_points_sent = 0
         self._sim_tstop = None
         self._last_progress = 0.0
         self._fallback_executed = False
         self._normal_callbacks_received = 0
+        self._simulation_start_time = time.time()
 
     def _parse_tstop_parameter(self, tstop):
         if tstop is not None:
@@ -542,9 +581,9 @@ class NgspiceFFI(NgspiceBase):
         return " ".join(cmd_args_list)
 
     def tran_async(
-        self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1, disable_throttling: bool = False, fallback_sampling_ratio: int = 100
+        self, tstep, tstop=None, *extra_args, buffer_size: int = 10, disable_buffering: bool = False, fallback_sampling_ratio: int = 100
     ) -> "queue.Queue[dict]":
-        self._setup_async_parameters(throttle_interval, disable_throttling)
+        self._setup_async_parameters(buffer_size, disable_buffering)
         self._fallback_sampling_ratio = fallback_sampling_ratio
         self._parse_tstop_parameter(tstop)
         self._clear_async_queue()
@@ -640,7 +679,7 @@ class NgspiceFFI(NgspiceBase):
                                     max(sim_time / self._sim_tstop, 0.0), 1.0
                                 )
 
-                            if progress < self._last_progress:
+                            if progress is not None and self._last_progress is not None and progress < self._last_progress:
                                 # TODO invesitigate why and when
                                 progress = self._last_progress
                             else:
@@ -728,7 +767,7 @@ class NgspiceFFI(NgspiceBase):
                                     max(sim_time / self._sim_tstop, 0.0), 1.0
                                 )
 
-                            if progress < self._last_progress:
+                            if progress is not None and self._last_progress is not None and progress < self._last_progress:
                                 # TODO invesitigate why and when
                                 progress = self._last_progress
                             else:

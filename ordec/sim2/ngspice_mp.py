@@ -739,9 +739,9 @@ class NgspiceIsolatedFFI(NgspiceBase):
 
         return False
 
-    def tran_async(self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1, disable_throttling: bool = False, fallback_sampling_ratio: int = 100, **kwargs):
+    def tran_async(self, tstep, tstop=None, *extra_args, buffer_size: int = 10, disable_buffering: bool = False, fallback_sampling_ratio: int = 100, **kwargs):
         self._async_simulation_running = True
-        self._call_worker("tran_async", tstep, tstop, *extra_args, throttle_interval=throttle_interval, disable_throttling=disable_throttling, fallback_sampling_ratio=fallback_sampling_ratio, **kwargs)
+        self._call_worker("tran_async", tstep, tstop, *extra_args, buffer_size=buffer_size, disable_buffering=disable_buffering, fallback_sampling_ratio=fallback_sampling_ratio, **kwargs)
         return self.async_queue
 
     def op_async(self, *args, **kwargs):
