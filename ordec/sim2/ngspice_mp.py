@@ -113,7 +113,7 @@ class FFIWorkerProcess:
         msg = self.conn.recv()
         if msg["type"] == "init":
             try:
-                self.backend = NgspiceFFI(debug=msg.get("debug", False))
+                self.backend = NgspiceFFI(debug=True)  # Always enable debug for worker process
                 self.conn.send({"type": "init_success"})
             except Exception as e:
                 self.conn.send(
