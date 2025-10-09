@@ -114,7 +114,7 @@ class FFIWorkerProcess:
         msg = self.conn.recv()
         if msg["type"] == "init":
             try:
-                self.backend = NgspiceFFI(debug=True)  # Always enable debug for worker process
+                self.backend = NgspiceFFI(debug=False)  # Disable debug for worker process by default
                 self.conn.send({"type": "init_success"})
             except Exception as e:
                 self.conn.send(
@@ -264,11 +264,11 @@ class FFIWorkerProcess:
                                 # This would be an error condition, log it if debugging
                                 if self.debug:
                                     print("[ngspice-mp] WARNING: Relay thread did not terminate in time.")
-                        
+
                         # Reset for the next run
                         self._relay_thread = None
                         self._relay_shutdown_event.clear()  # Prepare the event for the next simulation
-                        
+
                         self._response_queue.put({"type": "result", "data": pickle.dumps(True)})
                     except Exception as e:
                         self._response_queue.put(
@@ -468,7 +468,7 @@ class NgspiceIsolatedFFI(NgspiceBase):
                     self.stop_async_simulation()
                 except Exception:
                     pass  # Ignore cleanup errors on close
-            
+
             if not self.conn.closed:
                 self.conn.send({"type": "quit"})
         except BrokenPipeError:

@@ -135,6 +135,7 @@ class NgspiceFFI(NgspiceBase):
         self._last_progress = 0.0
         self._data_points_sent = 0
         self._sim_tstop = 0.0
+        self._normal_callbacks_received = 0  # Initialize counter for normal callbacks
 
         # Keep references to callbacks
         self._send_char_cb = self._SendChar(self._send_char_handler)
@@ -187,11 +188,11 @@ class NgspiceFFI(NgspiceBase):
                 start_time = time.time()
                 while self._is_running and (time.time() - start_time) < timeout:
                     time.sleep(0.1)
-            
+
             # Wait for fallback thread to finish if it exists
             if hasattr(self, '_fallback_thread') and self._fallback_thread and self._fallback_thread.is_alive():
                 self._fallback_thread.join(timeout=1.0)
-            
+
             # Clear the async data queue to prevent stale data
             if hasattr(self, '_async_data_queue'):
                 while not self._async_data_queue.empty():
