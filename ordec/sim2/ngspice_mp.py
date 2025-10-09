@@ -196,8 +196,6 @@ class FFIWorkerProcess:
                     try:
                         # Start async simulation
                         self._async_active.set()
-                        # Debug: track tran_async calls
-                        print(f"[DEBUG] Worker process executing {cmd} with args: {args}, kwargs: {kwargs}")
                         
                         # Extract and store fallback_sampling_ratio if provided
                         if 'fallback_sampling_ratio' in kwargs:
@@ -319,9 +317,6 @@ class FFIWorkerProcess:
         # Ensure the event is in a non-signaled state for the new thread
         self._shutdown_event.clear()
 
-        # Debug: track relay thread starts
-        print(f"[DEBUG] Starting relay thread, existing thread: {self._relay_thread is not None}")
-
         def relay_data():
             """Relay data from FFI queue to multiprocess queue with proper synchronization"""
             import queue as queue_module
@@ -330,21 +325,12 @@ class FFIWorkerProcess:
             start_time = time.time()
             processed_count = 0
 
-            print(f"[DEBUG] Relay thread started at {start_time}")
-
             try:
                 while not self._shutdown_event.is_set() and self._async_active.is_set():
                     try:
                         # Block until data is available with timeout
                         data_point = ffi_queue.get(timeout=0.5)
                         processed_count += 1
-
-                        # Debug: log first few data points
-                        if processed_count <= 10:
-                            time_val = "unknown"
-                            if isinstance(data_point, dict) and "data" in data_point:
-                                time_val = data_point["data"].get("time", "unknown")
-                            print(f"[DEBUG] Relay processing data point #{processed_count}, time={time_val}")
 
                         # Add progress tracking with thread safety
                         if isinstance(data_point, dict):
@@ -371,15 +357,8 @@ class FFIWorkerProcess:
                         # Put data in queue with timeout to avoid blocking
                         try:
                             self.async_queue.put(data_point, timeout=1.0)
-                            # Debug: log first few sends
-                            if processed_count <= 10:
-                                time_val = "unknown"
-                                if isinstance(data_point, dict) and "data" in data_point:
-                                    time_val = data_point["data"].get("time", "unknown")
-                                print(f"[DEBUG] Relay sent data point #{processed_count} to async_queue, time={time_val}")
                         except queue_module.Full:
                             # Skip this data point if queue is full
-                            print(f"[DEBUG] Relay skipped data point #{processed_count} (queue full)")
                             continue
 
                     except queue_module.Empty:
@@ -417,9 +396,6 @@ class FFIWorkerProcess:
                                     break
 
                             break
-
-                        # Debug: log thread completion
-                        print(f"[DEBUG] Relay thread completed, processed {processed_count} data points")
 
                         # Continue waiting for data
                         continue
