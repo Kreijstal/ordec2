@@ -587,6 +587,17 @@ class NgspiceFFI(NgspiceBase):
         time.sleep(0.1)
 
         # Only execute fallback if no normal callbacks were received
+        # Use adaptive approach: wait for normal callbacks to start, but not too long
+        # For simple circuits, normal callbacks start quickly (within 0.1s)
+        # For complex circuits (like SKY130), normal callbacks may never start
+        max_wait_time = 1.0  # Maximum time to wait for normal callbacks
+        check_interval = 0.05  # Check every 50ms
+        waited_time = 0.0
+
+        while waited_time < max_wait_time and self._normal_callbacks_received == 0:
+            time.sleep(check_interval)
+            waited_time += check_interval
+
         if self._normal_callbacks_received == 0:
             self._fallback_executed = True
             if self.debug:
