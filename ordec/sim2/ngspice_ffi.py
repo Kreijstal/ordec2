@@ -569,7 +569,7 @@ class NgspiceFFI(NgspiceBase):
         return self._async_data_queue
 
     def _data_fallback_handler(self):
-        """Handle data retrieval when callbacks don't work (e.g.,Complex models like SKY130 with savecurrents option)"""
+        """Handle data retrieval when callbacks don't work (e.g., complex models like SKY130 with savecurrents option)"""
         # Wait for simulation to complete
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as fallback_executor:
 
@@ -591,167 +591,77 @@ class NgspiceFFI(NgspiceBase):
         time.sleep(0.1)
 
         # Only execute fallback if no normal callbacks were received
-        # Add additional check: if normal callbacks are working, skip fallback entirely
         if self._normal_callbacks_received > 0:
             if self.debug:
                 print(f"[ngspice-ffi] Fallback handler SKIPPED (normal callbacks received: {self._normal_callbacks_received})")
             return  # Exit early if normal callbacks are working
 
+        # Execute fallback to retrieve data directly from ngspice
         self._fallback_executed = True
         if self.debug:
             print(f"[ngspice-ffi] Fallback handler executing (no normal callbacks received)")
 
-            try:
-                vector_names = self._get_all_vectors()
-                if vector_names and "time" in vector_names:
-                    vector_data_map = {}
-                    num_points = 0
+        try:
+            vector_names = self._get_all_vectors()
+            if vector_names and "time" in vector_names:
+                vector_data_map = {}
+                num_points = 0
 
-                    for vec_name in vector_names:
-                        vec_info = self._get_vector_info(vec_name)
-                        if vec_info and vec_info.v_length > 0:
-                            num_points = max(num_points, vec_info.v_length)
-                            data_list = [
-                                vec_info.v_realdata[i] for i in range(vec_info.v_length)
-                            ]
-                            vector_data_map[vec_name] = data_list
+                for vec_name in vector_names:
+                    vec_info = self._get_vector_info(vec_name)
+                    if vec_info and vec_info.v_length > 0:
+                        num_points = max(num_points, vec_info.v_length)
+                        data_list = [
+                            vec_info.v_realdata[i] for i in range(vec_info.v_length)
+                        ]
+                        vector_data_map[vec_name] = data_list
 
-                    if num_points > 0 and "time" in vector_data_map:
-                        # Sample every 10th point to avoid overwhelming the queue
-                        sample_indices = range(0, num_points, max(1, num_points // 100))
+                if num_points > 0 and "time" in vector_data_map:
+                    # Sample every 10th point to avoid overwhelming the queue
+                    sample_indices = range(0, num_points, max(1, num_points // 100))
 
-                        # Build a list of sample indices so we can compute ordinal progress
-                        sample_list = list(sample_indices)
-                        sample_count = len(sample_list) if sample_list else 1
+                    # Build a list of sample indices so we can compute ordinal progress
+                    sample_list = list(sample_indices)
 
-                        for pos, i in enumerate(sample_list):
-                            data_points = {}
-                            for name, values in vector_data_map.items():
-                                if i < len(values):
-                                    data_points[name] = values[i]
+                    for pos, i in enumerate(sample_list):
+                        data_points = {}
+                        for name, values in vector_data_map.items():
+                            if i < len(values):
+                                data_points[name] = values[i]
 
-                            if not data_points:
-                                continue
+                        if not data_points:
+                            continue
 
-                            progress = None
-                            if "time" in vector_data_map and self._sim_tstop:
-                                sim_time = vector_data_map["time"][i]
-                                progress = min(
-                                    max(sim_time / self._sim_tstop, 0.0), 1.0
-                                )
-
-                            if progress < self._last_progress:
-                                # TODO invesitigate why and when
-                                progress = self._last_progress
-                            else:
-                                self._last_progress = progress
-
-                            self._async_data_queue.put_nowait(
-                                {
-                                    "timestamp": time.time(),
-                                    "data": data_points,
-                                    "index": i,
-                                    "progress": progress,
-                                }
+                        progress = None
+                        if "time" in vector_data_map and self._sim_tstop:
+                            sim_time = vector_data_map["time"][i]
+                            progress = min(
+                                max(sim_time / self._sim_tstop, 0.0), 1.0
                             )
 
-                        if self.debug:
-                            print(
-                                f"[ngspice-ffi] Fallback retrieved {len(sample_indices)} data points from {num_points} total points"
-                            )
+                        if progress < self._last_progress:
+                            progress = self._last_progress
+                        else:
+                            self._last_progress = progress
 
-            except Exception as e:
-                logging.error("Exception in data_fallback_handler: %s", e)
-                if self.debug:
-                    logging.debug("Fallback traceback: %s", traceback.format_exc())
-        else:
-            # Normal callbacks worked, no need for fallback
+                        self._async_data_queue.put_nowait(
+                            {
+                                "timestamp": time.time(),
+                                "data": data_points,
+                                "index": i,
+                                "progress": progress,
+                            }
+                        )
+
+                    if self.debug:
+                        print(
+                            f"[ngspice-ffi] Fallback retrieved {len(sample_indices)} data points from {num_points} total points"
+                        )
+
+        except Exception as e:
+            logging.error("Exception in data_fallback_handler: %s", e)
             if self.debug:
-                print(f"[ngspice-ffi] Fallback handler skipped (normal callbacks received: {self._normal_callbacks_received})")
-
-            def check_completion_status():
-                return not self._is_running
-
-            # Create executor outside the loop to prevent shutdown issues
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as completion_executor:
-                while True:
-                    completion_future = completion_executor.submit(check_completion_status)
-                    try:
-                        if completion_future.result(timeout=0.05):
-                            break
-                    except concurrent.futures.TimeoutError:
-                        pass
-                    finally:
-                        if not completion_future.done():
-                            completion_future.cancel()
-
-        # Small delay to ensure simulation is fully complete
-        time.sleep(0.1)
-
-        if self._async_data_queue.empty():
-            try:
-                vector_names = self._get_all_vectors()
-                if vector_names and "time" in vector_names:
-                    vector_data_map = {}
-                    num_points = 0
-
-                    for vec_name in vector_names:
-                        vec_info = self._get_vector_info(vec_name)
-                        if vec_info and vec_info.v_length > 0:
-                            num_points = max(num_points, vec_info.v_length)
-                            data_list = [
-                                vec_info.v_realdata[i] for i in range(vec_info.v_length)
-                            ]
-                            vector_data_map[vec_name] = data_list
-
-                    if num_points > 0 and "time" in vector_data_map:
-                        # Sample every 10th point to avoid overwhelming the queue
-                        sample_indices = range(0, num_points, max(1, num_points // 100))
-
-                        # Build a list of sample indices so we can compute ordinal progress
-                        sample_list = list(sample_indices)
-                        sample_count = len(sample_list) if sample_list else 1
-
-                        for pos, i in enumerate(sample_list):
-                            data_points = {}
-                            for name, values in vector_data_map.items():
-                                if i < len(values):
-                                    data_points[name] = values[i]
-
-                            if not data_points:
-                                continue
-
-                            progress = None
-                            if "time" in vector_data_map and self._sim_tstop:
-                                sim_time = vector_data_map["time"][i]
-                                progress = min(
-                                    max(sim_time / self._sim_tstop, 0.0), 1.0
-                                )
-
-                            if progress < self._last_progress:
-                                # TODO invesitigate why and when
-                                progress = self._last_progress
-                            else:
-                                self._last_progress = progress
-
-                            self._async_data_queue.put_nowait(
-                                {
-                                    "timestamp": time.time(),
-                                    "data": data_points,
-                                    "index": i,
-                                    "progress": progress,
-                                }
-                            )
-
-                        if self.debug:
-                            print(
-                                f"[ngspice-ffi] Fallback retrieved {len(sample_indices)} data points from {num_points} total points"
-                            )
-
-            except Exception as e:
-                logging.error("Exception in data_fallback_handler: %s", e)
-                if self.debug:
-                    logging.debug("Fallback traceback: %s", traceback.format_exc())
+                logging.debug("Fallback traceback: %s", traceback.format_exc())
 
     def _wait_for_simulation_start(self, timeout: float) -> bool:
         timeout_time = time.time() + timeout

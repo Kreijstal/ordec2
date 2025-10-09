@@ -41,63 +41,6 @@ class FFIWorkerProcess:
         self._last_progress = 0.0
         self.debug = debug
 
-    def _handle_data_fallback(self):
-        """Handle data retrieval fallback when normal callbacks don't work"""
-        try:
-            import time
-
-            # Small delay to ensure simulation is fully complete
-            time.sleep(0.1)
-
-            # Check if we need fallback (no data received but simulation completed)
-            if self.async_queue.empty():
-                # Get current vectors from ngspice via backend
-                vector_names = self.backend._get_all_vectors()
-                if vector_names and "time" in vector_names:
-                    # Extract actual vector data
-                    vector_data_map = {}
-                    num_points = 0
-
-                    for vec_name in vector_names:
-                        vec_info = self.backend._get_vector_info(vec_name)
-                        if vec_info and vec_info.v_length > 0:
-                            num_points = max(num_points, vec_info.v_length)
-                            data_list = [
-                                vec_info.v_realdata[i] for i in range(vec_info.v_length)
-                            ]
-                            vector_data_map[vec_name] = data_list
-
-                    if num_points > 0 and "time" in vector_data_map:
-                        # Sample every 10th point to avoid overwhelming the queue
-                        sample_indices = range(0, num_points, max(1, num_points // 100))
-
-                        for i, sample_idx in enumerate(sample_indices):
-                            data_points = {}
-                            for name, values in vector_data_map.items():
-                                if sample_idx < len(values):
-                                    data_points[name] = values[sample_idx]
-
-                            if data_points:
-                                progress = min((i + 1) / len(sample_indices), 1.0)
-                                self.async_queue.put(
-                                    {
-                                        "timestamp": time.time(),
-                                        "data": data_points,
-                                        "index": sample_idx,
-                                        "progress": progress,
-                                    }
-                                )
-
-        except Exception as e:
-            # Log fallback errors but don't crash the simulation
-            import logging
-
-            logging.error("Exception in _handle_data_fallback: %s", e)
-            if self.debug:
-                import traceback
-
-                logging.debug("Fallback traceback: %s", traceback.format_exc())
-
     def run(self):
         """Main worker loop. Waits for commands and dispatches them."""
         from .ngspice_ffi import NgspiceFFI
@@ -113,7 +56,7 @@ class FFIWorkerProcess:
         msg = self.conn.recv()
         if msg["type"] == "init":
             try:
-                self.backend = NgspiceFFI(debug=True)  # Always enable debug for worker process
+                self.backend = NgspiceFFI(debug=msg.get("debug", False))
                 self.conn.send({"type": "init_success"})
             except Exception as e:
                 self.conn.send(
@@ -195,8 +138,6 @@ class FFIWorkerProcess:
                     try:
                         # Start async simulation
                         self._async_active.set()
-                        # Debug: track tran_async calls
-                        print(f"[DEBUG] Worker process executing {cmd} with args: {args}, kwargs: {kwargs}")
                         ffi_queue = method(*args, **kwargs)
 
                         # Start relay thread
@@ -284,14 +225,6 @@ class FFIWorkerProcess:
 
     def _start_relay_thread(self, ffi_queue):
         """Start a relay thread with proper synchronization"""
-        # Check if a relay thread is already running
-        if self._relay_thread is not None and self._relay_thread.is_alive():
-            # Stop the existing thread before starting a new one
-            self._shutdown_event.set()
-            self._relay_thread.join(timeout=1.0)
-
-        # Debug: track relay thread starts
-        print(f"[DEBUG] Starting relay thread, existing thread: {self._relay_thread is not None}")
 
         def relay_data():
             """Relay data from FFI queue to multiprocess queue with proper synchronization"""
@@ -299,23 +232,12 @@ class FFIWorkerProcess:
 
             progress_counter = 0
             start_time = time.time()
-            processed_count = 0
-
-            print(f"[DEBUG] Relay thread started at {start_time}")
 
             try:
                 while not self._shutdown_event.is_set() and self._async_active.is_set():
                     try:
                         # Block until data is available with timeout
                         data_point = ffi_queue.get(timeout=0.5)
-                        processed_count += 1
-
-                        # Debug: log first few data points
-                        if processed_count <= 10:
-                            time_val = "unknown"
-                            if isinstance(data_point, dict) and "data" in data_point:
-                                time_val = data_point["data"].get("time", "unknown")
-                            print(f"[DEBUG] Relay processing data point #{processed_count}, time={time_val}")
 
                         # Add progress tracking with thread safety
                         if isinstance(data_point, dict):
@@ -342,15 +264,8 @@ class FFIWorkerProcess:
                         # Put data in queue with timeout to avoid blocking
                         try:
                             self.async_queue.put(data_point, timeout=1.0)
-                            # Debug: log first few sends
-                            if processed_count <= 10:
-                                time_val = "unknown"
-                                if isinstance(data_point, dict) and "data" in data_point:
-                                    time_val = data_point["data"].get("time", "unknown")
-                                print(f"[DEBUG] Relay sent data point #{processed_count} to async_queue, time={time_val}")
                         except queue_module.Full:
                             # Skip this data point if queue is full
-                            print(f"[DEBUG] Relay skipped data point #{processed_count} (queue full)")
                             continue
 
                     except queue_module.Empty:
@@ -358,7 +273,7 @@ class FFIWorkerProcess:
                         if not self.backend.is_running():
                             self._async_active.clear()
 
-                            # Drain any remaining data first
+                            # Drain any remaining data from FFI queue
                             remaining_count = 0
                             while (
                                 remaining_count < 1000
@@ -373,7 +288,7 @@ class FFIWorkerProcess:
                                             if "progress" not in data_point:
                                                 data_point["progress"] = 1.0
                                             else:
-                                                data_point["progress"] =self._last_progress
+                                                data_point["progress"] = self._last_progress
                                             self._last_progress = data_point["progress"]
                                         finally:
                                             if self._progress_lock:
@@ -388,9 +303,6 @@ class FFIWorkerProcess:
                                     break
 
                             break
-
-                        # Debug: log thread completion
-                        print(f"[DEBUG] Relay thread completed, processed {processed_count} data points")
 
                         # Continue waiting for data
                         continue
