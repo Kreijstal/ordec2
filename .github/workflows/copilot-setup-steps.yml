@@ -85,13 +85,13 @@ jobs:
       - name: Download ngspice 44.2
         run: |
           cd /tmp
-          wget -q https://netcologne.dl.sourceforge.net/project/ngspice/ng-spice-rework/44.2/ngspice-44.2.tar.gz
-          echo "e7dadfb7bd5474fd22409c1e5a67acdec19f77e597df68e17c5549bc1390d7fd ngspice-44.2.tar.gz" | sha256sum -c
-          tar xf ngspice-44.2.tar.gz
-          cd ngspice-44.2
-      - name: Install ngspice 44.2
+          wget -q https://deac-riga.dl.sourceforge.net/project/ngspice/ng-spice-rework/45.2/ngspice-45.2.tar.gz
+          
+          tar xf ngspice-45.2.tar.gz
+          cd ngspice-45.2
+      - name: Install ngspice 45.2
         run: |         
-          cd /tmp/ngspice-44.2
+          cd /tmp/ngspice-45.2
           # Build CLI version first
           ./configure --prefix=/usr/local --disable-debug --without-x --enable-xspice --disable-cider --enable-openmp --enable-osdi --with-readline=no --with-editline=no
           make -j$(nproc --ignore=1)
