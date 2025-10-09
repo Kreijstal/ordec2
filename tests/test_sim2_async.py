@@ -646,3 +646,43 @@ def test_async_drain_exact_points(backend):
     assert last_result.time.value == pytest.approx(tstop_us * 1e-6), (
         "Final simulation time does not match the expected tstop."
     )
+
+
+@pytest.mark.libngspice
+@pytest.mark.parametrize("backend", ["ffi", "mp"])
+def test_consecutive_async_simulations_with_early_termination(backend):
+    """
+    Test that multiple consecutive async simulations work correctly when
+    the first simulation is terminated early. This validates the explicit
+    lifecycle management where the relay thread from the first simulation
+    is properly cleaned up before the second simulation starts.
+    """
+    h = lib_test.ResdivFlatTb(backend=backend)
+
+    # First simulation - terminate early after consuming only a few items
+    first_sim_count = 0
+    for result in h.sim_tran_async("0.05u", "10u"):
+        first_sim_count += 1
+        if first_sim_count >= 5:
+            break  # Early termination
+
+    assert first_sim_count >= 1, "First simulation should produce at least 1 data point"
+    assert first_sim_count <= 5, "First simulation should stop at 5 data points"
+
+    # Small delay to allow cleanup to complete
+    import time
+    time.sleep(0.1)
+
+    # Second simulation - should start cleanly without issues
+    second_sim_count = 0
+    second_sim_started = False
+    for result in h.sim_tran_async("0.05u", "10u"):
+        second_sim_started = True
+        second_sim_count += 1
+        if second_sim_count >= 5:
+            break
+
+    assert second_sim_started, "Second simulation should start successfully"
+    assert second_sim_count >= 1, "Second simulation should produce at least 1 data point"
+    assert second_sim_count <= 5, "Second simulation should stop at 5 data points"
+
