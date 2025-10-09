@@ -175,6 +175,23 @@ class NgspiceFFI(NgspiceBase):
     def cleanup(self):  # TODO
         pass
 
+    def _stop_async_simulation(self):
+        """Stop any running async simulation and wait for threads to finish."""
+        # First, halt the simulation if it's running
+        if self._is_running:
+            try:
+                self.command("bg_halt")
+                self._is_running = False
+            except:
+                pass
+        
+        # Wait for the fallback thread to finish if it exists
+        if hasattr(self, '_fallback_thread') and self._fallback_thread and self._fallback_thread.is_alive():
+            # Give it a moment to finish naturally
+            self._fallback_thread.join(timeout=0.5)
+            if self._fallback_thread.is_alive() and self.debug:
+                print("[ngspice-ffi] Warning: Fallback thread did not terminate in time")
+
     def _send_char_handler(self, message: bytes, ident: int, user_data) -> int:
         if message:
             msg_str = message.decode("utf-8", errors="ignore").strip()
@@ -398,6 +415,9 @@ class NgspiceFFI(NgspiceBase):
         self._has_fatal_error = False
 
     def load_netlist(self, netlist: str, no_auto_gnd: bool = True):
+        # Stop any running async simulation before loading new netlist
+        self._stop_async_simulation()
+        
         if no_auto_gnd:
             self.command("set no_auto_gnd")
 
@@ -526,8 +546,17 @@ class NgspiceFFI(NgspiceBase):
             self._sim_tstop = float(R(str(tstop)))
 
     def _clear_async_queue(self):
-        while not self._async_data_queue.empty():
-            self._async_data_queue.get_nowait()
+        # More robust queue clearing - drain all items with a timeout
+        cleared_count = 0
+        max_clear_attempts = 1000  # Prevent infinite loop
+        while cleared_count < max_clear_attempts:
+            try:
+                self._async_data_queue.get_nowait()
+                cleared_count += 1
+            except queue.Empty:
+                break
+        if cleared_count > 0 and self.debug:
+            print(f"[ngspice-ffi] Cleared {cleared_count} old items from async queue")
 
     def _build_tran_command(self, tstep, tstop, extra_args):
         cmd_args_list = [str(tstep)]
@@ -540,6 +569,9 @@ class NgspiceFFI(NgspiceBase):
     def tran_async(
         self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1, disable_throttling: bool = False, fallback_sampling_ratio: int = 100
     ) -> "queue.Queue[dict]":
+        # Stop any previous async simulation before starting a new one
+        self._stop_async_simulation()
+        
         self._setup_async_parameters(disable_throttling, fallback_sampling_ratio)
         self._fallback_sampling_ratio = fallback_sampling_ratio
         self._parse_tstop_parameter(tstop)
