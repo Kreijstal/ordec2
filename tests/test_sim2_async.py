@@ -593,3 +593,78 @@ def test_async_drain_exact_points(backend):
     assert last_result.time.value == pytest.approx(tstop_us * 1e-6), (
         "Final simulation time does not match the expected tstop."
     )
+
+
+@pytest.mark.libngspice
+@pytest.mark.parametrize("backend", ["mp"])  # Only test MP backend where the issue occurs
+def test_consecutive_async_simulations_with_early_termination(backend):
+    """
+    Test that multiple consecutive async simulations can be started on the same
+    backend instance, even when previous simulations are terminated early.
+    This specifically tests the fix for the relay thread lifecycle management issue.
+    """
+    from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
+    from ordec.sim2.ngspice import Ngspice, NgspiceBackend
+    import time
+    
+    # Create a test circuit
+    h = lib_test.ResdivFlatTb(backend=backend)
+    node = SimHierarchy()
+    highlevel_sim = HighlevelSim(h.schematic, node, backend=backend)
+    
+    # Use the same backend instance for multiple simulations
+    with Ngspice.launch(backend=backend) as sim:
+        sim.load_netlist(highlevel_sim.netlister.out())
+        
+        # First simulation - terminate early with a longer simulation time to get more data
+        data_queue_1 = sim.tran_async("0.01u", "1m", disable_throttling=True)
+        data_count_1 = 0
+        time.sleep(0.1)  # Give simulation a moment to produce data
+        for _ in range(100):
+            try:
+                item = data_queue_1.get(timeout=0.1)
+                data_count_1 += 1
+                if data_count_1 >= 5:
+                    break  # Terminate early
+            except queue.Empty:
+                break
+        
+        assert data_count_1 >= 5, f"First simulation should produce at least 5 data points, got {data_count_1}"
+        
+        # Small delay to ensure cleanup has time to complete
+        time.sleep(0.2)
+        
+        # Immediately start second simulation on the SAME backend instance
+        # This should work without hanging or raising an error
+        data_queue_2 = sim.tran_async("0.01u", "1m", disable_throttling=True)
+        data_count_2 = 0
+        time.sleep(0.1)
+        for _ in range(100):
+            try:
+                item = data_queue_2.get(timeout=0.1)
+                data_count_2 += 1
+                if data_count_2 >= 5:
+                    break  # Terminate early again
+            except queue.Empty:
+                break
+        
+        assert data_count_2 >= 5, f"Second simulation should produce at least 5 data points, got {data_count_2}"
+        
+        # Small delay before third simulation
+        time.sleep(0.2)
+        
+        # Run a third time to be extra sure
+        data_queue_3 = sim.tran_async("0.01u", "1m", disable_throttling=True)
+        data_count_3 = 0
+        time.sleep(0.1)
+        for _ in range(100):
+            try:
+                item = data_queue_3.get(timeout=0.1)
+                data_count_3 += 1
+                if data_count_3 >= 7:
+                    break
+            except queue.Empty:
+                break
+        
+        assert data_count_3 >= 7, f"Third simulation should produce at least 7 data points, got {data_count_3}"
+
