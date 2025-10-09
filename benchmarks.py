@@ -33,14 +33,15 @@ class LargeRingOsc(SimBase):
         from ordec.lib.generic_mos import Inv
         s = Schematic(cell=self)
         s.vdd, s.vss = Net(), Net()
-        stage_nets = [Net(name=f"net_{i}") for i in range(self.stages)]
-        s.add(stage_nets)
+        # Create nets using path notation
+        for i in range(self.stages):
+            s[f'net_{i}'] = Net()
         s.i_vdd = SchemInstance(Vdc(dc=R('1.8')).symbol.portmap(p=s.vdd, m=s.vss), pos=Vec2R(0, (self.stages * 10)))
         s.i_gnd = SchemInstance(Gnd().symbol.portmap(p=s.vss), pos=Vec2R(0, -5))
         inv_sym = Inv().symbol
         for i in range(self.stages):
-            s[f'inv_{i}'] = SchemInstance(inv_sym.portmap(a=stage_nets[i-1], y=stage_nets[i], vdd=s.vdd, vss=s.vss), pos=Vec2R((i*12), 8))
-        s.out_cap = SchemInstance(Cap(c=R('1p')).symbol.portmap(p=stage_nets[-1], m=s.vss), pos=Vec2R((self.stages*12), 8))
+            s[f'inv_{i}'] = SchemInstance(inv_sym.portmap(a=s[f'net_{(i-1) % self.stages}'], y=s[f'net_{i}'], vdd=s.vdd, vss=s.vss), pos=Vec2R((i*12), 8))
+        s.out_cap = SchemInstance(Cap(c=R('1p')).symbol.portmap(p=s[f'net_{self.stages-1}'], m=s.vss), pos=Vec2R((self.stages*12), 8))
         helpers.schem_check(s, add_terminal_taps=True, add_conn_points=True)
         return s
 
