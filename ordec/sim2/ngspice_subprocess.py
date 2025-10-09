@@ -331,7 +331,7 @@ class NgspiceSubprocess(NgspiceBase):
                         result.signals[vec_info.name].kind = SignalKind.CURRENT
 
     def tran_async(
-        self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1
+        self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1, disable_throttling: bool = False, fallback_sampling_ratio: int = 100
     ) -> "queue.Queue[dict]":
         if self._async_running:
             raise RuntimeError("Async simulation is already running")

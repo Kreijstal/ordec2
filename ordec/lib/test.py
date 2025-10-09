@@ -582,6 +582,8 @@ class SimBase(Cell):
         throttle_interval=0.1,
         enable_savecurrents=True,
         backend=None,
+        fallback_sampling_ratio=100,
+        disable_throttling=False,
     ):
         """Run async transient simulation.
 
@@ -609,7 +611,7 @@ class SimBase(Cell):
             sim.load_netlist(highlevel_sim.netlister.out())
 
             data_queue = sim.tran_async(
-                tstep, tstop, throttle_interval=throttle_interval
+                tstep, tstop, throttle_interval=throttle_interval, fallback_sampling_ratio=fallback_sampling_ratio, disable_throttling=disable_throttling
             )
 
             yield from stream_from_queue(

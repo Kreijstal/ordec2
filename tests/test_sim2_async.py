@@ -443,3 +443,52 @@ def test_async_alter_resume(backend):
     assert result["signal_count"] >= 2, "Should detect multiple signals"
     assert result["mapped_count"] >= 2, "Should map signal names correctly"
     assert result["voltage_steps"] == 4, "Should complete all voltage alteration steps"
+
+
+@pytest.mark.libngspice
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
+def test_async_drain_exact_points(backend):
+    """
+    Tests the async generator's ability to run to completion and drain a
+    large, predictable number of data points. This is a direct regression test
+    against the race condition that caused premature termination on fast backends.
+    """
+    # 1. Setup: Configure a simulation to produce exactly 2000 data points.
+    # A tran simulation from 0 to N*tstep produces N+1 points.
+    # So, to get 2000 points, we need 1999 steps.
+    h = lib_test.ResdivFlatTb(backend=backend)
+    num_points = 2000
+    tstep_us = 1
+    tstop_us = (num_points - 1) * tstep_us  # 1999us
+
+    tstep_str = f"{tstep_us}u"
+    tstop_str = f"{tstop_us}u"
+
+    # 2. Execution: Consume the entire generator and count the points.
+    points_consumed = 0
+    last_result = None
+    # For ffi backend, disable throttling to get all data points instead of sampled subset
+    if backend == "ffi":
+        for result in h.sim_tran_async(tstep_str, tstop_str, disable_throttling=True):
+            points_consumed += 1
+            last_result = result
+    else:
+        for result in h.sim_tran_async(tstep_str, tstop_str):
+            points_consumed += 1
+            last_result = result
+
+    # 3. Verification
+    assert last_result is not None, "Async generator produced no results."
+
+    # The primary check: did we get all the points?
+    assert points_consumed == num_points, \
+        f"Expected to drain exactly {num_points} points, but got {points_consumed}."
+
+    # Secondary checks to ensure the simulation ran correctly to the end.
+    assert hasattr(last_result, 'progress'), "Final result object missing 'progress' attribute."
+    assert last_result.progress >= 0.999, \
+        f"Simulation did not complete as expected; final progress was {last_result.progress*100:.2f}%."
+
+    assert hasattr(last_result, 'time'), "Final result object missing 'time' attribute."
+    assert last_result.time.value == pytest.approx(tstop_us * 1e-6), \
+        "Final simulation time does not match the expected tstop."
