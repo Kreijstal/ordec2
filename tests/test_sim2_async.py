@@ -467,8 +467,8 @@ def test_async_drain_exact_points(backend):
     # 2. Execution: Consume the entire generator and count the points.
     points_consumed = 0
     last_result = None
-    # For ffi backend, disable throttling to get all data points instead of sampled subset
-    if backend == "ffi":
+    # For ffi and mp backends, disable throttling to get all data points instead of sampled subset
+    if backend in ["ffi", "mp"]:
         for result in h.sim_tran_async(tstep_str, tstop_str, disable_throttling=True):
             points_consumed += 1
             last_result = result
