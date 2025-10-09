@@ -195,8 +195,6 @@ class FFIWorkerProcess:
                     try:
                         # Start async simulation
                         self._async_active.set()
-                        # Debug: track tran_async calls
-                        print(f"[DEBUG] Worker process executing {cmd} with args: {args}, kwargs: {kwargs}")
                         ffi_queue = method(*args, **kwargs)
 
                         # Start relay thread
@@ -314,32 +312,17 @@ class FFIWorkerProcess:
         # Ensure the event is in a non-signaled state for the new thread
         self._shutdown_event.clear()
 
-        # Debug: track relay thread starts
-        print(f"[DEBUG] Starting relay thread, existing thread: {self._relay_thread is not None}")
-
         def relay_data():
             """Relay data from FFI queue to multiprocess queue with proper synchronization"""
             import queue as queue_module
 
             progress_counter = 0
-            start_time = time.time()
-            processed_count = 0
-
-            print(f"[DEBUG] Relay thread started at {start_time}")
 
             try:
                 while not self._shutdown_event.is_set() and self._async_active.is_set():
                     try:
                         # Block until data is available with timeout
                         data_point = ffi_queue.get(timeout=0.5)
-                        processed_count += 1
-
-                        # Debug: log first few data points
-                        if processed_count <= 10:
-                            time_val = "unknown"
-                            if isinstance(data_point, dict) and "data" in data_point:
-                                time_val = data_point["data"].get("time", "unknown")
-                            print(f"[DEBUG] Relay processing data point #{processed_count}, time={time_val}")
 
                         # Add progress tracking with thread safety
                         if isinstance(data_point, dict):
@@ -366,15 +349,8 @@ class FFIWorkerProcess:
                         # Put data in queue with timeout to avoid blocking
                         try:
                             self.async_queue.put(data_point, timeout=1.0)
-                            # Debug: log first few sends
-                            if processed_count <= 10:
-                                time_val = "unknown"
-                                if isinstance(data_point, dict) and "data" in data_point:
-                                    time_val = data_point["data"].get("time", "unknown")
-                                print(f"[DEBUG] Relay sent data point #{processed_count} to async_queue, time={time_val}")
                         except queue_module.Full:
                             # Skip this data point if queue is full
-                            print(f"[DEBUG] Relay skipped data point #{processed_count} (queue full)")
                             continue
 
                     except queue_module.Empty:
@@ -412,9 +388,6 @@ class FFIWorkerProcess:
                                     break
 
                             break
-
-                        # Debug: log thread completion
-                        print(f"[DEBUG] Relay thread completed, processed {processed_count} data points")
 
                         # Continue waiting for data
                         continue
@@ -515,84 +488,80 @@ class NgspiceIsolatedFFI(NgspiceBase):
             self._comm_lock = threading.Lock()
 
         with self._comm_lock:
-            try:
-                # Send command with retry logic
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        self.conn.send(
-                            {"type": msg_type, "args": args, "kwargs": kwargs}
+            # Send command with retry logic
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    self.conn.send(
+                        {"type": msg_type, "args": args, "kwargs": kwargs}
+                    )
+                    break
+                except (BrokenPipeError, EOFError) as e:
+                    if attempt == max_retries - 1:
+                        raise RuntimeError(
+                            f"Failed to send command to worker process after {max_retries} attempts: {e}"
                         )
+                    time.sleep(0.01)  # Brief delay before retry
+
+            # Wait for response with proper timeout handling
+            response = None
+            poll_interval = 0.1
+            elapsed = 0
+
+            while elapsed < timeout_seconds:
+                if self.conn.poll(timeout=poll_interval):
+                    try:
+                        response = self.conn.recv()
                         break
-                    except (BrokenPipeError, EOFError) as e:
-                        if attempt == max_retries - 1:
-                            raise RuntimeError(
-                                f"Failed to send command to worker process after {max_retries} attempts: {e}"
-                            )
-                        time.sleep(0.01)  # Brief delay before retry
-
-                # Wait for response with proper timeout handling
-                response = None
-                poll_interval = 0.1
-                elapsed = 0
-
-                while elapsed < timeout_seconds:
-                    if self.conn.poll(timeout=poll_interval):
-                        try:
-                            response = self.conn.recv()
-                            break
-                        except (EOFError, BrokenPipeError) as e:
-                            raise RuntimeError(
-                                f"Worker process communication failed: {e}"
-                            )
-                        except Exception as e:
-                            if "invalid load key" in str(e) or "unpickling" in str(e):
-                                # Pickle corruption - likely a race condition
-                                raise RuntimeError(
-                                    f"Data corruption in worker communication: {e}"
-                                )
-                            raise RuntimeError(
-                                f"Worker process communication error: {e}"
-                            )
-                    elapsed += poll_interval
-
-                    # Check if worker process is still alive (but allow some time for error handling)
-                    if not self.process.is_alive() and elapsed > 5:
-                        raise RuntimeError("Worker process died during communication")
-
-                if response is None:
-                    raise RuntimeError(
-                        f"Timeout waiting for worker process response ({timeout_seconds}s)"
-                    )
-
-                # Process response
-                if response["type"] == "result":
-                    try:
-                        return pickle.loads(response["data"])
+                    except (EOFError, BrokenPipeError) as e:
+                        raise RuntimeError(
+                            f"Worker process communication failed: {e}"
+                        )
                     except Exception as e:
+                        if "invalid load key" in str(e) or "unpickling" in str(e):
+                            # Pickle corruption - likely a race condition
+                            raise RuntimeError(
+                                f"Data corruption in worker communication: {e}"
+                            )
                         raise RuntimeError(
-                            f"Failed to deserialize worker response: {e}"
+                            f"Worker process communication error: {e}"
                         )
-                elif response["type"] == "error":
-                    try:
-                        exc = pickle.loads(response["data"])
-                        # Re-raise the original exception type
-                        raise exc
-                    except (pickle.PickleError, TypeError, ImportError):
-                        # If deserialization fails, create a generic RuntimeError
-                        traceback_info = response.get(
-                            "traceback", "No traceback available"
-                        )
-                        raise RuntimeError(
-                            f"Worker process error: Failed to deserialize exception\n--- Traceback from worker process ---\n{traceback_info}"
-                        )
-                else:
+                elapsed += poll_interval
+
+                # Check if worker process is still alive (but allow some time for error handling)
+                if not self.process.is_alive() and elapsed > 5:
+                    raise RuntimeError("Worker process died during communication")
+
+            if response is None:
+                raise RuntimeError(
+                    f"Timeout waiting for worker process response ({timeout_seconds}s)"
+                )
+
+            # Process response
+            if response["type"] == "result":
+                try:
+                    return pickle.loads(response["data"])
+                except Exception as e:
                     raise RuntimeError(
-                        f"Unknown response type from worker: {response['type']}"
+                        f"Failed to deserialize worker response: {e}"
                     )
-            except Exception as e:
-                # Re-raise exceptions, but don't wrap them unnecessarily
-                raise
+            elif response["type"] == "error":
+                try:
+                    exc = pickle.loads(response["data"])
+                    # Re-raise the original exception type
+                    raise exc
+                except (pickle.PickleError, TypeError, ImportError):
+                    # If deserialization fails, create a generic RuntimeError
+                    traceback_info = response.get(
+                        "traceback", "No traceback available"
+                    )
+                    raise RuntimeError(
+                        f"Worker process error: Failed to deserialize exception\n--- Traceback from worker process ---\n{traceback_info}"
+                    )
+            else:
+                raise RuntimeError(
+                    f"Unknown response type from worker: {response['type']}"
+                )
 
     def _async_results_generator(self):
         """Generate results from async queue with proper error handling"""
