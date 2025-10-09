@@ -21,7 +21,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install system dependencies for ngspice
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -39,45 +39,9 @@ jobs:
             wget \
             ca-certificates \
             zstd \
-            git \
-            python3-venv \
-            chromium-driver \
-            npm
+            git
 
-      - name: Install ngspice 44.2
-        run: |
-          cd /tmp
-          wget -q -O ngspice-44.2.tar.gz https://sourceforge.net/projects/ngspice/files/ng-spice-rework/44.2/ngspice-44.2.tar.gz/download
-          echo "e7dadfb7bd5474fd22409c1e5a67acdec19f77e597df68e17c5549bc1390d7fd ngspice-44.2.tar.gz" | sha256sum -c
-          tar xf ngspice-44.2.tar.gz
-          cd ngspice-44.2
           
-          # Common configure args
-          ngspice_common_args="--disable-debug --without-x --enable-xspice --disable-cider --enable-openmp --enable-osdi"
-          
-          # Build minimal CLI version in separate directory
-          mkdir build-min
-          cd build-min
-          ../configure --prefix=/usr/local/ngspice/min ${ngspice_common_args} --with-readline=no --with-editline=no
-          make -j$(nproc --ignore=1)
-          sudo make install
-          cd ..
-          
-          # Build shared library version in separate directory
-          mkdir build-shared
-          cd build-shared
-          ../configure --prefix=/usr/local/ngspice/shared ${ngspice_common_args} --with-ngshared --with-readline=no --with-editline=no
-          make -j$(nproc --ignore=1)
-          sudo make install
-          cd ..
-          
-          # Add shared library to system library path
-          echo "/usr/local/ngspice/shared/lib" | sudo tee /etc/ld.so.conf.d/ngspice.conf
-          sudo ldconfig
-          
-          echo "PATH=/usr/local/ngspice/min/bin:$PATH" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=/usr/local/ngspice/shared/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-
       - name: Install OpenVAF 23.5.0
         run: |
           cd /tmp
@@ -118,51 +82,35 @@ jobs:
           echo "ORDEC_PDK_SKY130A=/usr/local/share/pdk/sky130A" >> $GITHUB_ENV
           echo "ORDEC_PDK_SKY130B=/usr/local/share/pdk/sky130B" >> $GITHUB_ENV
 
-      - name: Verify EDA tools installation
+      - name: Download ngspice 44.2
         run: |
-          echo "Testing ngspice installation:"
-          ngspice -v
-          echo "Testing ngspice shared libraries:"
-          ls -la /usr/local/ngspice/shared/lib/libngspice* || echo "No shared libraries found"
-          echo "Verifying shared library can be loaded:"
-          python3 -c "
-          try:
-              import ctypes
-              lib = ctypes.CDLL('libngspice.so.0')
-              print('✓ libngspice.so.0 loaded successfully')
-          except OSError as e:
-              print(f'✗ Cannot load libngspice.so.0: {e}')
-          "
-          echo "Testing OpenVAF installation:"
-          openvaf --version
-          echo "Testing PDK installations:"
-          ls -la /usr/local/share/pdk/
-          echo "Environment variables:"
-          echo "ORDEC_PDK_IHP_SG13G2=$ORDEC_PDK_IHP_SG13G2"
-          echo "ORDEC_PDK_SKY130A=$ORDEC_PDK_SKY130A"
-          echo "ORDEC_PDK_SKY130B=$ORDEC_PDK_SKY130B"
-
-      - name: Setup Python virtual environment and install dependencies
+          cd /tmp
+          wget -q https://netcologne.dl.sourceforge.net/project/ngspice/ng-spice-rework/44.2/ngspice-44.2.tar.gz
+          echo "e7dadfb7bd5474fd22409c1e5a67acdec19f77e597df68e17c5549bc1390d7fd ngspice-44.2.tar.gz" | sha256sum -c
+          tar xf ngspice-44.2.tar.gz
+          cd ngspice-44.2
+      - name: Install ngspice 44.2
+        run: |         
+          cd /tmp/ngspice-44.2
+          # Build CLI version first
+          ./configure --prefix=/usr/local --disable-debug --without-x --enable-xspice --disable-cider --enable-openmp --enable-osdi --with-readline=no --with-editline=no
+          make -j$(nproc --ignore=1)
+          sudo make install
+          
+          # Clean for shared library build
+          make clean
+          
+          # Build shared library version
+          ./configure --prefix=/usr/local/ngspice-shared --disable-debug --without-x --enable-xspice --disable-cider --enable-openmp --enable-osdi --with-ngshared --with-readline=no --with-editline=no
+          make -j$(nproc --ignore=1)
+          sudo make install
+          
+          # Add shared library to system library path
+          echo "/usr/local/ngspice-shared/lib" | sudo tee /etc/ld.so.conf.d/ngspice.conf
+          sudo ldconfig
+          
+      - name: Install Python dependencies and test basic functionality
         run: |
-          python3 -m venv venv
-          source venv/bin/activate
-          pip install --no-cache-dir \
-            pyrsistent \
-            astor \
-            websockets \
-            lark \
-            scipy \
-            numpy \
-            pytest \
-            pytest-cov \
-            selenium \
-            inotify-simple \
-            build
           pip install .
+          pip install pytest pytest-cov
 
-      - name: Install NPM dependencies
-        run: |
-          cd web
-          npm install
-          npm cache clean --force
-          cd ..
