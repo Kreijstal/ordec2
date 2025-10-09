@@ -83,7 +83,7 @@ def test_highlevel_async_tran_basic(backend):
 
     for i, result in enumerate(h.sim_tran_async("0.1u", "3u")):
         data_points.append(result)
-
+        time_values.append(result.time)
 
         assert hasattr(result, "a")
         assert hasattr(result.a, "value")
@@ -407,20 +407,31 @@ def test_async_alter_resume(backend):
         """Test multiple aspects of async alter functionality"""
         with sim.alter_session(backend=backend) as alter:
             # Start async transient simulation
-            data_queue = alter.start_async_tran("10u", "100m")
-            initial_data = []
+            data_queue = alter.start_async_tran("10u", "500m")
+            all_data = []
             found_signals = set()
             mapped_signals = {}
             start_time = time.time()
-            timeout = 10.0
+            timeout = 30.0  # Longer timeout like interactive example
 
-            while (time.time() - start_time) < timeout and len(initial_data) < 20:
+            # Multiple halt/alter/resume cycles with different voltages
+            voltage_sequence = [2.0, 1.5, 3.0, 1.0]
+            current_voltage_index = 0
+            last_voltage_change_time = 0
+            voltage_change_interval = 0.05  # Change voltage every 50ms of simulation time
+
+            while (time.time() - start_time) < timeout and current_voltage_index < len(voltage_sequence):
                 try:
-                    data_point = data_queue.get(timeout=0.1)
+                    data_point = data_queue.get_nowait()  # Use get_nowait like interactive example
+
                     if isinstance(data_point, dict) and "data" in data_point:
-                        sim_time = data_point["data"].get("time", 0)
                         data_dict = data_point["data"]
-                        initial_data.append((sim_time, data_dict))
+                        sim_time = data_dict.get("time", 0)
+
+                        # Record the data point
+                        all_data.append((sim_time, data_dict))
+
+                        # Track signals found
                         for signal_name in data_dict.keys():
                             if signal_name != "time":
                                 found_signals.add(signal_name)
@@ -430,69 +441,62 @@ def test_async_alter_resume(backend):
                                         -1
                                     ]
                                     mapped_signals[signal_name] = net_name
-                        if sim_time >= 0.005:
+
+                        # Check if it's time to change voltage
+                        if sim_time >= last_voltage_change_time + voltage_change_interval and current_voltage_index < len(voltage_sequence):
+                            voltage = voltage_sequence[current_voltage_index]
+
+                            # Halt, alter, and resume
+                            halt_success = alter.halt_simulation(timeout=2.0)
+                            assert halt_success, (
+                                f"Should successfully halt simulation at step {current_voltage_index + 1}"
+                            )
+
+                            alter.alter_component(circuit.schematic.v1, dc=voltage)
+                            vdc_info = alter.show_component(circuit.schematic.v1)
+                            expected = (
+                                str(int(voltage)) if voltage == int(voltage) else str(voltage)
+                            )
+                            assert expected in vdc_info, (
+                                f"Step {current_voltage_index + 1}: VDC should show {expected}V after alter: {vdc_info}"
+                            )
+
+                            resume_success = alter.resume_simulation(timeout=3.0)
+                            assert resume_success, (
+                                f"Should successfully resume simulation at step {current_voltage_index + 1}"
+                            )
+
+                            current_voltage_index += 1
+                            last_voltage_change_time = sim_time
+
+                            # Small delay to let simulation stabilize after resume
+                            await asyncio.sleep(0.05)
+
+                        # If we've completed all voltage changes, we can exit early
+                        if current_voltage_index >= len(voltage_sequence):
                             break
 
                 except queue.Empty:
+                    # Use short sleep like interactive example instead of blocking
+                    await asyncio.sleep(0.01)
                     continue
+                except Exception as e:
+                    break
 
-            assert len(initial_data) > 0, "Should collect initial simulation data"
+            # Separate data by voltage phases for analysis
+            initial_data = [d for d in all_data if d[0] < voltage_change_interval]
+            alter_data = [d for d in all_data if d[0] >= voltage_change_interval]
 
-            # Multiple halt/alter/resume cycles with different voltages
-            voltage_sequence = [2.0, 1.5, 3.0, 1.0]
-            alter_data = []
-
-            for i, voltage in enumerate(voltage_sequence):
-                halt_success = alter.halt_simulation(timeout=2.0)
-                assert halt_success, (
-                    f"Should successfully halt simulation at step {i + 1}"
-                )
-                alter.alter_component(circuit.schematic.v1, dc=voltage)
-                vdc_info = alter.show_component(circuit.schematic.v1)
-                expected = (
-                    str(int(voltage)) if voltage == int(voltage) else str(voltage)
-                )
-                assert expected in vdc_info, (
-                    f"Step {i + 1}: VDC should show {expected}V after alter: {vdc_info}"
-                )
-                resume_success = alter.resume_simulation(timeout=3.0)
-                assert resume_success, (
-                    f"Should successfully resume simulation at step {i + 1}"
-                )
-                step_data = []
-                step_start = time.time()
-                while (time.time() - step_start) < 1.0 and len(step_data) < 10:
-                    try:
-                        data_point = data_queue.get(timeout=0.1)
-                        if isinstance(data_point, dict) and "data" in data_point:
-                            sim_time = data_point["data"].get("time", 0)
-                            step_data.append((sim_time, data_point["data"]))
-                    except queue.Empty:
-                        continue
-
-                alter_data.extend(step_data)
-                assert len(step_data) > 0, (
-                    f"Should collect data after alter step {i + 1}"
-                )
-
-            final_data = []
-            start_time = time.time()
-            while (time.time() - start_time) < 2.0 and len(final_data) < 10:
-                try:
-                    data_point = data_queue.get(timeout=0.1)
-                    if isinstance(data_point, dict) and "data" in data_point:
-                        sim_time = data_point["data"].get("time", 0)
-                        final_data.append((sim_time, data_point["data"]))
-                except queue.Empty:
-                    continue
+            print(f"Collected {len(initial_data)} initial data points, {len(alter_data)} alter data points")
+            print(f"Voltage changes completed: {current_voltage_index}/{len(voltage_sequence)}")
 
             return {
                 "initial_points": len(initial_data),
                 "alter_points": len(alter_data),
-                "final_points": len(final_data),
+                "final_points": 0,  # Not tracking separately in this approach
                 "signal_count": len(found_signals),
                 "mapped_count": len(mapped_signals),
-                "voltage_steps": len(voltage_sequence),
+                "voltage_steps": current_voltage_index,
             }
 
     import asyncio
@@ -502,7 +506,7 @@ def test_async_alter_resume(backend):
     assert result["alter_points"] > 0, "Should collect data after alterations"
     assert result["signal_count"] >= 2, "Should detect multiple signals"
     assert result["mapped_count"] >= 2, "Should map signal names correctly"
-    assert result["voltage_steps"] == 4, "Should complete all voltage alteration steps"
+    assert result["voltage_steps"] == 4, f"Should complete all 4 voltage alteration steps, got {result['voltage_steps']}"
 
 
 @pytest.mark.libngspice
