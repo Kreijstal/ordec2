@@ -197,6 +197,8 @@ class NgspiceFFI(NgspiceBase):
         try:
             current_time = time.time()
             self._normal_callbacks_received += 1
+            if self.debug:
+                print(f"[ngspice-ffi] Normal callback received: count={self._normal_callbacks_received}, time={current_time}")
 
             # Throttle callbacks to prevent overwhelming Python
             if not self._disable_throttling and current_time - self._last_callback_time < self._async_throttle_interval:
@@ -561,6 +563,8 @@ class NgspiceFFI(NgspiceBase):
             target=self._data_fallback_handler, daemon=True
         )
         self._fallback_thread.start()
+        if self.debug:
+            print(f"[ngspice-ffi] Fallback thread started")
 
         return self._async_data_queue
 
@@ -590,8 +594,8 @@ class NgspiceFFI(NgspiceBase):
         # Use adaptive approach: wait for normal callbacks to start, but not too long
         # For simple circuits, normal callbacks start quickly (within 0.1s)
         # For complex circuits (like SKY130), normal callbacks may never start
-        max_wait_time = 1.0  # Maximum time to wait for normal callbacks
-        check_interval = 0.05  # Check every 50ms
+        max_wait_time = 2.0  # Maximum time to wait for normal callbacks
+        check_interval = 0.1  # Check every 100ms
         waited_time = 0.0
 
         while waited_time < max_wait_time and self._normal_callbacks_received == 0:
@@ -602,6 +606,9 @@ class NgspiceFFI(NgspiceBase):
             self._fallback_executed = True
             if self.debug:
                 print(f"[ngspice-ffi] Fallback handler executing (no normal callbacks received)")
+        else:
+            if self.debug:
+                print(f"[ngspice-ffi] Fallback handler skipped (normal callbacks received: {self._normal_callbacks_received})")
 
             try:
                 vector_names = self._get_all_vectors()
@@ -621,6 +628,8 @@ class NgspiceFFI(NgspiceBase):
                     if num_points > 0 and "time" in vector_data_map:
                         # Sample every 10th point to avoid overwhelming the queue
                         sample_indices = range(0, num_points, max(1, num_points // 100))
+                        if self.debug:
+                            print(f"[ngspice-ffi] Fallback sending {len(sample_indices)} sampled points out of {num_points} total")
 
                         # Build a list of sample indices so we can compute ordinal progress
                         sample_list = list(sample_indices)
@@ -656,6 +665,8 @@ class NgspiceFFI(NgspiceBase):
                                     "progress": progress,
                                 }
                             )
+                            if self.debug and i % 100 == 0:  # Log every 100th point to avoid spam
+                                print(f"[ngspice-ffi] Fallback sent point {i}/{num_points}, time={data_points.get('time', 'unknown')}")
 
                         if self.debug:
                             print(
