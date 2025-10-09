@@ -40,6 +40,7 @@ class FFIWorkerProcess:
         self._progress_lock = None
         self._last_progress = 0.0
         self.debug = debug
+        self._fallback_sampling_ratio = 100  # Default value
 
     def _handle_data_fallback(self):
         """Handle data retrieval fallback when normal callbacks don't work"""
@@ -68,8 +69,8 @@ class FFIWorkerProcess:
                             vector_data_map[vec_name] = data_list
 
                     if num_points > 0 and "time" in vector_data_map:
-                        # Sample every 10th point to avoid overwhelming the queue
-                        sample_indices = range(0, num_points, max(1, num_points // 100))
+                        # Use configurable sampling ratio instead of hardcoded value
+                        sample_indices = range(0, num_points, max(1, num_points // self._fallback_sampling_ratio))
 
                         for i, sample_idx in enumerate(sample_indices):
                             data_points = {}
@@ -197,6 +198,11 @@ class FFIWorkerProcess:
                         self._async_active.set()
                         # Debug: track tran_async calls
                         print(f"[DEBUG] Worker process executing {cmd} with args: {args}, kwargs: {kwargs}")
+                        
+                        # Extract and store fallback_sampling_ratio if provided
+                        if 'fallback_sampling_ratio' in kwargs:
+                            self._fallback_sampling_ratio = kwargs.get('fallback_sampling_ratio', 100)
+                        
                         ffi_queue = method(*args, **kwargs)
 
                         # Start relay thread
@@ -253,6 +259,32 @@ class FFIWorkerProcess:
                             }
                         )
 
+                elif cmd == "stop_async_simulation":
+                    try:
+                        if self._relay_thread and self._relay_thread.is_alive():
+                            # Signal the thread to shut down
+                            self._shutdown_event.set()
+                            # Wait for the thread to finish
+                            self._relay_thread.join(timeout=2.0)
+                            if self._relay_thread.is_alive():
+                                # This would be an error condition, log it if debugging
+                                if self.debug:
+                                    print("[ngspice-mp] WARNING: Relay thread did not terminate in time.")
+                        
+                        # Reset for the next run
+                        self._relay_thread = None
+                        self._shutdown_event.clear()  # Prepare the event for the next simulation
+                        
+                        self._response_queue.put({"type": "result", "data": pickle.dumps(True)})
+                    except Exception as e:
+                        self._response_queue.put(
+                            {
+                                "type": "error",
+                                "data": pickle.dumps(e),
+                                "traceback": traceback.format_exc(),
+                            }
+                        )
+
                 else:
                     # Handle regular commands
                     try:
@@ -284,11 +316,8 @@ class FFIWorkerProcess:
 
     def _start_relay_thread(self, ffi_queue):
         """Start a relay thread with proper synchronization"""
-        # Check if a relay thread is already running
-        if self._relay_thread is not None and self._relay_thread.is_alive():
-            # Stop the existing thread before starting a new one
-            self._shutdown_event.set()
-            self._relay_thread.join(timeout=1.0)
+        # Ensure the event is in a non-signaled state for the new thread
+        self._shutdown_event.clear()
 
         # Debug: track relay thread starts
         print(f"[DEBUG] Starting relay thread, existing thread: {self._relay_thread is not None}")
@@ -568,34 +597,46 @@ class NgspiceIsolatedFFI(NgspiceBase):
         timeout_count = 0
         max_timeouts = 100  # Allow some timeouts before giving up
 
-        while True:
-            try:
-                # Use timeout to prevent hanging forever
-                item = self.async_queue.get(timeout=0.5)
-                timeout_count = 0  # Reset timeout counter on successful get
+        try:
+            while True:
+                try:
+                    # Use timeout to prevent hanging forever
+                    item = self.async_queue.get(timeout=0.5)
+                    timeout_count = 0  # Reset timeout counter on successful get
 
-                if item == _ASYNC_SIM_SENTINEL:
-                    self._async_simulation_running = False
-                    break
-                yield item
-            except queue.Empty:
-                timeout_count += 1
-                if timeout_count > max_timeouts:
-                    # Been waiting too long, check if worker is still alive
-                    if not self.process.is_alive():
+                    if item == _ASYNC_SIM_SENTINEL:
                         self._async_simulation_running = False
                         break
-                    # Reset counter and continue waiting
-                    timeout_count = 0
-                continue
-            except (EOFError, BrokenPipeError):
-                self._async_simulation_running = False
-                break
-            except Exception as e:
-                # Log unexpected errors but continue
-                if hasattr(self, "_debug") and self._debug:
-                    print(f"[ngspice-mp] Async generator error: {e}")
-                break
+                    yield item
+                except queue.Empty:
+                    timeout_count += 1
+                    if timeout_count > max_timeouts:
+                        # Been waiting too long, check if worker is still alive
+                        if not self.process.is_alive():
+                            self._async_simulation_running = False
+                            break
+                        # Reset counter and continue waiting
+                        timeout_count = 0
+                    continue
+                except (EOFError, BrokenPipeError):
+                    self._async_simulation_running = False
+                    break
+                except Exception as e:
+                    # Log unexpected errors but continue
+                    if hasattr(self, "_debug") and self._debug:
+                        print(f"[ngspice-mp] Async generator error: {e}")
+                    break
+        finally:
+            # This code will run when the generator is closed/exhausted.
+            self._async_simulation_running = False
+            try:
+                # Send the explicit cleanup command to the worker
+                self._call_worker("stop_async_simulation", timeout=5.0) 
+            except RuntimeError as e:
+                # Log if the cleanup fails, but don't raise an exception
+                # as it might hide the original exception that caused the exit.
+                if hasattr(self, "debug") and self.debug:
+                    print(f"[ngspice-mp] Error during async cleanup: {e}")
 
     def command(self, command: str) -> str:
         return self._call_worker("command", command)
@@ -630,6 +671,10 @@ class NgspiceIsolatedFFI(NgspiceBase):
 
     def cleanup(self):
         pass
+
+    def stop_async_simulation(self):
+        """Tell the worker to clean up the async simulation resources."""
+        return self._call_worker("stop_async_simulation")
 
     def _create_async_generator(self, cmd, *args, callback=None, **kwargs):
         # callback is now an explicit parameter and must NOT be forwarded to the worker

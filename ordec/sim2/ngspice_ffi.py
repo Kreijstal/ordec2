@@ -200,11 +200,7 @@ class NgspiceFFI(NgspiceBase):
             if self.debug:
                 print(f"[ngspice-ffi] Normal callback received: count={self._normal_callbacks_received}, time={current_time}")
 
-            # Throttle callbacks to prevent overwhelming Python
-            if not self._disable_throttling and current_time - self._last_callback_time < self._async_throttle_interval:
-                return 0
-
-            self._last_callback_time = current_time
+            # No throttling - just buffer all data points
 
             if vec_data and vec_count > 0:
                 data_points = {}
@@ -515,15 +511,15 @@ class NgspiceFFI(NgspiceBase):
 
         return result
 
-    def _setup_async_parameters(self, throttle_interval: float, disable_throttling: bool = False):
-        self._async_throttle_interval = throttle_interval
-        self._disable_throttling = disable_throttling
+    def _setup_async_parameters(self, disable_throttling: bool = False, fallback_sampling_ratio: int = 100):
+        # Throttling removed - using buffering instead
         self._last_callback_time = 0.0
         self._data_points_sent = 0
         self._sim_tstop = None
         self._last_progress = 0.0
         self._fallback_executed = False
         self._normal_callbacks_received = 0
+        self._fallback_sampling_ratio = fallback_sampling_ratio
 
     def _parse_tstop_parameter(self, tstop):
         if tstop is not None:
@@ -544,7 +540,7 @@ class NgspiceFFI(NgspiceBase):
     def tran_async(
         self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1, disable_throttling: bool = False, fallback_sampling_ratio: int = 100
     ) -> "queue.Queue[dict]":
-        self._setup_async_parameters(throttle_interval, disable_throttling)
+        self._setup_async_parameters(disable_throttling, fallback_sampling_ratio)
         self._fallback_sampling_ratio = fallback_sampling_ratio
         self._parse_tstop_parameter(tstop)
         self._clear_async_queue()
@@ -617,8 +613,8 @@ class NgspiceFFI(NgspiceBase):
                             vector_data_map[vec_name] = data_list
 
                     if num_points > 0 and "time" in vector_data_map:
-                        # Sample every 10th point to avoid overwhelming the queue
-                        sample_indices = range(0, num_points, max(1, num_points // 100))
+                        # Use configurable sampling ratio instead of hardcoded value
+                        sample_indices = range(0, num_points, max(1, num_points // self._fallback_sampling_ratio))
 
                         # Build a list of sample indices so we can compute ordinal progress
                         sample_list = list(sample_indices)
@@ -705,8 +701,8 @@ class NgspiceFFI(NgspiceBase):
                             vector_data_map[vec_name] = data_list
 
                     if num_points > 0 and "time" in vector_data_map:
-                        # Sample every 10th point to avoid overwhelming the queue
-                        sample_indices = range(0, num_points, max(1, num_points // 100))
+                        # Use configurable sampling ratio instead of hardcoded value
+                        sample_indices = range(0, num_points, max(1, num_points // self._fallback_sampling_ratio))
 
                         # Build a list of sample indices so we can compute ordinal progress
                         sample_list = list(sample_indices)
