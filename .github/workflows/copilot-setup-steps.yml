@@ -52,18 +52,24 @@ jobs:
           tar xf ngspice-44.2.tar.gz
           cd ngspice-44.2
           
-          # Build minimal CLI version
-          ./configure --prefix=/usr/local/ngspice/min --disable-debug --without-x --enable-xspice --disable-cider --enable-openmp --enable-osdi --with-readline=no --with-editline=no
+          # Common configure args
+          ngspice_common_args="--disable-debug --without-x --enable-xspice --disable-cider --enable-openmp --enable-osdi"
+          
+          # Build minimal CLI version in separate directory
+          mkdir build-min
+          cd build-min
+          ../configure --prefix=/usr/local/ngspice/min ${ngspice_common_args} --with-readline=no --with-editline=no
           make -j$(nproc --ignore=1)
           sudo make install
+          cd ..
           
-          # Clean for shared library build
-          make clean
-          
-          # Build shared library version
-          ./configure --prefix=/usr/local/ngspice/shared --disable-debug --without-x --enable-xspice --disable-cider --enable-openmp --enable-osdi --with-ngshared --with-readline=no --with-editline=no
+          # Build shared library version in separate directory
+          mkdir build-shared
+          cd build-shared
+          ../configure --prefix=/usr/local/ngspice/shared ${ngspice_common_args} --with-ngshared --with-readline=no --with-editline=no
           make -j$(nproc --ignore=1)
           sudo make install
+          cd ..
           
           # Add shared library to system library path
           echo "/usr/local/ngspice/shared/lib" | sudo tee /etc/ld.so.conf.d/ngspice.conf
