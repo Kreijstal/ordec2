@@ -83,7 +83,7 @@ def test_highlevel_async_tran_basic(backend):
 
     for i, result in enumerate(h.sim_tran_async("0.1u", "3u")):
         data_points.append(result)
-
+        time_values.append(result.time)
 
         assert hasattr(result, "a")
         assert hasattr(result.a, "value")
