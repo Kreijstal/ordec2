@@ -683,3 +683,41 @@ def test_consecutive_async_simulations_with_early_termination(backend):
     assert second_sim_started, "Second simulation should start successfully"
     assert second_sim_count >= 1, "Second simulation should produce at least 1 data point"
     assert second_sim_count <= 5, "Second simulation should stop at 5 data points"
+
+
+@pytest.mark.libngspice
+@pytest.mark.parametrize("backend", ["ffi", "mp"])
+def test_buffering_does_not_lose_samples(backend):
+    """
+    Regression test for buffer flush issue.
+    
+    When async simulation completes, any remaining buffered data points must be flushed.
+    Previously, buffered mode would lose the last few samples that were stuck in the buffer.
+    This test ensures that buffered and non-buffered modes produce the same number of samples.
+    """
+    h = lib_test.ResdivFlatTb(backend=backend)
+    
+    # Use simulation parameters that will produce a predictable number of samples
+    tstep = "0.1u"
+    tstop = "5u"
+    
+    # Test with buffering enabled (default)
+    buffered_count = 0
+    for result in h.sim_tran_async(tstep, tstop, buffer_size=10, disable_buffering=False):
+        buffered_count += 1
+    
+    # Test with buffering disabled
+    h2 = lib_test.ResdivFlatTb(backend=backend)
+    no_buffer_count = 0
+    for result in h2.sim_tran_async(tstep, tstop, disable_buffering=True):
+        no_buffer_count += 1
+    
+    # Both modes should produce the same number of samples
+    assert buffered_count == no_buffer_count, (
+        f"Buffered mode produced {buffered_count} samples but non-buffered mode produced {no_buffer_count} samples. "
+        f"This indicates that buffer flushing on simulation completion is not working correctly."
+    )
+    
+    # Sanity check: we should get a reasonable number of samples
+    assert buffered_count > 10, f"Expected more than 10 samples, got {buffered_count}"
+
