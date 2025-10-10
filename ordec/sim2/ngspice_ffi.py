@@ -400,6 +400,10 @@ class NgspiceFFI(NgspiceBase):
             if self.debug:
                 status = "stopped" if is_not_running else "started"
                 print(f"[ngspice-ffi] Background thread {status}")
+            
+            # When simulation stops, flush any remaining buffered data
+            if is_not_running and self._buffer_enabled:
+                self._flush_buffer()
 
         except Exception:
             if self.debug:
