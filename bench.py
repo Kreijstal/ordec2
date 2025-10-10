@@ -217,6 +217,26 @@ def worker(task_func, *args):
 
 def run_with_timeout(task_func, *args, timeout=SIMULATION_TIMEOUT):
     """Run a task with timeout using multiprocessing."""
+    # Check if we're using the mp backend (which already uses multiprocessing internally)
+    # The backend is the second argument in task_args: (benchmark.tb_class, backend) + sim_args
+    if len(args) >= 2 and args[1] == "mp":
+        # mp backend already uses multiprocessing, can't create subprocesses
+        # Just run the task directly without timeout protection
+        try:
+            return task_func(*args)
+        except Exception as e:
+            return f"ERROR: {e}"
+
+    # Check if we're already in a multiprocessing context
+    if multiprocessing.current_process().name != 'MainProcess':
+        # We're already in a child process, can't create subprocesses
+        # Just run the task directly without timeout protection
+        try:
+            return task_func(*args)
+        except Exception as e:
+            return f"ERROR: {e}"
+
+    # Normal case: we're in the main process, can use multiprocessing
     with multiprocessing.Pool(1) as pool:
         try:
             result = pool.apply_async(worker, (task_func,) + args)
@@ -320,50 +340,47 @@ def main():
             for test in benchmark.tests:
                 test_name, task_func, sim_args = test["name"], test["func"], test["args"][1:]
                 task_args = (benchmark.tb_class, backend) + sim_args
-                logger.info(f"Starting test: '{test_name}'...")
 
                 # Skip async tests for subprocess backend
                 if backend == "subprocess" and test_name.startswith("Async Transient"):
-                    logger.info(f"Skipping test: '{test_name}' (not supported for subprocess backend)")
-                    results[backend][benchmark.name][test_name] = "Skipped (not supported)"
+                    continue
+
+                # We now use the reliable multiprocessing wrapper for ALL tests,
+                # as the new async runner is robust enough to handle it.
+                # Pass verbose flag to async tests for debug output
+                if test_name.startswith("Async Transient") and args.verbose:
+                    # Replace debug parameter with True for verbose mode
+                    task_args_list = list(task_args)
+                    if len(task_args_list) >= 3:
+                        task_args_list[-1] = True  # Set debug parameter to True
+                    task_args = tuple(task_args_list)
+                    logger.debug(f"[DEBUG] Setting debug=True for {test_name}")
+                result_value = run_with_timeout(task_func, *task_args)
+
+                results[backend][benchmark.name][test_name] = result_value
+
+                if test_name.startswith('Async Transient') and isinstance(result_value, tuple):
+                    time_taken, sample_count, fallback_used = result_value
+                    fallback_info = " (FALLBACK)" if fallback_used else ""
+                    logger.info(f"Finished test: '{test_name}'. Time: {time_taken} seconds, Samples: {sample_count}{fallback_info}")
                 else:
-                    # We now use the reliable multiprocessing wrapper for ALL tests,
-                    # as the new async runner is robust enough to handle it.
-                    # Pass verbose flag to async tests for debug output
-                    if test_name.startswith("Async Transient") and args.verbose:
-                        # Replace debug parameter with True for verbose mode
-                        task_args_list = list(task_args)
-                        if len(task_args_list) >= 3:
-                            task_args_list[-1] = True  # Set debug parameter to True
-                        task_args = tuple(task_args_list)
-                        logger.debug(f"[DEBUG] Setting debug=True for {test_name}")
-                    result_value = run_with_timeout(task_func, *task_args)
-
-                    results[backend][benchmark.name][test_name] = result_value
-
-                    if test_name.startswith('Async Transient') and isinstance(result_value, tuple):
-                        time_taken, sample_count, fallback_used = result_value
-                        fallback_info = " (FALLBACK)" if fallback_used else ""
-                        logger.info(f"Finished test: '{test_name}'. Time: {time_taken} seconds, Samples: {sample_count}{fallback_info}")
-                    else:
-                        logger.info(f"Finished test: '{test_name}'. Time: {result_value} seconds")
+                    logger.info(f"Finished test: '{test_name}'. Time: {result_value} seconds")
 
     if results:
         print("\n" + "="*50 + "\n" + " " * 15 + "BENCHMARK SUMMARY" + "\n" + "="*50)
         for backend, tb_results in results.items():
             print(f"\nBackend: {backend}\n" + "-" * (len(backend) + 10))
             for tb_name, sim_results in tb_results.items():
-                print(f"  Testbench: {tb_name}")
-                for sim_type in sorted(sim_results.keys()):
-                    result_value = sim_results[sim_type]
-                    if sim_type.startswith("Async Transient") and isinstance(result_value, tuple):
-                        time_taken, sample_count, fallback_used = result_value
-                        fallback_marker = " [FALLBACK]" if fallback_used else ""
-                        print(f"    - {sim_type:<45}: {time_taken:.4f} seconds ({sample_count} samples{fallback_marker})")
-                    elif isinstance(result_value, float):
-                        print(f"    - {sim_type:<45}: {result_value:.4f} seconds")
-                    else:
-                        print(f"    - {sim_type:<45}: {result_value}")
+                if sim_results:  # Only show testbenches that have results
+                    print(f"  Testbench: {tb_name}")
+                    for sim_type in sorted(sim_results.keys()):
+                        result_value = sim_results[sim_type]
+                        if sim_type.startswith("Async Transient") and isinstance(result_value, tuple):
+                            time_taken, sample_count, fallback_used = result_value
+                            fallback_marker = " [FALLBACK]" if fallback_used else ""
+                            print(f"    - {sim_type:<45}: {time_taken:.4f} seconds ({sample_count} samples{fallback_marker})")
+                        elif isinstance(result_value, float):
+                            print(f"    - {sim_type:<45}: {result_value:.4f} seconds")
         print("\n" + "="*50)
 
     # Save results to JSON file if requested
