@@ -6,9 +6,6 @@ import signal
 import sys
 import tempfile
 import shutil
-import threading
-import time
-import queue
 from collections import namedtuple
 from contextlib import contextmanager
 from pathlib import Path
@@ -82,13 +79,6 @@ class NgspiceSubprocess(NgspiceBase):
         self.p: Popen[bytes] = p
         self.debug = debug
         self.cwd = cwd
-        self._async_running = False
-        self._async_thread: Optional[threading.Thread] = None
-        self._async_queue: Optional[queue.Queue] = None
-        self._async_halt_requested = False
-        self._async_lock = threading.Lock()
-        self._data_points_sent = 0
-        self._async_current_time = 0.0
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -331,277 +321,36 @@ class NgspiceSubprocess(NgspiceBase):
                         result.signals[vec_info.name].kind = SignalKind.CURRENT
 
     def tran_async(
-        self, tstep, tstop=None, *extra_args, throttle_interval: float = 0.1
-    ) -> "queue.Queue[dict]":
-        if self._async_running:
-            raise RuntimeError("Async simulation is already running")
-
-        tstep_str = str(tstep).strip()
-        tstop_str = None
-        tstop_val = None
-        if tstop is not None:
-            tstop_str = str(tstop).strip()
-
-        try:
-            tstep_val = float(R(tstep_str))
-            if tstop_str is not None:
-                tstop_val = float(R(tstop_str))
-        except Exception as e:
-            raise ValueError(f"Invalid time format: {e}")
-
-        self._async_queue = queue.Queue()
-        self._async_halt_requested = False
-        self._async_running = True
-        self._data_points_sent = 0
-
-        cmd_parts = [tstep_str]
-        if tstop_str is not None:
-            cmd_parts.append(tstop_str)
-        if extra_args:
-            cmd_parts += [str(a) for a in extra_args]
-        cmd_tstep_str = tstep_str
-
-        self._async_thread = threading.Thread(
-            target=self._run_chunked_simulation,
-            args=(tstep_val, tstop_val, cmd_tstep_str, throttle_interval),
-            daemon=True,
-        )
-        self._async_thread.start()
-
-        return self._async_queue
-
-    def _parse_and_enqueue_from_lines(
-        self, lines: list, current_time: float, chunk_end: float, tstop: float | None
-    ) -> None:
-        signal_data = {}
-        signal_kinds = {}
-        tables = {}
-        current_headers = None
-
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-
-            if any(x in line for x in ("---", "print all", "Transient Analysis")):
-                continue
-
-            if "Index" in line and "time" in line:
-                current_headers = tuple(line.split())
-                continue
-
-            if not current_headers:
-                continue
-
-            values = line.split()
-            if len(values) < len(current_headers):
-                continue
-
-            try:
-                time_val = float(values[1])
-            except (ValueError, IndexError):  # TODO handle
-                continue
-
-            if time_val not in signal_data:
-                signal_data[time_val] = {}
-
-            for i, header in enumerate(current_headers[2:], start=2):
-                if i < len(values):
-                    signal_val = float(values[i])
-                    signal_data[time_val][header] = signal_val
-
-                    temp_result = NgspiceResultBase()
-                    signal_kinds[header] = temp_result.categorize_signal(header)
-
-        for time_val, time_signals in signal_data.items():
-            with self._async_lock:
-                if self._async_halt_requested:
-                    if self.debug:
-                        print(
-                            f"DEBUG: Breaking due to halt request in chunk starting at {current_time}"
-                        )
-                    break
-
-            if not (current_time <= time_val <= chunk_end):
-                continue
-
-            data_point = {
-                "timestamp": time.time(),
-                "data": {"time": time_val},
-                "signal_kinds": {"time": SignalKind.TIME},
-                "index": self._data_points_sent,
-                "progress": min(1.0, time_val / tstop)
-                if tstop is not None and tstop > 0
-                else 0.0,
-            }
-
-            for signal_name, signal_val in time_signals.items():
-                if signal_name == "time":
-                    continue
-                data_point["data"][signal_name] = signal_val
-                data_point["signal_kinds"][signal_name] = signal_kinds.get(
-                    signal_name, SignalKind.VOLTAGE
-                )
-
-            if self.debug and self._data_points_sent < 3:
-                print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")
-
-            if self._async_queue:
-                self._async_queue.put(data_point)
-            self._data_points_sent += 1
-
-    def _run_chunked_simulation(
         self,
-        tstep: float,
-        tstop: float | None,
-        tstep_str: str,
-        throttle_interval: float,
-    ):
-        try:
-            if tstop is not None:
-                chunk_time = min(tstop / 100, max(tstep * 5, 1e-9))
-            else:
-                chunk_time = max(tstep * 10, 1e-6)
-
-            current_time = self._async_current_time
-
-            while not self._async_halt_requested and (
-                tstop is None or current_time < tstop
-            ):
-                with self._async_lock:
-                    if self._async_halt_requested:
-                        if self.debug:
-                            print(
-                                f"DEBUG: Halt requested before starting chunk at {current_time}"
-                            )
-                        break
-
-                self._async_current_time = current_time
-                if tstop is not None:
-                    chunk_end = min(current_time + chunk_time, tstop)
-                else:
-                    chunk_end = current_time + chunk_time
-
-                if current_time == 0:
-                    tran_cmd = f"tran {tstep_str} {chunk_end}"
-                else:
-                    tran_cmd = f"tran {tstep_str} {chunk_end} {current_time}"
-
-                try:
-                    self.command(tran_cmd)
-                except NgspiceError as e:
-                    if chunk_time > tstep * 10:
-                        chunk_time /= 2
-                        if self.debug:
-                            print(
-                                f"DEBUG: Chunk failed with {e}; reducing chunk_time to {chunk_time} and continuing"
-                            )
-                        continue
-                    error_data = {"error": f"Simulation failed (tran): {str(e)}"}
-                    if self._async_queue:
-                        self._async_queue.put(error_data)
-                    break
-
-                try:
-                    print_all_res = "\n".join(self.print_all())
-                except NgspiceError:
-                    print_all_res = ""
-
-                lines = print_all_res.split("\n") if print_all_res else []
-                self._parse_and_enqueue_from_lines(
-                    lines, current_time, chunk_end, tstop
-                )
-
-                current_time = chunk_end
-                self._async_current_time = current_time
-
-                time.sleep(min(throttle_interval, 0.05))
-
-            if not self._async_halt_requested:
-                if self.debug:
-                    print("DEBUG: Simulation completed normally")
-                self._async_queue.put({"status": "completed"})
-            else:
-                if self.debug:
-                    print("DEBUG: Simulation halted by request")
-                self._async_queue.put({"status": "halted"})
-
-        except Exception as e:
-            error_data = {"error": f"Async simulation failed: {str(e)}"}
-            self._async_queue.put(error_data)
-        finally:
-            self._async_running = False
+        tstep,
+        tstop=None,
+        *extra_args,
+        throttle_interval: float = 0.1,
+        disable_throttling: bool = False,
+        fallback_sampling_ratio: int = 100,
+    ) -> "queue.Queue[dict]":
+        raise NotImplementedError(
+            "tran_async is not supported for subprocess backend. Use FFI or MP backend for async simulation."
+        )
 
     def is_running(self) -> bool:
-        """Check if async simulation is running."""
-        return self._async_running and (
-            self._async_thread is not None and self._async_thread.is_alive()
-        )
+        """Check if simulation is running."""
+        return False  # Async simulation not supported for subprocess backend
 
     def safe_halt_simulation(
         self, max_attempts: int = 3, wait_time: float = 0.2
     ) -> bool:
-        if self.debug:
-            print(
-                f"DEBUG: safe_halt_simulation called, async_running={self._async_running}, halt_requested={self._async_halt_requested}, thread_alive={self._async_thread and self._async_thread.is_alive() if self._async_thread else False}"
-            )
-        if not self._async_running:
-            return True
-
-        with self._async_lock:
-            self._async_halt_requested = True
-            if self.debug:
-                print("DEBUG: Set async_halt_requested=True")
-
-        for attempt in range(max_attempts):
-            if (
-                self._async_thread
-                and self._async_thread.is_alive()
-                and not self._async_running
-            ):
-                if self.debug:
-                    print(f"DEBUG: Simulation paused successfully")
-                return True
-
-            if self.debug:
-                print(
-                    f"DEBUG: Attempt {attempt + 1}/{max_attempts}: thread alive={self._async_thread and self._async_thread.is_alive()}, running={self._async_running}"
-                )
-            time.sleep(wait_time)
-
-        if self.debug:
-            print(f"DEBUG: Halt timeout reached, thread may still be processing")
-        return True  # Halt request was set, thread will pause when it checks the flag
+        """Halt simulation - always returns True since async not supported."""
+        return True
 
     def resume_simulation(self, timeout: float = 3.0) -> bool:
-        """Resume async simulation after halt."""
-        if not self._async_halt_requested:
-            return True  # Not halted, so already "running"
-
-        with self._async_lock:
-            self._async_halt_requested = False
-            self._async_running = True  # Mark as running again
-
-        if self.debug:
-            print(f"DEBUG: Simulation resumed, halt flag cleared")
-
+        """Resume simulation - always returns True since async not supported."""
         return True
 
     def safe_resume_simulation(
         self, max_attempts: int = 3, wait_time: float = 2.0
     ) -> bool:
-        if self.debug:
-            print(
-                f"DEBUG: safe_resume_simulation called, async_running={self._async_running}, halt_requested={self._async_halt_requested}"
-            )
-
-        if not self._async_halt_requested:
-            return True  # Not halted, so already "running"
-
-        with self._async_lock:
-            self._async_halt_requested = False
-            self._async_running = True  # Mark as running again
-
+        """Resume simulation safely - always returns True since async not supported."""
         return True
 
     def _is_header_line(self, line, expected_headers):
