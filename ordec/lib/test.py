@@ -889,7 +889,7 @@ class InvTb(SimBase):
             Vdc(dc=R("5")).symbol.portmap(m=s.vss, p=s.vdd), pos=Vec2R(0, 6)
         )
         s.I4 = SchemInstance(
-            SinusoidalVoltageSource(amplitude=R(1), frequency=R(1)).symbol.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6)
+            Vdc(dc=vin).symbol.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6)
         )
 
         s.outline = Rect4R(lx=0, ly=0, ux=20, uy=14)
@@ -916,7 +916,7 @@ class InvSkyTb(SimBase):
         sym_nc = NoConn().symbol
         sym_gnd = Gnd().symbol
         sym_vdc_vdd = Vdc(dc=R("5")).symbol
-        sym_ac_in = SinusoidalVoltageSource(amplitude=R(1), frequency=R(1)).symbol
+        sym_vdc_in = Vdc(dc=vin).symbol
 
         s.i_inv = SchemInstance(
             sym_inv.portmap(vdd=s.vdd, vss=s.vss, a=s.i, y=s.o), pos=Vec2R(11, 9)
@@ -925,7 +925,7 @@ class InvSkyTb(SimBase):
 
         s.i_gnd = SchemInstance(sym_gnd.portmap(p=s.vss), pos=Vec2R(11, 0))
         s.i_vdd = SchemInstance(sym_vdc_vdd.portmap(m=s.vss, p=s.vdd), pos=Vec2R(0, 6))
-        s.i_in = SchemInstance(sym_ac_in.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6))
+        s.i_in = SchemInstance(sym_vdc_in.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6))
 
         s.outline = Rect4R(lx=0, ly=0, ux=20, uy=14)
 
@@ -951,7 +951,7 @@ class InvIhpTb(SimBase):
         sym_nc = NoConn().symbol
         sym_gnd = Gnd().symbol
         sym_vdc_vdd = Vdc(dc=R("5")).symbol
-        sym_ac_in = SinusoidalVoltageSource(amplitude=R(1), frequency=R(1)).symbol
+        sym_vdc_in = Vdc(dc=vin).symbol
 
         s.i_inv = SchemInstance(
             sym_inv.portmap(vdd=s.vdd, vss=s.vss, a=s.i, y=s.o), pos=Vec2R(11, 9)
@@ -960,7 +960,7 @@ class InvIhpTb(SimBase):
 
         s.i_gnd = SchemInstance(sym_gnd.portmap(p=s.vss), pos=Vec2R(11, 0))
         s.i_vdd = SchemInstance(sym_vdc_vdd.portmap(m=s.vss, p=s.vdd), pos=Vec2R(0, 6))
-        s.i_in = SchemInstance(sym_ac_in.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6))
+        s.i_in = SchemInstance(sym_vdc_in.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6))
 
         s.outline = Rect4R(lx=0, ly=0, ux=20, uy=14)
 
