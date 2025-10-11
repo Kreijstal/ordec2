@@ -415,6 +415,7 @@ def test_async_alter_resume(backend):
             voltage_sequence = [2.0, 1.5, 3.0, 1.0]
             data_points_since_last_change = 0
             voltage_change_interval = 20
+            completed_steps = 0
 
             for voltage_index, voltage in enumerate(voltage_sequence):
                 # Collect some data points before altering
@@ -435,10 +436,11 @@ def test_async_alter_resume(backend):
                 alter.alter_component(circuit.schematic.v1, dc=voltage)
                 assert alter.resume_simulation(timeout=0.1), f"Should resume at step {voltage_index + 1}"
                 
+                completed_steps += 1
                 data_points_since_last_change = 0
                 await asyncio.sleep(0.01)
 
-            return {"voltage_steps": len(voltage_sequence)}
+            return {"voltage_steps": completed_steps}
 
     import asyncio
 
