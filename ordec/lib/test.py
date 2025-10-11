@@ -681,12 +681,12 @@ class ResdivFlatTb(SimBase):
         s.a = Net()
         s.b = Net()
 
-        sym_vac = SinusoidalVoltageSource(amplitude=R(1), frequency=R(1)).symbol
+        sym_vdc = Vdc(dc=R(1)).symbol
         sym_gnd = Gnd().symbol
         sym_res = Res(r=R(100)).symbol
 
         s.I0 = SchemInstance(sym_gnd.portmap(p=s.vss), pos=Vec2R(5, 0))
-        s.I1 = SchemInstance(sym_vac.portmap(m=s.vss, p=s.vdd), pos=Vec2R(0, 6))
+        s.I1 = SchemInstance(sym_vdc.portmap(m=s.vss, p=s.vdd), pos=Vec2R(0, 6))
         s.I2 = SchemInstance(sym_res.portmap(m=s.vss, p=s.a), pos=Vec2R(5, 6))
         s.I3 = SchemInstance(sym_res.portmap(m=s.a, p=s.b), pos=Vec2R(5, 11))
         s.I4 = SchemInstance(sym_res.portmap(m=s.b, p=s.vdd), pos=Vec2R(5, 16))
@@ -815,7 +815,7 @@ class ResdivHierTb(SimBase):
         )
         s.I1 = SchemInstance(NoConn().symbol.portmap(a=s.r), pos=Vec2R(10, 0))
         s.I2 = SchemInstance(
-            SinusoidalVoltageSource(amplitude=R(1), frequency=R(1)).symbol.portmap(m=s.gnd, p=s.t), pos=Vec2R(0, 0)
+            Vdc(dc=R(1)).symbol.portmap(m=s.gnd, p=s.t), pos=Vec2R(0, 0)
         )
         s.I3 = SchemInstance(Gnd().symbol.portmap(p=s.gnd), pos=Vec2R(0, -6))
 
@@ -855,7 +855,7 @@ class NmosSourceFollowerTb(SimBase):
             Vdc(dc=R("5")).symbol.portmap(m=s.vss, p=s.vdd), pos=Vec2R(0, 6)
         )
         s.I3 = SchemInstance(
-            SinusoidalVoltageSource(amplitude=R(1), frequency=R(1)).symbol.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6)
+            Vdc(dc=vin).symbol.portmap(m=s.vss, p=s.i), pos=Vec2R(5, 6)
         )
         s.I4 = SchemInstance(
             Idc(dc=R("5u")).symbol.portmap(m=s.vss, p=s.o), pos=Vec2R(11, 6)

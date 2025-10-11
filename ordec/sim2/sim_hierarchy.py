@@ -212,7 +212,18 @@ class HighlevelSim:
             for hook in self.sim_setup_hooks:
                 hook(sim)
 
-            sim.load_netlist(self.netlister.out())
+            # WORKAROUND: ngspice FFI has a bug where .option savecurrents causes
+            # segfaults during AC analysis. Create a netlist without savecurrents
+            # for AC analysis when using FFI or MP (which uses FFI internally) backend.
+            if sim_type == SimType.AC and self.backend in ("ffi", "mp"):
+                # Create a temporary netlister without savecurrents
+                temp_netlister = Netlister(enable_savecurrents=False)
+                temp_netlister.netlist_hier(self.top)
+                netlist = temp_netlister.out()
+            else:
+                netlist = self.netlister.out()
+            
+            sim.load_netlist(netlist)
             data = getattr(sim, sim_method)(*sim_args, **sim_kwargs)
             setattr(
                 self.simhier,
