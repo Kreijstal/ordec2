@@ -279,13 +279,24 @@ def test_highlevel_alter_op(backend):
     sim = HighlevelSim(tb.schematic, node, backend=backend)
 
     with sim.alter_session(backend=backend) as alter:
-        voltage_sequence = [1.0, 2.0, 5.0, 0.5, 3.0]
+        # Test altering VDC voltage multiple times
+        vdc_values = [1.0, 2.0, 5.0, 0.5]
         
-        for vdc_value in voltage_sequence:
+        for vdc_value in vdc_values:
             alter.alter_component(tb.schematic.v1, dc=vdc_value)
             alter.op()
             voltage = node.vout.dc_voltage
-            assert abs(voltage - vdc_value) < 0.01
+            # In this DC circuit, output should equal input voltage
+            assert abs(voltage - vdc_value) < 0.01, f"DC output should be ~{vdc_value}V, got {voltage}V"
+
+        # Test altering capacitor capacitance
+        alter.alter_component(tb.schematic.c1, capacitance='2u')
+        
+        # Verify we can still alter VDC after capacitor change
+        alter.alter_component(tb.schematic.v1, dc=3.0)
+        alter.op()
+        final_voltage = node.vout.dc_voltage
+        assert abs(final_voltage - 3.0) < 0.01, f"Final voltage should be ~3V, got {final_voltage}V"
 
 @pytest.mark.parametrize("backend", sim2_backends)
 def test_sim_ac_rc_filter_wrdata(backend):
