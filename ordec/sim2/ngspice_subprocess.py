@@ -6,6 +6,9 @@ import signal
 import sys
 import tempfile
 import shutil
+import queue
+import threading
+import time
 from collections import namedtuple
 from contextlib import contextmanager
 from pathlib import Path
@@ -79,6 +82,14 @@ class NgspiceSubprocess(NgspiceBase):
         self.p: Popen[bytes] = p
         self.debug = debug
         self.cwd = cwd
+        
+        # Async simulation support
+        self._async_queue: Optional[queue.Queue] = None
+        self._async_thread: Optional[threading.Thread] = None
+        self._async_lock = threading.Lock()
+        self._async_halt_requested = False
+        self._async_current_time = 0.0
+        self._data_points_sent = 0
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -326,31 +337,76 @@ class NgspiceSubprocess(NgspiceBase):
         tstop=None,
         *extra_args,
         throttle_interval: float = 0.1,
+        buffer_size: int = 10,
+        disable_buffering: bool = False,
         disable_throttling: bool = False,
         fallback_sampling_ratio: int = 100,
     ) -> "queue.Queue[dict]":
-        raise NotImplementedError(
-            "tran_async is not supported for subprocess backend. Use FFI or MP backend for async simulation."
+        """Run async transient simulation using chunked approach with stop after and step commands."""
+        # Parse tstep and tstop
+        def parse_time(val):
+            if val is None:
+                return None
+            if isinstance(val, (int, float)):
+                return float(val)
+            if isinstance(val, R):
+                return float(val)
+            # Parse string like "1u", "1n", etc.
+            s = str(val).strip()
+            multipliers = {
+                "f": 1e-15,
+                "p": 1e-12,
+                "n": 1e-9,
+                "u": 1e-6,
+                "m": 1e-3,
+                "k": 1e3,
+                "meg": 1e6,
+            }
+            for suffix, mult in multipliers.items():
+                if s.endswith(suffix):
+                    return float(s[: -len(suffix)]) * mult
+            return float(s)
+
+        tstep_val = parse_time(tstep)
+        tstop_val = parse_time(tstop) if tstop is not None else None
+        tstep_str = str(tstep)
+
+        # Initialize async state
+        self._async_queue = queue.Queue()
+        self._async_halt_requested = False
+        self._async_current_time = 0.0
+        self._data_points_sent = 0
+
+        # Start the chunked simulation in a thread
+        self._async_thread = threading.Thread(
+            target=self._run_chunked_simulation,
+            args=(tstep_val, tstop_val, tstep_str, throttle_interval),
+            daemon=True,
         )
+        self._async_thread.start()
+
+        return self._async_queue
 
     def is_running(self) -> bool:
         """Check if simulation is running."""
-        return False  # Async simulation not supported for subprocess backend
+        return self._async_thread is not None and self._async_thread.is_alive()
 
     def safe_halt_simulation(
         self, max_attempts: int = 3, wait_time: float = 0.2
     ) -> bool:
-        """Halt simulation - always returns True since async not supported."""
+        """Halt simulation."""
+        with self._async_lock:
+            self._async_halt_requested = True
         return True
 
     def resume_simulation(self, timeout: float = 3.0) -> bool:
-        """Resume simulation - always returns True since async not supported."""
+        """Resume simulation - not implemented for subprocess backend."""
         return True
 
     def safe_resume_simulation(
         self, max_attempts: int = 3, wait_time: float = 2.0
     ) -> bool:
-        """Resume simulation safely - always returns True since async not supported."""
+        """Resume simulation safely - not implemented for subprocess backend."""
         return True
 
     def _is_header_line(self, line, expected_headers):
@@ -367,6 +423,194 @@ class NgspiceSubprocess(NgspiceBase):
 
         # If most headers are found in this line, it's likely a header
         return header_matches >= len(expected_headers) * 0.6
+
+    def _parse_and_enqueue_from_lines(
+        self, lines: list, current_time: float, chunk_end: float, tstop: float | None
+    ) -> None:
+        """Parse print all output and enqueue data points for async simulation."""
+        signal_data = {}
+        signal_kinds = {}
+        current_headers = None
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Skip separator lines and headers
+            if any(x in line for x in ("---", "print all", "Transient Analysis")):
+                continue
+
+            # Check for header line (contains "Index" and "time")
+            if "Index" in line and "time" in line:
+                current_headers = tuple(line.split())
+                continue
+
+            if not current_headers:
+                continue
+
+            values = line.split()
+            if len(values) < len(current_headers):
+                continue
+
+            try:
+                time_val = float(values[1])
+            except (ValueError, IndexError):
+                continue
+
+            if time_val not in signal_data:
+                signal_data[time_val] = {}
+
+            for i, header in enumerate(current_headers[2:], start=2):
+                if i < len(values):
+                    signal_val = float(values[i])
+                    signal_data[time_val][header] = signal_val
+
+                    temp_result = NgspiceResultBase()
+                    signal_kinds[header] = temp_result.categorize_signal(header)
+
+        # Enqueue data points, filtering by time to avoid duplicates
+        for time_val, time_signals in sorted(signal_data.items()):
+            with self._async_lock:
+                if self._async_halt_requested:
+                    if self.debug:
+                        print(
+                            f"DEBUG: Breaking due to halt request in chunk starting at {current_time}"
+                        )
+                    break
+
+            # Only send data points that are newer than what we've already sent
+            if time_val <= self._async_current_time and self._data_points_sent > 0:
+                continue
+
+            data_point = {
+                "timestamp": time.time(),
+                "data": {"time": time_val},
+                "signal_kinds": {"time": SignalKind.TIME},
+                "index": self._data_points_sent,
+                "progress": min(1.0, time_val / tstop)
+                if tstop is not None and tstop > 0
+                else 0.0,
+            }
+
+            for signal_name, signal_val in time_signals.items():
+                if signal_name == "time":
+                    continue
+                data_point["data"][signal_name] = signal_val
+                data_point["signal_kinds"][signal_name] = signal_kinds.get(
+                    signal_name, SignalKind.VOLTAGE
+                )
+
+            if self.debug and self._data_points_sent < 3:
+                print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")
+
+            if self._async_queue:
+                self._async_queue.put(data_point)
+            self._data_points_sent += 1
+            # Update the current time tracker
+            self._async_current_time = time_val
+
+    def _run_chunked_simulation(
+        self,
+        tstep: float,
+        tstop: float | None,
+        tstep_str: str,
+        throttle_interval: float,
+    ):
+        """Run chunked transient simulation using stop after and step commands."""
+        try:
+            # Calculate chunk size (number of steps per chunk)
+            if tstop is not None:
+                # Aim for ~100 chunks across the simulation
+                total_steps = int(tstop / tstep)
+                chunk_steps = max(5, total_steps // 100)
+            else:
+                chunk_steps = 10
+
+            # Start the transient analysis with "stop after" to pause after initial steps
+            try:
+                self.command(f"stop after {chunk_steps}")
+                tran_cmd = f"tran {tstep_str} {tstop if tstop else tstep * 1000}"
+                self.command(tran_cmd)
+            except NgspiceError as e:
+                error_data = {"error": f"Simulation failed to start: {str(e)}"}
+                if self._async_queue:
+                    self._async_queue.put(error_data)
+                return
+
+            # Main simulation loop
+            simulation_complete = False
+            while not self._async_halt_requested and not simulation_complete:
+                with self._async_lock:
+                    if self._async_halt_requested:
+                        if self.debug:
+                            print(f"DEBUG: Halt requested during simulation")
+                        break
+
+                # Get current simulation data
+                try:
+                    print_all_res = "\n".join(self.print_all())
+                except NgspiceError:
+                    print_all_res = ""
+
+                lines = print_all_res.split("\n") if print_all_res else []
+                
+                # Parse the current time from the output to determine chunk boundaries
+                current_time = 0.0
+                chunk_end = tstop if tstop else float('inf')
+                
+                # Extract time values from the output to determine current simulation time
+                for line in lines:
+                    line = line.strip()
+                    if not line or "Index" in line:
+                        continue
+                    values = line.split()
+                    if len(values) >= 2:
+                        try:
+                            time_val = float(values[1])
+                            current_time = max(current_time, time_val)
+                        except (ValueError, IndexError):
+                            pass
+
+                # Enqueue the data points
+                self._parse_and_enqueue_from_lines(
+                    lines, 0.0, chunk_end, tstop
+                )
+
+                # Check if simulation is complete
+                if tstop is not None and current_time >= tstop * 0.999:
+                    simulation_complete = True
+                    break
+
+                # Continue simulation with step command
+                try:
+                    step_output = self.command(f"step {chunk_steps}")
+                    # Check if simulation ended
+                    if "simulation interrupted" not in step_output.lower():
+                        # Simulation may have completed
+                        simulation_complete = True
+                except NgspiceError as e:
+                    if self.debug:
+                        print(f"DEBUG: Step command failed: {e}")
+                    simulation_complete = True
+
+                time.sleep(min(throttle_interval, 0.05))
+
+            if not self._async_halt_requested:
+                if self.debug:
+                    print("DEBUG: Simulation completed normally")
+                self._async_queue.put({"status": "completed"})
+            else:
+                if self.debug:
+                    print("DEBUG: Simulation halted by request")
+                self._async_queue.put({"status": "halted"})
+
+        except Exception as e:
+            if self.debug:
+                print(f"DEBUG: Exception in chunked simulation: {e}")
+            error_data = {"error": f"Simulation error: {str(e)}"}
+            if self._async_queue:
+                self._async_queue.put(error_data)
 
     def _parse_ac_wrdata(self, file_path: str, vectors: list[str]) -> "NgspiceAcResult":
         """Parses the ASCII output of a wrdata command for AC analysis."""

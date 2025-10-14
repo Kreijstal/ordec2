@@ -74,7 +74,7 @@ def test_ffi_long_run_debug():
         )
 
 
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_tran_basic(backend):
     h = lib_test.ResdivFlatTb(backend=backend)
 
@@ -295,7 +295,7 @@ def test_highlevel_async_sky_inverter(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_early_termination(backend):
     h = lib_test.ResdivFlatTb(backend=backend)
 
