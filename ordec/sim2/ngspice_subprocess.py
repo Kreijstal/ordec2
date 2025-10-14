@@ -516,6 +516,35 @@ class NgspiceSubprocess(NgspiceBase):
                 self._last_vector_length = current_len
                 return
             
+            # Check if any vector names contain brackets (which cause formatting issues with slicing)
+            has_brackets = any('@' in vec and '[' in vec for vec in vectors_to_print)
+            if has_brackets:
+                if self.debug:
+                    print(f"DEBUG: Detected vectors with brackets in names, using print all with filtering")
+                # Fallback to print all and filter by index
+                all_output = list(self.print_all())
+                filtered_output = []
+                in_data = False
+                start_idx = self._last_vector_length
+                for line in all_output:
+                    if "Index" in line and "time" in line:
+                        filtered_output.append(line)
+                        in_data = True
+                        continue
+                    if in_data and line.strip():
+                        parts = line.split()
+                        if len(parts) > 0:
+                            try:
+                                idx = int(parts[0])
+                                if idx >= start_idx:
+                                    filtered_output.append(line)
+                            except (ValueError, IndexError):
+                                # Not a data line, include it anyway
+                                filtered_output.append(line)
+                self._last_vector_length = current_len
+                yield from filtered_output
+                return
+            
             # Build print command with slicing for only new values
             start_idx = self._last_vector_length
             end_idx = current_len - 1
@@ -563,6 +592,9 @@ class NgspiceSubprocess(NgspiceBase):
         using_sliced_vectors = False
         time_column_index = None
 
+        if self.debug:
+            print(f"DEBUG: Parsing {len(lines)} lines")
+
         for line in lines:
             line = line.strip()
             if not line:
@@ -580,11 +612,16 @@ class NgspiceSubprocess(NgspiceBase):
                 # Parse headers and remove slice notation like [5,9]
                 import re
                 raw_headers = line.split()
+                
+                if self.debug and len(raw_headers) > 0 and '[' in raw_headers[-1]:
+                    print(f"DEBUG: Raw header line: {repr(line)}")
+                    print(f"DEBUG: Raw headers: {raw_headers}")
+                
                 cleaned_headers = []
                 has_sliced_time = False
                 for header in raw_headers:
-                    # Check if this is a sliced vector (contains [N,M])
-                    if re.search(r'\[\d+,\d+\]', header):
+                    # Check if this is a sliced vector (contains [N,M] at the END)
+                    if re.search(r'\[\d+,\d+\]$', header):
                         using_sliced_vectors = True
                         # Check if this is sliced time
                         if header.startswith("time["):
@@ -609,6 +646,9 @@ class NgspiceSubprocess(NgspiceBase):
                     if current_headers[i].lower() == "time":
                         time_column_index = i
                         break
+                
+                if self.debug:
+                    print(f"DEBUG: Headers: {current_headers}, time_idx={time_column_index}, sliced={using_sliced_vectors}")
                 
                 continue
 
@@ -647,6 +687,9 @@ class NgspiceSubprocess(NgspiceBase):
                     except (ValueError, IndexError):
                         continue
 
+        if self.debug:
+            print(f"DEBUG: Parsed {len(signal_data)} unique time points")
+
         # Enqueue data points - no need to filter duplicates when using vector slicing
         for time_val, time_signals in sorted(signal_data.items()):
             with self._async_lock:
@@ -656,12 +699,6 @@ class NgspiceSubprocess(NgspiceBase):
                             f"DEBUG: Breaking due to halt request in chunk starting at {current_time}"
                         )
                     break
-
-            # Skip data points with no signal data (can happen with parsing issues)
-            if not time_signals:
-                if self.debug:
-                    print(f"DEBUG: Skipping time_val={time_val} with no signal data")
-                continue
 
             data_point = {
                 "timestamp": time.time(),
@@ -673,6 +710,7 @@ class NgspiceSubprocess(NgspiceBase):
                 else 0.0,
             }
 
+            signal_count = 0
             for signal_name, signal_val in time_signals.items():
                 if signal_name == "time":
                     continue
@@ -680,6 +718,13 @@ class NgspiceSubprocess(NgspiceBase):
                 data_point["signal_kinds"][signal_name] = signal_kinds.get(
                     signal_name, SignalKind.VOLTAGE
                 )
+                signal_count += 1
+
+            # Skip data points with no actual signal data (only time)
+            if signal_count == 0:
+                if self.debug:
+                    print(f"DEBUG: Skipping time_val={time_val} with no non-time signals")
+                continue
 
             if self.debug and self._data_points_sent < 3:
                 print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")

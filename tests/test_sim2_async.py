@@ -252,7 +252,7 @@ def test_highlevel_async_mos_sourcefollower(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])  # subprocess excluded: parsing issues with output signal 'o'
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_mos_inverter(backend):
     h = lib_test.InvTb(vin=R(0), backend=backend)
 
@@ -273,7 +273,7 @@ def test_highlevel_async_mos_inverter(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])  # subprocess excluded: parsing issues with output signal 'o'
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_sky_inverter(backend):
     h = lib_test.InvSkyTb(vin=R(2.5), backend=backend)
 
@@ -374,7 +374,7 @@ def test_highlevel_async_parameter_sweep(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])  # subprocess excluded: parsing issues with output signal 'o'
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_ihp_inverter(backend):
     """Test async transient simulation with IHP inverter."""
     h = lib_test.InvIhpTb(vin=R(2.5), backend=backend)
@@ -484,7 +484,7 @@ def test_async_alter_resume(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])  # subprocess excluded: duplicate time values detected
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_async_drain_exact_points(backend):
     """
     Tests the async generator's ability to run to completion and drain a
