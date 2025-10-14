@@ -574,14 +574,21 @@ class NgspiceSubprocess(NgspiceBase):
 
             # Check for header line (contains "Index" and "time")
             if "Index" in line and "time" in line:
+                # Reset slicing flag for each new table
+                using_sliced_vectors = False
+                
                 # Parse headers and remove slice notation like [5,9]
                 import re
                 raw_headers = line.split()
                 cleaned_headers = []
+                has_sliced_time = False
                 for header in raw_headers:
                     # Check if this is a sliced vector (contains [N,M])
                     if re.search(r'\[\d+,\d+\]', header):
                         using_sliced_vectors = True
+                        # Check if this is sliced time
+                        if header.startswith("time["):
+                            has_sliced_time = True
                     # Remove slice notation: e.g., "a[5,9]" -> "a", "time[5,9]" -> "time"
                     cleaned = re.sub(r'\[\d+,\d+\]$', '', header)
                     cleaned_headers.append(cleaned)
@@ -589,16 +596,17 @@ class NgspiceSubprocess(NgspiceBase):
                 # When using sliced vectors, ngspice creates duplicate columns:
                 # "Index time a[5,9] time[5,9] ..." where the second "time" is wrong
                 # We need to skip the first "time" column (at index 1) when slicing
-                if using_sliced_vectors and len(cleaned_headers) > 2:
+                if using_sliced_vectors and has_sliced_time and len(cleaned_headers) > 2:
                     # Remove the second column (first "time") which is just row numbers
                     cleaned_headers = [cleaned_headers[0]] + cleaned_headers[2:]
                 
                 current_headers = tuple(cleaned_headers)
                 
-                # Find which column contains "time"
+                # Find which column contains "time" - prefer the LAST occurrence
+                # because when we have sliced vectors, the last "time" is the correct one
                 time_column_index = None
-                for i, h in enumerate(current_headers):
-                    if h.lower() == "time":
+                for i in range(len(current_headers) - 1, -1, -1):
+                    if current_headers[i].lower() == "time":
                         time_column_index = i
                         break
                 
@@ -648,6 +656,12 @@ class NgspiceSubprocess(NgspiceBase):
                             f"DEBUG: Breaking due to halt request in chunk starting at {current_time}"
                         )
                     break
+
+            # Skip data points with no signal data (can happen with parsing issues)
+            if not time_signals:
+                if self.debug:
+                    print(f"DEBUG: Skipping time_val={time_val} with no signal data")
+                continue
 
             data_point = {
                 "timestamp": time.time(),
