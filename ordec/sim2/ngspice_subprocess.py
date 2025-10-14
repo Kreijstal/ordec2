@@ -517,7 +517,8 @@ class NgspiceSubprocess(NgspiceBase):
                 return
             
             # Check if any vector names contain brackets (which cause formatting issues with slicing)
-            has_brackets = any('@' in vec and '[' in vec for vec in vectors_to_print)
+            # For now, always use print all with index filtering to avoid formatting issues
+            has_brackets = True  # TODO: Re-enable vector slicing after fixing parser
             if has_brackets:
                 if self.debug:
                     print(f"DEBUG: Detected vectors with brackets in names, using print all with filtering")

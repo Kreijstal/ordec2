@@ -454,12 +454,22 @@ def stream_from_queue(simbase, sim, data_queue, highlevel_sim, node, callback):
 
         if not isinstance(data_point, dict):
             return ("ignore", None, last_progress)
+        
+        # Handle status/error messages from subprocess backend
+        if "status" in data_point or "error" in data_point:
+            if data_point.get("status") in ("completed", "halted"):
+                return ("sentinel", None, last_progress)
+            return ("ignore", None, last_progress)
 
         if callback:
             callback(data_point)
 
         data = data_point.get("data", {})
         signal_kinds = data_point.get("signal_kinds", {})
+        
+        # Skip data points with no actual data
+        if not data or len(data) <= 1:  # Only time or empty
+            return ("ignore", None, last_progress)
 
         progress = data_point.get("progress", 0.0)
 
