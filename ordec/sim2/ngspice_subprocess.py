@@ -88,9 +88,11 @@ class NgspiceSubprocess(NgspiceBase):
         self._async_thread: Optional[threading.Thread] = None
         self._async_lock = threading.Lock()
         self._async_halt_requested = False
+        self._async_resume_event = threading.Event()  # Event to signal resume
         self._async_current_time = 0.0
         self._data_points_sent = 0
         self._last_vector_length = 0  # Track vector length for slicing
+        self._is_running = False  # Track if simulation is actively running
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -375,9 +377,12 @@ class NgspiceSubprocess(NgspiceBase):
         # Initialize async state
         self._async_queue = queue.Queue()
         self._async_halt_requested = False
+        self._async_resume_event = threading.Event()
+        self._async_resume_event.set()  # Start in resumed state
         self._async_current_time = 0.0
         self._data_points_sent = 0
         self._last_vector_length = 0  # Reset for new simulation
+        self._is_running = False
 
         # Start the chunked simulation in a thread
         self._async_thread = threading.Thread(
@@ -391,25 +396,43 @@ class NgspiceSubprocess(NgspiceBase):
 
     def is_running(self) -> bool:
         """Check if simulation is running."""
-        return self._async_thread is not None and self._async_thread.is_alive()
+        return self._is_running and self._async_thread is not None and self._async_thread.is_alive()
 
     def safe_halt_simulation(
         self, max_attempts: int = 3, wait_time: float = 0.2
     ) -> bool:
-        """Halt simulation."""
+        """Halt simulation by setting halt flag and clearing resume event."""
         with self._async_lock:
             self._async_halt_requested = True
+            self._async_resume_event.clear()  # Clear resume event
+            self._is_running = False
+        
+        # Wait a bit to ensure the simulation loop sees the halt request
+        time.sleep(wait_time)
         return True
 
     def resume_simulation(self, timeout: float = 3.0) -> bool:
-        """Resume simulation - not implemented for subprocess backend."""
+        """Resume simulation by clearing halt flag and setting resume event."""
+        with self._async_lock:
+            self._async_halt_requested = False
+            self._async_resume_event.set()  # Signal resume
+            self._is_running = True
+        
+        if self.debug:
+            print("DEBUG: Resume requested")
+        
         return True
 
     def safe_resume_simulation(
         self, max_attempts: int = 3, wait_time: float = 2.0
     ) -> bool:
-        """Resume simulation safely - not implemented for subprocess backend."""
-        return True
+        """Resume simulation safely with retry logic."""
+        for attempt in range(max_attempts):
+            result = self.resume_simulation(timeout=wait_time)
+            if result:
+                return True
+            time.sleep(wait_time)
+        return False
 
     def _is_header_line(self, line, expected_headers):
         """Check if a line looks like a header line."""
@@ -675,6 +698,8 @@ class NgspiceSubprocess(NgspiceBase):
                 self.command(f"stop after {chunk_steps}")
                 tran_cmd = f"tran {tstep_str} {tstop if tstop else tstep * 1000}"
                 self.command(tran_cmd)
+                self._is_running = True
+                self._async_resume_event.set()  # Initially running
             except NgspiceError as e:
                 error_data = {"error": f"Simulation failed to start: {str(e)}"}
                 if self._async_queue:
@@ -683,12 +708,33 @@ class NgspiceSubprocess(NgspiceBase):
 
             # Main simulation loop
             simulation_complete = False
-            while not self._async_halt_requested and not simulation_complete:
-                with self._async_lock:
-                    if self._async_halt_requested:
-                        if self.debug:
-                            print(f"DEBUG: Halt requested during simulation")
-                        break
+            while not simulation_complete:
+                # Check if we should halt (wait for resume)
+                if self._async_halt_requested:
+                    with self._async_lock:
+                        self._is_running = False
+                    
+                    if self.debug:
+                        print(f"DEBUG: Simulation halted, waiting for resume...")
+                    
+                    # Wait for resume signal (with timeout to check for complete halt)
+                    resumed = self._async_resume_event.wait(timeout=0.5)
+                    
+                    # If still halted after timeout, check if we should exit
+                    with self._async_lock:
+                        if self._async_halt_requested and not resumed:
+                            # Still halted, continue waiting
+                            continue
+                        elif self._async_halt_requested:
+                            # Halt requested but no resume, exit
+                            if self.debug:
+                                print(f"DEBUG: Exiting due to halt without resume")
+                            break
+                        else:
+                            # Resumed!
+                            self._is_running = True
+                            if self.debug:
+                                print(f"DEBUG: Simulation resumed")
 
                 # Get current simulation data using vector slicing (only new values)
                 try:
@@ -725,20 +771,24 @@ class NgspiceSubprocess(NgspiceBase):
                     simulation_complete = True
                     break
 
-                # Continue simulation with step command
-                try:
-                    step_output = self.command(f"step {chunk_steps}")
-                    # Check if simulation ended
-                    if "simulation interrupted" not in step_output.lower():
-                        # Simulation may have completed
+                # Continue simulation with step command (only if not halted)
+                if not self._async_halt_requested:
+                    try:
+                        step_output = self.command(f"step {chunk_steps}")
+                        # Check if simulation ended
+                        if "simulation interrupted" not in step_output.lower():
+                            # Simulation may have completed
+                            simulation_complete = True
+                    except NgspiceError as e:
+                        if self.debug:
+                            print(f"DEBUG: Step command failed: {e}")
                         simulation_complete = True
-                except NgspiceError as e:
-                    if self.debug:
-                        print(f"DEBUG: Step command failed: {e}")
-                    simulation_complete = True
 
                 time.sleep(min(throttle_interval, 0.05))
 
+            with self._async_lock:
+                self._is_running = False
+            
             if not self._async_halt_requested:
                 if self.debug:
                     print("DEBUG: Simulation completed normally")
@@ -749,6 +799,8 @@ class NgspiceSubprocess(NgspiceBase):
                 self._async_queue.put({"status": "halted"})
 
         except Exception as e:
+            with self._async_lock:
+                self._is_running = False
             if self.debug:
                 print(f"DEBUG: Exception in chunked simulation: {e}")
             error_data = {"error": f"Simulation error: {str(e)}"}
