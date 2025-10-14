@@ -6,6 +6,9 @@ import signal
 import sys
 import tempfile
 import shutil
+import queue
+import threading
+import time
 from collections import namedtuple
 from contextlib import contextmanager
 from pathlib import Path
@@ -79,6 +82,17 @@ class NgspiceSubprocess(NgspiceBase):
         self.p: Popen[bytes] = p
         self.debug = debug
         self.cwd = cwd
+        
+        # Async simulation support
+        self._async_queue: Optional[queue.Queue] = None
+        self._async_thread: Optional[threading.Thread] = None
+        self._async_lock = threading.Lock()
+        self._async_halt_requested = False
+        self._async_resume_event = threading.Event()  # Event to signal resume
+        self._async_current_time = 0.0
+        self._data_points_sent = 0
+        self._last_vector_length = 0  # Track vector length for slicing
+        self._is_running = False  # Track if simulation is actively running
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -326,32 +340,99 @@ class NgspiceSubprocess(NgspiceBase):
         tstop=None,
         *extra_args,
         throttle_interval: float = 0.1,
+        buffer_size: int = 10,
+        disable_buffering: bool = False,
         disable_throttling: bool = False,
         fallback_sampling_ratio: int = 100,
     ) -> "queue.Queue[dict]":
-        raise NotImplementedError(
-            "tran_async is not supported for subprocess backend. Use FFI or MP backend for async simulation."
+        """Run async transient simulation using chunked approach with stop after and step commands."""
+        # Parse tstep and tstop
+        def parse_time(val):
+            if val is None:
+                return None
+            if isinstance(val, (int, float)):
+                return float(val)
+            if isinstance(val, R):
+                return float(val)
+            # Parse string like "1u", "1n", etc.
+            s = str(val).strip()
+            multipliers = {
+                "f": 1e-15,
+                "p": 1e-12,
+                "n": 1e-9,
+                "u": 1e-6,
+                "m": 1e-3,
+                "k": 1e3,
+                "meg": 1e6,
+            }
+            for suffix, mult in multipliers.items():
+                if s.endswith(suffix):
+                    return float(s[: -len(suffix)]) * mult
+            return float(s)
+
+        tstep_val = parse_time(tstep)
+        tstop_val = parse_time(tstop) if tstop is not None else None
+        tstep_str = str(tstep)
+
+        # Initialize async state
+        self._async_queue = queue.Queue()
+        self._async_halt_requested = False
+        self._async_resume_event = threading.Event()
+        self._async_resume_event.set()  # Start in resumed state
+        self._async_current_time = 0.0
+        self._data_points_sent = 0
+        self._last_vector_length = 0  # Reset for new simulation
+        self._is_running = False
+
+        # Start the chunked simulation in a thread
+        self._async_thread = threading.Thread(
+            target=self._run_chunked_simulation,
+            args=(tstep_val, tstop_val, tstep_str, throttle_interval),
+            daemon=True,
         )
+        self._async_thread.start()
+
+        return self._async_queue
 
     def is_running(self) -> bool:
         """Check if simulation is running."""
-        return False  # Async simulation not supported for subprocess backend
+        return self._is_running and self._async_thread is not None and self._async_thread.is_alive()
 
     def safe_halt_simulation(
         self, max_attempts: int = 3, wait_time: float = 0.2
     ) -> bool:
-        """Halt simulation - always returns True since async not supported."""
+        """Halt simulation by setting halt flag and clearing resume event."""
+        with self._async_lock:
+            self._async_halt_requested = True
+            self._async_resume_event.clear()  # Clear resume event
+            self._is_running = False
+        
+        # Wait a bit to ensure the simulation loop sees the halt request
+        time.sleep(wait_time)
         return True
 
     def resume_simulation(self, timeout: float = 3.0) -> bool:
-        """Resume simulation - always returns True since async not supported."""
+        """Resume simulation by clearing halt flag and setting resume event."""
+        with self._async_lock:
+            self._async_halt_requested = False
+            self._async_resume_event.set()  # Signal resume
+            self._is_running = True
+        
+        if self.debug:
+            print("DEBUG: Resume requested")
+        
         return True
 
     def safe_resume_simulation(
         self, max_attempts: int = 3, wait_time: float = 2.0
     ) -> bool:
-        """Resume simulation safely - always returns True since async not supported."""
-        return True
+        """Resume simulation safely with retry logic."""
+        for attempt in range(max_attempts):
+            result = self.resume_simulation(timeout=wait_time)
+            if result:
+                return True
+            time.sleep(wait_time)
+        return False
 
     def _is_header_line(self, line, expected_headers):
         """Check if a line looks like a header line."""
@@ -367,6 +448,450 @@ class NgspiceSubprocess(NgspiceBase):
 
         # If most headers are found in this line, it's likely a header
         return header_matches >= len(expected_headers) * 0.6
+
+    def _print_new_vectors_only(self) -> Iterator[str]:
+        """
+        Print only new vector values using ngspice vector slicing.
+        This avoids the need to parse and filter duplicate data points.
+        """
+        try:
+            # Get current vector length
+            len_result = self.command("let current_len = length(time)")
+            len_print = self.command("print current_len")
+            
+            # Extract the length value from output like "current_len = 1.000000e+01"
+            import re
+            match = re.search(r'current_len\s*=\s*([\d.e+-]+)', len_print)
+            
+            # Delete the temporary variable to avoid polluting the namespace
+            try:
+                self.command("unlet current_len")
+            except:
+                pass
+            
+            if not match:
+                if self.debug:
+                    print(f"DEBUG: Could not extract vector length from: {len_print}")
+                # Fallback to print all
+                yield from self.print_all()
+                return
+            
+            current_len = int(float(match.group(1)))
+            
+            if self.debug:
+                print(f"DEBUG: Vector length: old={self._last_vector_length}, current={current_len}")
+            
+            # If this is the first call or no new data, print all or nothing
+            if self._last_vector_length == 0:
+                # First chunk - print everything
+                if self.debug:
+                    print(f"DEBUG: First chunk, printing all {current_len} points")
+                yield from self.print_all()
+                self._last_vector_length = current_len
+                return
+            
+            if current_len <= self._last_vector_length:
+                # No new data
+                if self.debug:
+                    print(f"DEBUG: No new data (current_len={current_len}, last={self._last_vector_length})")
+                return
+            
+            # Get vector names from display command, excluding temporary variables
+            vectors_to_print = []
+            display_output = self.command("display")
+            for line in display_output.split("\n"):
+                vector_match = re.match(
+                    r"\s*([^:]+):\s*[^,]+,\s*[^,]+,\s*([0-9]+)\s+long", line
+                )
+                if vector_match:
+                    vector_name = vector_match.group(1).strip()
+                    # Skip temporary variables we created (if cleanup failed)
+                    if vector_name not in ["current_len", "old_len", "new_len", "start_idx", "end_idx"]:
+                        vectors_to_print.append(vector_name)
+            
+            if not vectors_to_print:
+                if self.debug:
+                    print(f"DEBUG: No vectors found, falling back to print all")
+                yield from self.print_all()
+                self._last_vector_length = current_len
+                return
+            
+            # Check if any vector names contain brackets (which cause formatting issues with slicing)
+            # For now, always use print all with index filtering to avoid formatting issues
+            has_brackets = True  # TODO: Re-enable vector slicing after fixing parser
+            if has_brackets:
+                if self.debug:
+                    print(f"DEBUG: Detected vectors with brackets in names, using print all with filtering")
+                # Fallback to print all and filter by index
+                all_output = list(self.print_all())
+                filtered_output = []
+                in_data = False
+                start_idx = self._last_vector_length
+                for line in all_output:
+                    if "Index" in line and "time" in line:
+                        filtered_output.append(line)
+                        in_data = True
+                        continue
+                    if in_data and line.strip():
+                        parts = line.split()
+                        if len(parts) > 0:
+                            try:
+                                idx = int(parts[0])
+                                if idx >= start_idx:
+                                    filtered_output.append(line)
+                            except (ValueError, IndexError):
+                                # Not a data line, include it anyway
+                                filtered_output.append(line)
+                self._last_vector_length = current_len
+                yield from filtered_output
+                return
+            
+            # Build print command with slicing for only new values
+            start_idx = self._last_vector_length
+            end_idx = current_len - 1
+            
+            if self.debug:
+                print(f"DEBUG: Printing slice [{start_idx}, {end_idx}] of {len(vectors_to_print)} vectors")
+            
+            # Create sliced vector expressions with actual numeric indices
+            sliced_vectors = [f"{vec}[{start_idx},{end_idx}]" for vec in vectors_to_print]
+            print_cmd = f"print col {' '.join(sliced_vectors)}"
+            
+            result = self.command(print_cmd)
+            yield from result.split("\n")
+            
+            # Update the last vector length
+            self._last_vector_length = current_len
+            
+        except Exception as e:
+            if self.debug:
+                print(f"DEBUG: Error in _print_new_vectors_only: {e}, falling back to print all")
+            # Fallback to print all on error
+            yield from self.print_all()
+            # Try to update length anyway
+            try:
+                len_result = self.command("let current_len = length(time)")
+                len_print = self.command("print current_len")
+                # Clean up
+                try:
+                    self.command("unlet current_len")
+                except:
+                    pass
+                match = re.search(r'current_len\s*=\s*([\d.e+-]+)', len_print)
+                if match:
+                    self._last_vector_length = int(float(match.group(1)))
+            except:
+                pass
+
+    def _parse_and_enqueue_from_lines(
+        self, lines: list, current_time: float, chunk_end: float, tstop: float | None
+    ) -> None:
+        """Parse print all output and enqueue data points for async simulation."""
+        signal_data = {}
+        signal_kinds = {}
+        current_headers = None
+        using_sliced_vectors = False
+        time_column_index = None
+
+        if self.debug:
+            print(f"DEBUG: Parsing {len(lines)} lines")
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Skip separator lines and headers
+            if any(x in line for x in ("---", "print all", "Transient Analysis")):
+                continue
+
+            # Check for header line (contains "Index" and "time")
+            if "Index" in line and "time" in line:
+                # Reset slicing flag for each new table
+                using_sliced_vectors = False
+                
+                # Parse headers and remove slice notation like [5,9]
+                import re
+                raw_headers = line.split()
+                
+                if self.debug and len(raw_headers) > 0 and '[' in raw_headers[-1]:
+                    print(f"DEBUG: Raw header line: {repr(line)}")
+                    print(f"DEBUG: Raw headers: {raw_headers}")
+                
+                cleaned_headers = []
+                has_sliced_time = False
+                for header in raw_headers:
+                    # Check if this is a sliced vector (contains [N,M] at the END)
+                    if re.search(r'\[\d+,\d+\]$', header):
+                        using_sliced_vectors = True
+                        # Check if this is sliced time
+                        if header.startswith("time["):
+                            has_sliced_time = True
+                    # Remove slice notation: e.g., "a[5,9]" -> "a", "time[5,9]" -> "time"
+                    cleaned = re.sub(r'\[\d+,\d+\]$', '', header)
+                    cleaned_headers.append(cleaned)
+                
+                # When using sliced vectors, ngspice creates duplicate columns:
+                # "Index time a[5,9] time[5,9] ..." where the second "time" is wrong
+                # We need to skip the first "time" column (at index 1) when slicing
+                if using_sliced_vectors and has_sliced_time and len(cleaned_headers) > 2:
+                    # Remove the second column (first "time") which is just row numbers
+                    cleaned_headers = [cleaned_headers[0]] + cleaned_headers[2:]
+                
+                current_headers = tuple(cleaned_headers)
+                
+                # Find which column contains "time" - prefer the LAST occurrence
+                # because when we have sliced vectors, the last "time" is the correct one
+                time_column_index = None
+                for i in range(len(current_headers) - 1, -1, -1):
+                    if current_headers[i].lower() == "time":
+                        time_column_index = i
+                        break
+                
+                if self.debug:
+                    print(f"DEBUG: Headers: {current_headers}, time_idx={time_column_index}, sliced={using_sliced_vectors}")
+                
+                continue
+
+            if not current_headers or time_column_index is None:
+                continue
+
+            values = line.split()
+            
+            # Adjust values array when using sliced vectors (skip column 1)
+            if using_sliced_vectors and len(values) > 1:
+                values = [values[0]] + values[2:]
+            
+            if len(values) < len(current_headers):
+                continue
+
+            try:
+                time_val = float(values[time_column_index])
+            except (ValueError, IndexError):
+                continue
+
+            if time_val not in signal_data:
+                signal_data[time_val] = {}
+
+            for i, header in enumerate(current_headers):
+                if i == 0 or header.lower() == "index":
+                    continue  # Skip Index column
+                if header.lower() == "time":
+                    continue  # Skip time column (already extracted)
+                if i < len(values):
+                    try:
+                        signal_val = float(values[i])
+                        signal_data[time_val][header] = signal_val
+
+                        temp_result = NgspiceResultBase()
+                        signal_kinds[header] = temp_result.categorize_signal(header)
+                    except (ValueError, IndexError):
+                        continue
+
+        if self.debug:
+            print(f"DEBUG: Parsed {len(signal_data)} unique time points")
+
+        # Enqueue data points - no need to filter duplicates when using vector slicing
+        for time_val, time_signals in sorted(signal_data.items()):
+            with self._async_lock:
+                if self._async_halt_requested:
+                    if self.debug:
+                        print(
+                            f"DEBUG: Breaking due to halt request in chunk starting at {current_time}"
+                        )
+                    break
+
+            data_point = {
+                "timestamp": time.time(),
+                "data": {"time": time_val},
+                "signal_kinds": {"time": SignalKind.TIME},
+                "index": self._data_points_sent,
+                "progress": min(1.0, time_val / tstop)
+                if tstop is not None and tstop > 0
+                else 0.0,
+            }
+
+            signal_count = 0
+            for signal_name, signal_val in time_signals.items():
+                if signal_name == "time":
+                    continue
+                data_point["data"][signal_name] = signal_val
+                data_point["signal_kinds"][signal_name] = signal_kinds.get(
+                    signal_name, SignalKind.VOLTAGE
+                )
+                signal_count += 1
+
+            # Skip data points with no actual signal data (only time)
+            if signal_count == 0:
+                if self.debug:
+                    print(f"DEBUG: Skipping time_val={time_val} with no non-time signals")
+                continue
+
+            if self.debug and self._data_points_sent < 3:
+                print(f"DEBUG: Data point {self._data_points_sent}: {data_point}")
+
+            if self._async_queue:
+                self._async_queue.put(data_point)
+            self._data_points_sent += 1
+            # Update the current time tracker
+            self._async_current_time = time_val
+
+    def _run_chunked_simulation(
+        self,
+        tstep: float,
+        tstop: float | None,
+        tstep_str: str,
+        throttle_interval: float,
+    ):
+        """Run chunked transient simulation using stop after and step commands."""
+        try:
+            # Calculate chunk size (number of steps per chunk)
+            if tstop is not None:
+                # Aim for ~100 chunks across the simulation
+                total_steps = int(tstop / tstep)
+                chunk_steps = max(5, total_steps // 100)
+            else:
+                chunk_steps = 10
+
+            # Start the transient analysis with "stop after" to pause after initial steps
+            try:
+                self.command(f"stop after {chunk_steps}")
+                tran_cmd = f"tran {tstep_str} {tstop if tstop else tstep * 1000}"
+                self.command(tran_cmd)
+                self._is_running = True
+                self._async_resume_event.set()  # Initially running
+            except NgspiceError as e:
+                error_data = {"error": f"Simulation failed to start: {str(e)}"}
+                if self._async_queue:
+                    self._async_queue.put(error_data)
+                return
+
+            # Main simulation loop
+            simulation_complete = False
+            while not simulation_complete:
+                # Check if we should halt (wait for resume)
+                if self._async_halt_requested:
+                    with self._async_lock:
+                        self._is_running = False
+                    
+                    if self.debug:
+                        print(f"DEBUG: Simulation halted, waiting for resume...")
+                    
+                    # Wait for resume signal (with timeout to check for complete halt)
+                    resumed = self._async_resume_event.wait(timeout=0.5)
+                    
+                    # If still halted after timeout, check if we should exit
+                    with self._async_lock:
+                        if self._async_halt_requested and not resumed:
+                            # Still halted, continue waiting
+                            continue
+                        elif self._async_halt_requested:
+                            # Halt requested but no resume, exit
+                            if self.debug:
+                                print(f"DEBUG: Exiting due to halt without resume")
+                            break
+                        else:
+                            # Resumed!
+                            self._is_running = True
+                            if self.debug:
+                                print(f"DEBUG: Simulation resumed")
+
+                # Get current simulation data using vector slicing (only new values)
+                try:
+                    print_all_res = "\n".join(self._print_new_vectors_only())
+                except NgspiceError:
+                    print_all_res = ""
+
+                lines = print_all_res.split("\n") if print_all_res else []
+                
+                # Parse the current time from the output to determine chunk boundaries
+                current_time = 0.0
+                chunk_end = tstop if tstop else float('inf')
+                
+                # Extract time values from the output to determine current simulation time
+                for line in lines:
+                    line = line.strip()
+                    if not line or "Index" in line:
+                        continue
+                    values = line.split()
+                    if len(values) >= 2:
+                        try:
+                            time_val = float(values[1])
+                            current_time = max(current_time, time_val)
+                        except (ValueError, IndexError):
+                            pass
+
+                # Enqueue the data points
+                self._parse_and_enqueue_from_lines(
+                    lines, 0.0, chunk_end, tstop
+                )
+
+                # Continue simulation with step command (only if not halted)
+                if not self._async_halt_requested:
+                    try:
+                        step_output = self.command(f"step {chunk_steps}")
+                        # Check if simulation ended naturally (ngspice completed the tran)
+                        if "simulation interrupted" not in step_output.lower():
+                            # Simulation completed - get final data
+                            if self.debug:
+                                print("DEBUG: Simulation completed, getting final data")
+                            try:
+                                final_print = "\n".join(self._print_new_vectors_only())
+                                final_lines = final_print.split("\n") if final_print else []
+                                self._parse_and_enqueue_from_lines(
+                                    final_lines, 0.0, chunk_end, tstop
+                                )
+                            except Exception as e:
+                                if self.debug:
+                                    print(f"DEBUG: Error getting final data: {e}")
+                            simulation_complete = True
+                            break
+                    except NgspiceError as e:
+                        if self.debug:
+                            print(f"DEBUG: Step command failed: {e}")
+                        simulation_complete = True
+                        break
+                
+                # Check if we've reached the target time (as a secondary check)
+                if tstop is not None and current_time >= tstop * 0.9999:
+                    if self.debug:
+                        print(f"DEBUG: Reached target time {current_time} >= {tstop}")
+                    # Get any remaining data
+                    try:
+                        final_print = "\n".join(self._print_new_vectors_only())
+                        final_lines = final_print.split("\n") if final_print else []
+                        if final_lines:
+                            self._parse_and_enqueue_from_lines(
+                                final_lines, 0.0, chunk_end, tstop
+                            )
+                    except Exception as e:
+                        if self.debug:
+                            print(f"DEBUG: Error getting final data: {e}")
+                    simulation_complete = True
+                    break
+
+                time.sleep(min(throttle_interval, 0.05))
+
+            with self._async_lock:
+                self._is_running = False
+            
+            if not self._async_halt_requested:
+                if self.debug:
+                    print("DEBUG: Simulation completed normally")
+                self._async_queue.put({"status": "completed"})
+            else:
+                if self.debug:
+                    print("DEBUG: Simulation halted by request")
+                self._async_queue.put({"status": "halted"})
+
+        except Exception as e:
+            with self._async_lock:
+                self._is_running = False
+            if self.debug:
+                print(f"DEBUG: Exception in chunked simulation: {e}")
+            error_data = {"error": f"Simulation error: {str(e)}"}
+            if self._async_queue:
+                self._async_queue.put(error_data)
 
     def _parse_ac_wrdata(self, file_path: str, vectors: list[str]) -> "NgspiceAcResult":
         """Parses the ASCII output of a wrdata command for AC analysis."""
