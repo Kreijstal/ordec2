@@ -104,7 +104,7 @@ def test_highlevel_async_tran_basic(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["ffi", "mp"])
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_tran_with_callback(backend):
     progress_updates = []
 
