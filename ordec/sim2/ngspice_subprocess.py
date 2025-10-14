@@ -90,6 +90,7 @@ class NgspiceSubprocess(NgspiceBase):
         self._async_halt_requested = False
         self._async_current_time = 0.0
         self._data_points_sent = 0
+        self._last_vector_length = 0  # Track vector length for slicing
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -376,6 +377,7 @@ class NgspiceSubprocess(NgspiceBase):
         self._async_halt_requested = False
         self._async_current_time = 0.0
         self._data_points_sent = 0
+        self._last_vector_length = 0  # Reset for new simulation
 
         # Start the chunked simulation in a thread
         self._async_thread = threading.Thread(
@@ -424,6 +426,110 @@ class NgspiceSubprocess(NgspiceBase):
         # If most headers are found in this line, it's likely a header
         return header_matches >= len(expected_headers) * 0.6
 
+    def _print_new_vectors_only(self) -> Iterator[str]:
+        """
+        Print only new vector values using ngspice vector slicing.
+        This avoids the need to parse and filter duplicate data points.
+        """
+        try:
+            # Get current vector length
+            len_result = self.command("let current_len = length(time)")
+            len_print = self.command("print current_len")
+            
+            # Extract the length value from output like "current_len = 1.000000e+01"
+            import re
+            match = re.search(r'current_len\s*=\s*([\d.e+-]+)', len_print)
+            
+            # Delete the temporary variable to avoid polluting the namespace
+            try:
+                self.command("unlet current_len")
+            except:
+                pass
+            
+            if not match:
+                if self.debug:
+                    print(f"DEBUG: Could not extract vector length from: {len_print}")
+                # Fallback to print all
+                yield from self.print_all()
+                return
+            
+            current_len = int(float(match.group(1)))
+            
+            if self.debug:
+                print(f"DEBUG: Vector length: old={self._last_vector_length}, current={current_len}")
+            
+            # If this is the first call or no new data, print all or nothing
+            if self._last_vector_length == 0:
+                # First chunk - print everything
+                if self.debug:
+                    print(f"DEBUG: First chunk, printing all {current_len} points")
+                yield from self.print_all()
+                self._last_vector_length = current_len
+                return
+            
+            if current_len <= self._last_vector_length:
+                # No new data
+                if self.debug:
+                    print(f"DEBUG: No new data (current_len={current_len}, last={self._last_vector_length})")
+                return
+            
+            # Get vector names from display command, excluding temporary variables
+            vectors_to_print = []
+            display_output = self.command("display")
+            for line in display_output.split("\n"):
+                vector_match = re.match(
+                    r"\s*([^:]+):\s*[^,]+,\s*[^,]+,\s*([0-9]+)\s+long", line
+                )
+                if vector_match:
+                    vector_name = vector_match.group(1).strip()
+                    # Skip temporary variables we created (if cleanup failed)
+                    if vector_name not in ["current_len", "old_len", "new_len", "start_idx", "end_idx"]:
+                        vectors_to_print.append(vector_name)
+            
+            if not vectors_to_print:
+                if self.debug:
+                    print(f"DEBUG: No vectors found, falling back to print all")
+                yield from self.print_all()
+                self._last_vector_length = current_len
+                return
+            
+            # Build print command with slicing for only new values
+            start_idx = self._last_vector_length
+            end_idx = current_len - 1
+            
+            if self.debug:
+                print(f"DEBUG: Printing slice [{start_idx}, {end_idx}] of {len(vectors_to_print)} vectors")
+            
+            # Create sliced vector expressions with actual numeric indices
+            sliced_vectors = [f"{vec}[{start_idx},{end_idx}]" for vec in vectors_to_print]
+            print_cmd = f"print col {' '.join(sliced_vectors)}"
+            
+            result = self.command(print_cmd)
+            yield from result.split("\n")
+            
+            # Update the last vector length
+            self._last_vector_length = current_len
+            
+        except Exception as e:
+            if self.debug:
+                print(f"DEBUG: Error in _print_new_vectors_only: {e}, falling back to print all")
+            # Fallback to print all on error
+            yield from self.print_all()
+            # Try to update length anyway
+            try:
+                len_result = self.command("let current_len = length(time)")
+                len_print = self.command("print current_len")
+                # Clean up
+                try:
+                    self.command("unlet current_len")
+                except:
+                    pass
+                match = re.search(r'current_len\s*=\s*([\d.e+-]+)', len_print)
+                if match:
+                    self._last_vector_length = int(float(match.group(1)))
+            except:
+                pass
+
     def _parse_and_enqueue_from_lines(
         self, lines: list, current_time: float, chunk_end: float, tstop: float | None
     ) -> None:
@@ -431,6 +537,8 @@ class NgspiceSubprocess(NgspiceBase):
         signal_data = {}
         signal_kinds = {}
         current_headers = None
+        using_sliced_vectors = False
+        time_column_index = None
 
         for line in lines:
             line = line.strip()
@@ -443,33 +551,72 @@ class NgspiceSubprocess(NgspiceBase):
 
             # Check for header line (contains "Index" and "time")
             if "Index" in line and "time" in line:
-                current_headers = tuple(line.split())
+                # Parse headers and remove slice notation like [5,9]
+                import re
+                raw_headers = line.split()
+                cleaned_headers = []
+                for header in raw_headers:
+                    # Check if this is a sliced vector (contains [N,M])
+                    if re.search(r'\[\d+,\d+\]', header):
+                        using_sliced_vectors = True
+                    # Remove slice notation: e.g., "a[5,9]" -> "a", "time[5,9]" -> "time"
+                    cleaned = re.sub(r'\[\d+,\d+\]$', '', header)
+                    cleaned_headers.append(cleaned)
+                
+                # When using sliced vectors, ngspice creates duplicate columns:
+                # "Index time a[5,9] time[5,9] ..." where the second "time" is wrong
+                # We need to skip the first "time" column (at index 1) when slicing
+                if using_sliced_vectors and len(cleaned_headers) > 2:
+                    # Remove the second column (first "time") which is just row numbers
+                    cleaned_headers = [cleaned_headers[0]] + cleaned_headers[2:]
+                
+                current_headers = tuple(cleaned_headers)
+                
+                # Find which column contains "time"
+                time_column_index = None
+                for i, h in enumerate(current_headers):
+                    if h.lower() == "time":
+                        time_column_index = i
+                        break
+                
                 continue
 
-            if not current_headers:
+            if not current_headers or time_column_index is None:
                 continue
 
             values = line.split()
+            
+            # Adjust values array when using sliced vectors (skip column 1)
+            if using_sliced_vectors and len(values) > 1:
+                values = [values[0]] + values[2:]
+            
             if len(values) < len(current_headers):
                 continue
 
             try:
-                time_val = float(values[1])
+                time_val = float(values[time_column_index])
             except (ValueError, IndexError):
                 continue
 
             if time_val not in signal_data:
                 signal_data[time_val] = {}
 
-            for i, header in enumerate(current_headers[2:], start=2):
+            for i, header in enumerate(current_headers):
+                if i == 0 or header.lower() == "index":
+                    continue  # Skip Index column
+                if header.lower() == "time":
+                    continue  # Skip time column (already extracted)
                 if i < len(values):
-                    signal_val = float(values[i])
-                    signal_data[time_val][header] = signal_val
+                    try:
+                        signal_val = float(values[i])
+                        signal_data[time_val][header] = signal_val
 
-                    temp_result = NgspiceResultBase()
-                    signal_kinds[header] = temp_result.categorize_signal(header)
+                        temp_result = NgspiceResultBase()
+                        signal_kinds[header] = temp_result.categorize_signal(header)
+                    except (ValueError, IndexError):
+                        continue
 
-        # Enqueue data points, filtering by time to avoid duplicates
+        # Enqueue data points - no need to filter duplicates when using vector slicing
         for time_val, time_signals in sorted(signal_data.items()):
             with self._async_lock:
                 if self._async_halt_requested:
@@ -478,10 +625,6 @@ class NgspiceSubprocess(NgspiceBase):
                             f"DEBUG: Breaking due to halt request in chunk starting at {current_time}"
                         )
                     break
-
-            # Only send data points that are newer than what we've already sent
-            if time_val <= self._async_current_time and self._data_points_sent > 0:
-                continue
 
             data_point = {
                 "timestamp": time.time(),
@@ -547,9 +690,9 @@ class NgspiceSubprocess(NgspiceBase):
                             print(f"DEBUG: Halt requested during simulation")
                         break
 
-                # Get current simulation data
+                # Get current simulation data using vector slicing (only new values)
                 try:
-                    print_all_res = "\n".join(self.print_all())
+                    print_all_res = "\n".join(self._print_new_vectors_only())
                 except NgspiceError:
                     print_all_res = ""
 
