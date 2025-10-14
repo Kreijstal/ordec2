@@ -413,17 +413,19 @@ def test_async_alter_resume(backend):
 
             # Multiple halt/alter/resume cycles with different voltages
             voltage_sequence = [2.0, 1.5, 3.0, 1.0]
-            data_points_since_last_change = 0
             voltage_change_interval = 20
             completed_steps = 0
+            all_data = []
 
             for voltage_index, voltage in enumerate(voltage_sequence):
                 # Collect some data points before altering
-                while data_points_since_last_change < voltage_change_interval and (time.time() - start_time) < timeout:
+                data_points_before_alter = 0
+                while data_points_before_alter < voltage_change_interval and (time.time() - start_time) < timeout:
                     try:
                         data_point = data_queue.get_nowait()
                         if isinstance(data_point, dict) and "data" in data_point:
-                            data_points_since_last_change += 1
+                            all_data.append((voltage_index, data_point["data"]))
+                            data_points_before_alter += 1
                     except queue.Empty:
                         await asyncio.sleep(0.001)
                         continue
@@ -436,16 +438,49 @@ def test_async_alter_resume(backend):
                 alter.alter_component(circuit.schematic.v1, dc=voltage)
                 assert alter.resume_simulation(timeout=0.1), f"Should resume at step {voltage_index + 1}"
                 
-                completed_steps += 1
-                data_points_since_last_change = 0
+                # Collect a few data points after altering to verify the change
+                data_points_after_alter = 0
+                verification_points = 5
+                while data_points_after_alter < verification_points and (time.time() - start_time) < timeout:
+                    try:
+                        data_point = data_queue.get_nowait()
+                        if isinstance(data_point, dict) and "data" in data_point:
+                            all_data.append((voltage_index, data_point["data"]))
+                            data_points_after_alter += 1
+                    except queue.Empty:
+                        await asyncio.sleep(0.001)
+                        continue
+                
+                # Only count as completed if we got verification data
+                if data_points_after_alter > 0:
+                    completed_steps += 1
+                
                 await asyncio.sleep(0.01)
 
-            return {"voltage_steps": completed_steps}
+            # Verify that voltage changes are reflected in the data
+            # Group data by voltage step and check if output voltage changes
+            voltage_step_data = {}
+            for step_index, data_dict in all_data:
+                if step_index not in voltage_step_data:
+                    voltage_step_data[step_index] = []
+                if "vout" in data_dict:
+                    voltage_step_data[step_index].append(data_dict["vout"])
+
+            # Check that we have data for multiple voltage steps
+            steps_with_data = len([k for k, v in voltage_step_data.items() if len(v) > 0])
+            
+            return {
+                "voltage_steps": completed_steps,
+                "steps_with_data": steps_with_data,
+                "total_data_points": len(all_data)
+            }
 
     import asyncio
 
     result = asyncio.run(run_comprehensive_test())
     assert result["voltage_steps"] >= 4, f"Should complete 4 voltage steps, got {result['voltage_steps']}"
+    assert result["steps_with_data"] >= 2, f"Should have data for at least 2 voltage steps, got {result['steps_with_data']}"
+    assert result["total_data_points"] > 0, "Should collect data points"
 
 
 @pytest.mark.libngspice
