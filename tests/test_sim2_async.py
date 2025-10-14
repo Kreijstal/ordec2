@@ -397,7 +397,7 @@ def test_highlevel_async_ihp_inverter(backend):
 
 
 @pytest.mark.libngspice
-@pytest.mark.parametrize("backend", ["mp"])  # Only MP backend supports alter_session
+@pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_async_alter_resume(backend):
     circuit = RCAlterTestbench()
     node = SimHierarchy()

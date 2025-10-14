@@ -826,23 +826,49 @@ class NgspiceSubprocess(NgspiceBase):
                     lines, 0.0, chunk_end, tstop
                 )
 
-                # Check if simulation is complete
-                if tstop is not None and current_time >= tstop * 0.999:
-                    simulation_complete = True
-                    break
-
                 # Continue simulation with step command (only if not halted)
                 if not self._async_halt_requested:
                     try:
                         step_output = self.command(f"step {chunk_steps}")
-                        # Check if simulation ended
+                        # Check if simulation ended naturally (ngspice completed the tran)
                         if "simulation interrupted" not in step_output.lower():
-                            # Simulation may have completed
+                            # Simulation completed - get final data
+                            if self.debug:
+                                print("DEBUG: Simulation completed, getting final data")
+                            try:
+                                final_print = "\n".join(self._print_new_vectors_only())
+                                final_lines = final_print.split("\n") if final_print else []
+                                self._parse_and_enqueue_from_lines(
+                                    final_lines, 0.0, chunk_end, tstop
+                                )
+                            except Exception as e:
+                                if self.debug:
+                                    print(f"DEBUG: Error getting final data: {e}")
                             simulation_complete = True
+                            break
                     except NgspiceError as e:
                         if self.debug:
                             print(f"DEBUG: Step command failed: {e}")
                         simulation_complete = True
+                        break
+                
+                # Check if we've reached the target time (as a secondary check)
+                if tstop is not None and current_time >= tstop * 0.9999:
+                    if self.debug:
+                        print(f"DEBUG: Reached target time {current_time} >= {tstop}")
+                    # Get any remaining data
+                    try:
+                        final_print = "\n".join(self._print_new_vectors_only())
+                        final_lines = final_print.split("\n") if final_print else []
+                        if final_lines:
+                            self._parse_and_enqueue_from_lines(
+                                final_lines, 0.0, chunk_end, tstop
+                            )
+                    except Exception as e:
+                        if self.debug:
+                            print(f"DEBUG: Error getting final data: {e}")
+                    simulation_complete = True
+                    break
 
                 time.sleep(min(throttle_interval, 0.05))
 
