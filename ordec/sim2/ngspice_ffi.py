@@ -132,7 +132,6 @@ class NgspiceFFI(NgspiceBase):
         self._simulation_start_time = 0.0
         self._simulation_info = None
         self._last_progress = 0.0
-        self._data_points_sent = 0
         self._sim_tstop = 0.0
         self._normal_callbacks_received = 0  # Initialize counter for normal callbacks
 
@@ -220,24 +219,20 @@ class NgspiceFFI(NgspiceBase):
             if self.debug:
                 print(f"[ngspice-ffi] Normal callback received: count={self._normal_callbacks_received}, time={current_time}")
 
-            # Buffering logic
             if self._buffer_enabled:
-                # Collect data point in buffer
                 data_point = self._process_data_point(vec_data, vec_count, current_time)
                 if data_point:
                     self._data_buffer.append(data_point)
 
-                    # Check if buffer should be flushed
                     should_flush = (
                         len(self._data_buffer) >= self._buffer_size or
-                        current_time - self._last_buffer_flush_time > 0.5  # Max 0.5s between flushes
+                        current_time - self._last_buffer_flush_time > 0.5
                     )
 
                     if should_flush:
                         self._flush_buffer()
                         self._last_buffer_flush_time = current_time
             else:
-                # No buffering - process and send immediately
                 data_point = self._process_data_point(vec_data, vec_count, current_time)
                 if data_point:
                     self._send_data_point(data_point)
@@ -275,13 +270,6 @@ class NgspiceFFI(NgspiceBase):
                 sim_time = data_points["time"]
                 progress = min(max(sim_time / self._sim_tstop, 0.0), 1.0)
                 # Ensure progress is monotonic
-                if self._last_progress is not None:
-                    progress = max(progress, self._last_progress)
-                self._last_progress = progress
-            else:
-                # TODO find if this can be safely deleted.
-                self._data_points_sent += 1
-                progress = min(self._data_points_sent * 0.05, 0.95)
                 if self._last_progress is not None:
                     progress = max(progress, self._last_progress)
                 self._last_progress = progress
@@ -562,7 +550,6 @@ class NgspiceFFI(NgspiceBase):
         self._buffer_enabled = not disable_buffering
         self._data_buffer = []
         self._last_buffer_flush_time = time.time()
-        self._data_points_sent = 0
         self._sim_tstop = None
         self._last_progress = 0.0
         self._fallback_executed = False
