@@ -13,67 +13,6 @@ from ordec.core.rational import R
 from ordec.sim2.sim_hierarchy import SimHierarchy, HighlevelSim
 from ordec.sim2.ngspice import Ngspice
 
-
-def test_ffi_long_run_debug():
-    """Longer debug test that runs the FFI backend for a large, predictable
-    number of data points to help reproduce duplicate/extra-point behaviour.
-
-    This intentionally runs a relatively large transient (2000 points) but does not
-    make strict failing assertions about exact point counts. Instead it prints a
-    compact summary and performs a minimal sanity check so the test is useful as a
-    reproduction aid without breaking automated runs catastrophically.
-    """
-    h = lib_test.ResdivFlatTb(backend="ffi")
-
-    # Configure a simulation expected to produce exactly 2000 points:
-    # A tran from 0 to N*tstep with tstep produces N+1 points, so we choose 1999 steps.
-    num_points = 2000
-    tstep_us = 1
-    tstop_us = (num_points - 1) * tstep_us  # 1999us
-
-    tstep_str = f"{tstep_us}u"
-    tstop_str = f"{tstop_us}u"
-
-    points_consumed = 0
-    last_result = None
-    first_times = []
-
-    # Drain the entire async generator. This may take a while locally for large counts.
-    for result in h.sim_tran_async(tstep_str, tstop_str):
-        # Collect a small sample of the earliest time values for quick inspection
-        if points_consumed < 10:
-            try:
-                time_val = getattr(getattr(result, "time", None), "value", None)
-            except Exception:
-                time_val = None
-            first_times.append(time_val)
-
-        points_consumed += 1
-        last_result = result
-
-    # Compact debug summary. Use -s with pytest to see this when running locally.
-    last_progress = getattr(last_result, "progress", None)
-    last_time_val = getattr(getattr(last_result, "time", None), "value", None)
-
-    print(
-        "DEBUG subprocess long: "
-        f"expected_points={num_points}, consumed={points_consumed}, "
-        f"first_times_sample={first_times}, last_progress={last_progress}, last_time={last_time_val}"
-    )
-
-    # Minimal sanity assertion so test doesn't silently do nothing.
-    # We assert that at least one point was produced and that we produced at least as many
-    # points as the expected (this allows detection of duplicates as 'consumed > expected').
-    assert points_consumed >= 1, "No points were produced by the async generator."
-
-    # If the consumption does not match the expected count, emit a visible message.
-    if points_consumed != num_points:
-        print(
-            f"NOTE: expected {num_points} points but consumed {points_consumed}. "
-            "This output is intended to help debug chunking/duplication; inspect printed values."
-        )
-
-
 @pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_highlevel_async_tran_basic(backend):
     h = lib_test.ResdivFlatTb(backend=backend)
