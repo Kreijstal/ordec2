@@ -684,7 +684,7 @@ class NgspiceFFI(NgspiceBase):
 
                     if num_points > 0 and "time" in vector_data_map:
                         # Collect ALL data points to avoid artificial sampling limits
-                        sample_indices = range(0, num_points)
+                        sample_indices = range(num_points)
 
                         # Build a list of sample indices so we can compute ordinal progress
                         sample_list = list(sample_indices)
