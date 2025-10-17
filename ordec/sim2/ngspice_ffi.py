@@ -124,7 +124,6 @@ class NgspiceFFI(NgspiceBase):
         self._is_running = False
         self._async_callback = None
         self._async_data_queue = queue.Queue()
-        # Buffering parameters
         self._buffer_enabled = True
         self._buffer_size = 10  # Number of data points to buffer before sending
         self._data_buffer = []  # Buffer to collect data points
@@ -175,24 +174,18 @@ class NgspiceFFI(NgspiceBase):
 
     def cleanup(self):
         """Clean up async simulation resources."""
-        # Wait for simulation to finish if it's still running
         if hasattr(self, '_is_running') and self._is_running:
             timeout = 2.0
             start_time = time.time()
             while self._is_running and (time.time() - start_time) < timeout:
                 time.sleep(0.1)
 
-        # Wait for fallback thread to finish if it exists
         if hasattr(self, '_fallback_thread') and self._fallback_thread and self._fallback_thread.is_alive():
             self._fallback_thread.join(timeout=1.0)
 
-        # Clear the async data queue to prevent stale data
         if hasattr(self, '_async_data_queue'):
             while not self._async_data_queue.empty():
-                try:
-                    self._async_data_queue.get_nowait()
-                except queue.Empty:
-                    break
+                self._async_data_queue.get_nowait()
 
     def _send_char_handler(self, message: bytes, ident: int, user_data) -> int:
         if message:
@@ -264,7 +257,6 @@ class NgspiceFFI(NgspiceBase):
 
                     data_points[name] = value
 
-            # Calculate progress based on simulation time if available
             progress = 0.0
             if "time" in data_points and self._sim_tstop:
                 sim_time = data_points["time"]
@@ -294,15 +286,8 @@ class NgspiceFFI(NgspiceBase):
 
     def _send_data_point(self, data_point):
         """Send a single data point to the async queue."""
-        try:
-            self._async_data_queue.put_nowait(data_point)
-        except queue.Full:
-            # Drop oldest data if queue is full
-            try:
-                self._async_data_queue.get_nowait()
-                self._async_data_queue.put_nowait(data_point)
-            except queue.Empty:
-                pass
+        self._async_data_queue.put_nowait(data_point)
+
 
     def _flush_buffer(self):
         """Flush buffered data points to the async queue."""
@@ -833,10 +818,7 @@ class NgspiceFFI(NgspiceBase):
     ) -> Generator[dict, None, None]:
         self._async_callback = callback
         while not self._async_data_queue.empty():
-            try:
-                self._async_data_queue.get_nowait()
-            except queue.Empty:
-                break
+            self._async_data_queue.get_nowait()
 
         # Start background simulation - set up analysis first, then run
         self.command("op")
@@ -881,13 +863,10 @@ class NgspiceFFI(NgspiceBase):
                         break
 
         while not self._async_data_queue.empty():
-            try:
-                data_point = self._async_data_queue.get_nowait()
-                if callback:
-                    callback(data_point)
-                yield data_point
-            except queue.Empty:
-                break
+            data_point = self._async_data_queue.get_nowait()
+            if callback:
+                callback(data_point)
+            yield data_point
 
     def is_running(self) -> bool:
         return self._is_running
