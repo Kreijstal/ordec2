@@ -41,7 +41,6 @@ class NgspiceFFI(NgspiceBase):
     - C callbacks cannot propagate Python exceptions and will cause crashes/undefined behavior
     - Always store error states in instance variables and check them after C calls return
     - The ngspice FFI library is NOT thread-safe - use only from single thread
-    - Memory management issues exist in ngspice cleanup - avoid calling quit command
     """
 
     def __new__(cls, *args, **kwargs):
@@ -173,36 +172,28 @@ class NgspiceFFI(NgspiceBase):
             raise e
         finally:
             if backend:
-                try:
-                    backend.cleanup()
-                except:
-                    # TODO
-                    pass
+                backend.cleanup()
 
     def cleanup(self):
         """Clean up async simulation resources."""
-        try:
-            # Wait for simulation to finish if it's still running
-            if hasattr(self, '_is_running') and self._is_running:
-                timeout = 2.0
-                start_time = time.time()
-                while self._is_running and (time.time() - start_time) < timeout:
-                    time.sleep(0.1)
+        # Wait for simulation to finish if it's still running
+        if hasattr(self, '_is_running') and self._is_running:
+            timeout = 2.0
+            start_time = time.time()
+            while self._is_running and (time.time() - start_time) < timeout:
+                time.sleep(0.1)
 
-            # Wait for fallback thread to finish if it exists
-            if hasattr(self, '_fallback_thread') and self._fallback_thread and self._fallback_thread.is_alive():
-                self._fallback_thread.join(timeout=1.0)
+        # Wait for fallback thread to finish if it exists
+        if hasattr(self, '_fallback_thread') and self._fallback_thread and self._fallback_thread.is_alive():
+            self._fallback_thread.join(timeout=1.0)
 
-            # Clear the async data queue to prevent stale data
-            if hasattr(self, '_async_data_queue'):
-                while not self._async_data_queue.empty():
-                    try:
-                        self._async_data_queue.get_nowait()
-                    except:
-                        break
-        except:
-            # Ignore all errors during cleanup to avoid crashes
-            pass
+        # Clear the async data queue to prevent stale data
+        if hasattr(self, '_async_data_queue'):
+            while not self._async_data_queue.empty():
+                try:
+                    self._async_data_queue.get_nowait()
+                except queue.Empty:
+                    break
 
     def _send_char_handler(self, message: bytes, ident: int, user_data) -> int:
         if message:
@@ -400,7 +391,7 @@ class NgspiceFFI(NgspiceBase):
             if self.debug:
                 status = "stopped" if is_not_running else "started"
                 print(f"[ngspice-ffi] Background thread {status}")
-            
+
             # When simulation stops, flush any remaining buffered data
             if is_not_running and self._buffer_enabled:
                 self._flush_buffer()
@@ -445,22 +436,9 @@ class NgspiceFFI(NgspiceBase):
         return output
 
     def reset(self):
-        try:
-            self.command("remcirc")
-        except:
-            # Ignore errors if no circuit is loaded
-            # TODO: detect this error specifically
-            pass
+        self.command("remcirc")
+        self.command("destroy all")
 
-        try:
-            # Destroy all plots and data
-            self.command("destroy all")
-        except:
-            # Ignore errors if no data exists
-            # TODO: detect this error specifically
-            pass
-
-        # Clear internal state
         self._output_lines.clear()
         self._error_message = None
         self._has_fatal_error = False
@@ -1007,7 +985,7 @@ class NgspiceFFI(NgspiceBase):
                         if is_running:
                             self._is_running = True  # Update our state
                         return is_running
-                    except:
+                    except Exception:
                         return False
 
                 # Wait for resume to complete
@@ -1045,7 +1023,7 @@ class NgspiceFFI(NgspiceBase):
                     if is_running:
                         self._is_running = True  # Update our state
                     return is_running
-                except:
+                except Exception:
                     return False
 
             # Wait for resume to complete

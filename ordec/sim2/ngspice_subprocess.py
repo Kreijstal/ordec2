@@ -82,7 +82,7 @@ class NgspiceSubprocess(NgspiceBase):
         self.p: Popen[bytes] = p
         self.debug = debug
         self.cwd = cwd
-        
+
         # Async simulation support
         self._async_queue: Optional[queue.Queue] = None
         self._async_thread: Optional[threading.Thread] = None
@@ -406,7 +406,7 @@ class NgspiceSubprocess(NgspiceBase):
             self._async_halt_requested = True
             self._async_resume_event.clear()  # Clear resume event
             self._is_running = False
-        
+
         # Wait a bit to ensure the simulation loop sees the halt request
         time.sleep(wait_time)
         return True
@@ -417,10 +417,10 @@ class NgspiceSubprocess(NgspiceBase):
             self._async_halt_requested = False
             self._async_resume_event.set()  # Signal resume
             self._is_running = True
-        
+
         if self.debug:
             print("DEBUG: Resume requested")
-        
+
         return True
 
     def safe_resume_simulation(
@@ -458,29 +458,26 @@ class NgspiceSubprocess(NgspiceBase):
             # Get current vector length
             len_result = self.command("let current_len = length(time)")
             len_print = self.command("print current_len")
-            
+
             # Extract the length value from output like "current_len = 1.000000e+01"
             import re
             match = re.search(r'current_len\s*=\s*([\d.e+-]+)', len_print)
-            
+
             # Delete the temporary variable to avoid polluting the namespace
-            try:
-                self.command("unlet current_len")
-            except:
-                pass
-            
+            self.command("unlet current_len")
+
             if not match:
                 if self.debug:
                     print(f"DEBUG: Could not extract vector length from: {len_print}")
                 # Fallback to print all
                 yield from self.print_all()
                 return
-            
+
             current_len = int(float(match.group(1)))
-            
+
             if self.debug:
                 print(f"DEBUG: Vector length: old={self._last_vector_length}, current={current_len}")
-            
+
             # If this is the first call or no new data, print all or nothing
             if self._last_vector_length == 0:
                 # First chunk - print everything
@@ -489,13 +486,13 @@ class NgspiceSubprocess(NgspiceBase):
                 yield from self.print_all()
                 self._last_vector_length = current_len
                 return
-            
+
             if current_len <= self._last_vector_length:
                 # No new data
                 if self.debug:
                     print(f"DEBUG: No new data (current_len={current_len}, last={self._last_vector_length})")
                 return
-            
+
             # Get vector names from display command, excluding temporary variables
             vectors_to_print = []
             display_output = self.command("display")
@@ -508,14 +505,14 @@ class NgspiceSubprocess(NgspiceBase):
                     # Skip temporary variables we created (if cleanup failed)
                     if vector_name not in ["current_len", "old_len", "new_len", "start_idx", "end_idx"]:
                         vectors_to_print.append(vector_name)
-            
+
             if not vectors_to_print:
                 if self.debug:
                     print(f"DEBUG: No vectors found, falling back to print all")
                 yield from self.print_all()
                 self._last_vector_length = current_len
                 return
-            
+
             # Check if any vector names contain brackets (which cause formatting issues with slicing)
             # For now, always use print all with index filtering to avoid formatting issues
             has_brackets = True  # TODO: Re-enable vector slicing after fixing parser
@@ -545,24 +542,24 @@ class NgspiceSubprocess(NgspiceBase):
                 self._last_vector_length = current_len
                 yield from filtered_output
                 return
-            
+
             # Build print command with slicing for only new values
             start_idx = self._last_vector_length
             end_idx = current_len - 1
-            
+
             if self.debug:
                 print(f"DEBUG: Printing slice [{start_idx}, {end_idx}] of {len(vectors_to_print)} vectors")
-            
+
             # Create sliced vector expressions with actual numeric indices
             sliced_vectors = [f"{vec}[{start_idx},{end_idx}]" for vec in vectors_to_print]
             print_cmd = f"print col {' '.join(sliced_vectors)}"
-            
+
             result = self.command(print_cmd)
             yield from result.split("\n")
-            
+
             # Update the last vector length
             self._last_vector_length = current_len
-            
+
         except Exception as e:
             if self.debug:
                 print(f"DEBUG: Error in _print_new_vectors_only: {e}, falling back to print all")
@@ -573,14 +570,13 @@ class NgspiceSubprocess(NgspiceBase):
                 len_result = self.command("let current_len = length(time)")
                 len_print = self.command("print current_len")
                 # Clean up
-                try:
-                    self.command("unlet current_len")
-                except:
-                    pass
+                self.command("unlet current_len")
                 match = re.search(r'current_len\s*=\s*([\d.e+-]+)', len_print)
                 if match:
                     self._last_vector_length = int(float(match.group(1)))
-            except:
+            except Exception as e:
+                if self.debug:
+                    print(f"[ngspice-subprocess] Error updating vector length: {e}")
                 pass
 
     def _parse_and_enqueue_from_lines(
@@ -609,15 +605,15 @@ class NgspiceSubprocess(NgspiceBase):
             if "Index" in line and "time" in line:
                 # Reset slicing flag for each new table
                 using_sliced_vectors = False
-                
+
                 # Parse headers and remove slice notation like [5,9]
                 import re
                 raw_headers = line.split()
-                
+
                 if self.debug and len(raw_headers) > 0 and '[' in raw_headers[-1]:
                     print(f"DEBUG: Raw header line: {repr(line)}")
                     print(f"DEBUG: Raw headers: {raw_headers}")
-                
+
                 cleaned_headers = []
                 has_sliced_time = False
                 for header in raw_headers:
@@ -630,16 +626,16 @@ class NgspiceSubprocess(NgspiceBase):
                     # Remove slice notation: e.g., "a[5,9]" -> "a", "time[5,9]" -> "time"
                     cleaned = re.sub(r'\[\d+,\d+\]$', '', header)
                     cleaned_headers.append(cleaned)
-                
+
                 # When using sliced vectors, ngspice creates duplicate columns:
                 # "Index time a[5,9] time[5,9] ..." where the second "time" is wrong
                 # We need to skip the first "time" column (at index 1) when slicing
                 if using_sliced_vectors and has_sliced_time and len(cleaned_headers) > 2:
                     # Remove the second column (first "time") which is just row numbers
                     cleaned_headers = [cleaned_headers[0]] + cleaned_headers[2:]
-                
+
                 current_headers = tuple(cleaned_headers)
-                
+
                 # Find which column contains "time" - prefer the LAST occurrence
                 # because when we have sliced vectors, the last "time" is the correct one
                 time_column_index = None
@@ -647,21 +643,21 @@ class NgspiceSubprocess(NgspiceBase):
                     if current_headers[i].lower() == "time":
                         time_column_index = i
                         break
-                
+
                 if self.debug:
                     print(f"DEBUG: Headers: {current_headers}, time_idx={time_column_index}, sliced={using_sliced_vectors}")
-                
+
                 continue
 
             if not current_headers or time_column_index is None:
                 continue
 
             values = line.split()
-            
+
             # Adjust values array when using sliced vectors (skip column 1)
             if using_sliced_vectors and len(values) > 1:
                 values = [values[0]] + values[2:]
-            
+
             if len(values) < len(current_headers):
                 continue
 
@@ -773,13 +769,13 @@ class NgspiceSubprocess(NgspiceBase):
                 if self._async_halt_requested:
                     with self._async_lock:
                         self._is_running = False
-                    
+
                     if self.debug:
                         print(f"DEBUG: Simulation halted, waiting for resume...")
-                    
+
                     # Wait for resume signal (with timeout to check for complete halt)
                     resumed = self._async_resume_event.wait(timeout=0.5)
-                    
+
                     # If still halted after timeout, check if we should exit
                     with self._async_lock:
                         if self._async_halt_requested and not resumed:
@@ -803,11 +799,11 @@ class NgspiceSubprocess(NgspiceBase):
                     print_all_res = ""
 
                 lines = print_all_res.split("\n") if print_all_res else []
-                
+
                 # Parse the current time from the output to determine chunk boundaries
                 current_time = 0.0
                 chunk_end = tstop if tstop else float('inf')
-                
+
                 # Extract time values from the output to determine current simulation time
                 for line in lines:
                     line = line.strip()
@@ -851,7 +847,7 @@ class NgspiceSubprocess(NgspiceBase):
                             print(f"DEBUG: Step command failed: {e}")
                         simulation_complete = True
                         break
-                
+
                 # Check if we've reached the target time (as a secondary check)
                 if tstop is not None and current_time >= tstop * 0.9999:
                     if self.debug:
@@ -874,7 +870,7 @@ class NgspiceSubprocess(NgspiceBase):
 
             with self._async_lock:
                 self._is_running = False
-            
+
             if not self._async_halt_requested:
                 if self.debug:
                     print("DEBUG: Simulation completed normally")

@@ -444,8 +444,9 @@ class NgspiceIsolatedFFI(NgspiceBase):
             if backend:
                 try:
                     backend.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    if debug:
+                        print(f"[ngspice-mp] Error during backend close: {e}")
             if p.is_alive():
                 p.join(timeout=2)
                 if p.is_alive():
@@ -466,8 +467,9 @@ class NgspiceIsolatedFFI(NgspiceBase):
             if self._async_simulation_running:
                 try:
                     self.stop_async_simulation()
-                except Exception:
-                    pass  # Ignore cleanup errors on close
+                except Exception as e:
+                    if self.debug:
+                        print(f"[ngspice-mp] Error during stop_async_simulation: {e}")
 
             if not self.conn.closed:
                 self.conn.send({"type": "quit"})
@@ -699,18 +701,16 @@ class NgspiceIsolatedFFI(NgspiceBase):
                             if not halt_future.done():
                                 halt_future.cancel()
 
-            except Exception:
-                pass
+            except Exception as e:
+                if self.debug:
+                    print(f"[ngspice-mp] Error during safe_halt_simulation: {e}")
 
             # Wait before retry (except on last attempt)
             if attempt < max_attempts - 1:
                 time.sleep(wait_time)
 
         # use actual worker state, not our flag
-        try:
-            return self._call_worker("is_running") == False
-        except:
-            return False
+        return self._call_worker("is_running") == False
 
     def safe_resume_simulation(self, max_attempts: int = 3, wait_time: float = 2.0):
         import time
@@ -747,8 +747,9 @@ class NgspiceIsolatedFFI(NgspiceBase):
                             if not resume_future.done():
                                 resume_future.cancel()
 
-            except Exception:
-                pass
+            except Exception as e:
+                if self.debug:
+                    print(f"[ngspice-mp] Error during safe_resume_simulation: {e}")
 
             # Wait before retry (except on last attempt)
             if attempt < max_attempts - 1:
