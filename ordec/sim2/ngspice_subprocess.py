@@ -173,6 +173,8 @@ class NgspiceSubprocess(NgspiceBase):
             print(f"Written netlist: \n {netlist}")
         if no_auto_gnd:
             self.command("set no_auto_gnd")
+        # Set output width to avoid header wrapping in vector slicing output
+        self.command("set width 200")
         check_errors(self.command(f"source {netlist_fn}"))
 
     def print_all(self) -> Iterator[str]:
@@ -477,12 +479,26 @@ class NgspiceSubprocess(NgspiceBase):
                 self._last_vector_length = current_len
                 return
 
-            # Use print_all with filtering for now
-            # Vector slicing can cause issues in complex circuits with multiple tables
-            # where not all tables have a sliced time column
-            # TODO: Improve vector slicing to handle all cases reliably
-            has_brackets = True
-            if has_brackets:
+            # Check if any vector names contain brackets that make slicing complex
+            # Hierarchical names with dots before brackets (e.g., @m.xi0.mpd[ib]) 
+            # can cause issues, so fall back to print_all with filtering for those
+            # Also fall back for circuits with many vectors (>10) as ngspice output width
+            # limitations can cause header truncation
+            def has_complex_brackets(vec):
+                if '[' not in vec:
+                    return False
+                # If bracket doesn't end the name, it's complex
+                if not vec.endswith(']'):
+                    return True
+                # Check for hierarchical naming (dots before bracket)
+                bracket_idx = vec.rfind('[')
+                if bracket_idx > 0 and '.' in vec[:bracket_idx]:
+                    return True
+                return False
+            
+            has_brackets = any(has_complex_brackets(vec) for vec in vectors_to_print)
+            # Also fall back if there are many vectors (to avoid header truncation)
+            if has_brackets or len(vectors_to_print) > 10:
                 if self.debug:
                     print(f"DEBUG: Detected vectors with brackets in names, using print all with filtering")
                 # Fallback to print all and filter by index
@@ -587,14 +603,21 @@ class NgspiceSubprocess(NgspiceBase):
                     print(f"DEBUG: Raw headers: {raw_headers}")
 
                 # Find sliced columns (those with [N,M] notation at the end)
+                # Also detect incomplete slicing (headers ending with [N or [N,) and skip them
                 sliced_columns = []
+                has_incomplete_slicing = False
                 for i, header in enumerate(raw_headers):
                     if re.search(r'\[\d+,\d+\]$', header):
-                        # Remove slice notation to get clean name
+                        # Complete slice notation
                         clean_name = re.sub(r'\[\d+,\d+\]$', '', header)
                         sliced_columns.append((i, clean_name))
+                    elif re.search(r'\[\d+,?$', header):
+                        # Incomplete slice notation (truncated header)
+                        has_incomplete_slicing = True
+                        if self.debug:
+                            print(f"DEBUG: Detected incomplete slice notation in header: {repr(header)}")
 
-                if sliced_columns:
+                if sliced_columns and not has_incomplete_slicing:
                     # Using sliced vector output
                     current_sliced_columns = sliced_columns
                     current_headers = tuple([name for _, name in sliced_columns])
