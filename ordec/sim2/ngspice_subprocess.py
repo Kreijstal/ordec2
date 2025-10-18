@@ -173,8 +173,8 @@ class NgspiceSubprocess(NgspiceBase):
             print(f"Written netlist: \n {netlist}")
         if no_auto_gnd:
             self.command("set no_auto_gnd")
-        # Set output width to avoid header wrapping in vector slicing output
-        self.command("set width 200")
+        # Set output width to very large value to avoid header wrapping in vector slicing output
+        self.command("set width 10000")
         check_errors(self.command(f"source {netlist_fn}"))
 
     def print_all(self) -> Iterator[str]:
@@ -497,10 +497,9 @@ class NgspiceSubprocess(NgspiceBase):
                 return False
             
             has_brackets = any(has_complex_brackets(vec) for vec in vectors_to_print)
-            # Also fall back if there are many vectors (to avoid header truncation)
-            if has_brackets or len(vectors_to_print) > 10:
+            if has_brackets:
                 if self.debug:
-                    print(f"DEBUG: Detected vectors with brackets in names, using print all with filtering")
+                    print(f"DEBUG: Detected vectors with complex hierarchical brackets, using print all with filtering")
                 # Fallback to print all and filter by index
                 all_output = list(self.print_all())
                 filtered_output = []
