@@ -482,11 +482,7 @@ class NgspiceFFI(NgspiceBase):
             if vec_info and vec_info.v_length > 0:
                 data_list = [vec_info.v_realdata[i] for i in range(vec_info.v_length)]
 
-                try:
-                    kind = SignalKind.from_vtype(int(vec_info.v_type))
-                except Exception:
-                    # TODO find if still necessary and delete if not
-                    kind = result.categorize_signal(vec_name)
+                kind = SignalKind.from_vtype(int(vec_info.v_type))
 
                 result.signals[vec_name] = SignalArray(kind=kind, values=data_list)
 
@@ -517,11 +513,7 @@ class NgspiceFFI(NgspiceBase):
                         vec_info.v_realdata[i] for i in range(vec_info.v_length)
                     ]
 
-                try:
-                    kind = SignalKind.from_vtype(int(vec_info.v_type))
-                except Exception:
-                    # TODO find if still necessary and delete if not
-                    kind = result.categorize_signal(vec_name)
+                kind = SignalKind.from_vtype(int(vec_info.v_type))
 
                 result.signals[vec_name] = SignalArray(kind=kind, values=data_list)
 
