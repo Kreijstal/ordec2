@@ -497,10 +497,9 @@ class NgspiceSubprocess(NgspiceBase):
                 return False
             
             has_brackets = any(has_complex_brackets(vec) for vec in vectors_to_print)
-            # Also fall back if there are many vectors (to avoid header truncation)
-            if has_brackets or len(vectors_to_print) > 10:
+            if has_brackets:
                 if self.debug:
-                    print(f"DEBUG: Detected vectors with brackets in names, using print all with filtering")
+                    print(f"DEBUG: Detected vectors with complex hierarchical brackets, using print all with filtering")
                 # Fallback to print all and filter by index
                 all_output = list(self.print_all())
                 filtered_output = []
