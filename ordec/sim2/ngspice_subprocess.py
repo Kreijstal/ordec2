@@ -802,7 +802,7 @@ class NgspiceSubprocess(NgspiceBase):
 
                 # Parse the current time from the output to determine chunk boundaries
                 current_time = 0.0
-                chunk_end = tstop if tstop else float('inf')
+                chunk_end = tstop or float('inf')
 
                 # Extract time values from the output to determine current simulation time
                 for line in lines:
