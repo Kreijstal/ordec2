@@ -479,7 +479,7 @@ class NgspiceSubprocess(NgspiceBase):
                 self._last_vector_length = current_len
                 return
 
-            # Ngspice CAN slice vectors with brackets like @r1[i] using syntax @r1[i][5,9]
+            # Ngspice can slice vectors with brackets like @r1[i] using syntax @r1[i][5,9]
             # The parser correctly handles this sliced output format
             # No need to fall back to print_all for bracketed vectors
             
