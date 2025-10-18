@@ -260,10 +260,7 @@ class NgspiceFFI(NgspiceBase):
             progress = 0.0
             if "time" in data_points and self._sim_tstop:
                 sim_time = data_points["time"]
-                progress = min(max(sim_time / self._sim_tstop, 0.0), 1.0)
-                # Ensure progress is monotonic
-                if self._last_progress is not None:
-                    progress = max(progress, self._last_progress)
+                progress = sim_time / self._sim_tstop
                 self._last_progress = progress
 
             signal_kinds = {}
@@ -297,11 +294,9 @@ class NgspiceFFI(NgspiceBase):
         if self.debug:
             print(f"[ngspice-ffi] Flushing buffer with {len(self._data_buffer)} data points")
 
-        # Send all buffered data points
         for data_point in self._data_buffer:
             self._send_data_point(data_point)
 
-        # Clear buffer
         self._data_buffer.clear()
 
         return 0
@@ -365,7 +360,6 @@ class NgspiceFFI(NgspiceBase):
                 status = "stopped" if is_not_running else "started"
                 print(f"[ngspice-ffi] Background thread {status}")
 
-            # When simulation stops, flush any remaining buffered data
             if is_not_running and self._buffer_enabled:
                 self._flush_buffer()
 
@@ -565,8 +559,6 @@ class NgspiceFFI(NgspiceBase):
             raise NgspiceError("Background simulation failed to start")
 
         # Some complex models (like SKY130) don't trigger data callbacks during bg_tran
-        # But for simple circuits, we should rely on normal callbacks
-        # Only start fallback handler if no normal callbacks are received
         self._fallback_thread = threading.Thread(
             target=self._data_fallback_handler, daemon=True
         )
@@ -598,12 +590,10 @@ class NgspiceFFI(NgspiceBase):
         # Small delay to ensure simulation is fully complete
         time.sleep(0.1)
 
-        # Only execute fallback if no normal callbacks were received
-        # Add additional check: if normal callbacks are working, skip fallback entirely
         if self._normal_callbacks_received > 0:
             if self.debug:
                 print(f"[ngspice-ffi] Fallback handler SKIPPED (normal callbacks received: {self._normal_callbacks_received})")
-            return  # Exit early if normal callbacks are working
+            return
 
         self._fallback_executed = True
         if self.debug:
@@ -625,10 +615,8 @@ class NgspiceFFI(NgspiceBase):
                             vector_data_map[vec_name] = data_list
 
                     if num_points > 0 and "time" in vector_data_map:
-                        # Collect ALL data points to avoid artificial sampling limits
                         sample_indices = range(num_points)
 
-                        # Build a list of sample indices so we can compute ordinal progress
                         sample_list = list(sample_indices)
                         sample_count = len(sample_list) if sample_list else 1
 
@@ -644,14 +632,9 @@ class NgspiceFFI(NgspiceBase):
                             progress = None
                             if "time" in vector_data_map and self._sim_tstop:
                                 sim_time = vector_data_map["time"][i]
-                                progress = min(
-                                    max(sim_time / self._sim_tstop, 0.0), 1.0
-                                )
+                                progress = sim_time / self._sim_tstop
 
-                            if progress is not None and self._last_progress is not None and progress < self._last_progress:
-                                # TODO invesitigate why and when
-                                progress = self._last_progress
-                            else:
+                            if progress is not None:
                                 self._last_progress = progress
 
                             self._async_data_queue.put_nowait(
@@ -668,19 +651,17 @@ class NgspiceFFI(NgspiceBase):
                                 f"[ngspice-ffi] Fallback retrieved {len(sample_indices)} data points from {num_points} total points"
                             )
 
-            except Exception as e:
+            except (OSError, RuntimeError, AttributeError) as e:
                 logging.error("Exception in data_fallback_handler: %s", e)
                 if self.debug:
                     logging.debug("Fallback traceback: %s", traceback.format_exc())
         else:
-            # Normal callbacks worked, no need for fallback
             if self.debug:
                 print(f"[ngspice-ffi] Fallback handler skipped (normal callbacks received: {self._normal_callbacks_received})")
 
             def check_completion_status():
                 return not self._is_running
 
-            # Create executor outside the loop to prevent shutdown issues
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as completion_executor:
                 while True:
                     completion_future = completion_executor.submit(check_completion_status)
@@ -692,9 +673,6 @@ class NgspiceFFI(NgspiceBase):
                     finally:
                         if not completion_future.done():
                             completion_future.cancel()
-
-        # Small delay to ensure simulation is fully complete
-        time.sleep(0.1)
 
         if self._async_data_queue.empty():
             try:
@@ -732,14 +710,9 @@ class NgspiceFFI(NgspiceBase):
                             progress = None
                             if "time" in vector_data_map and self._sim_tstop:
                                 sim_time = vector_data_map["time"][i]
-                                progress = min(
-                                    max(sim_time / self._sim_tstop, 0.0), 1.0
-                                )
+                                progress = sim_time / self._sim_tstop
 
-                            if progress is not None and self._last_progress is not None and progress < self._last_progress:
-                                # TODO invesitigate why and when
-                                progress = self._last_progress
-                            else:
+                            if progress is not None:
                                 self._last_progress = progress
 
                             self._async_data_queue.put_nowait(
@@ -756,10 +729,15 @@ class NgspiceFFI(NgspiceBase):
                                 f"[ngspice-ffi] Fallback retrieved {len(sample_indices)} data points from {num_points} total points"
                             )
 
-            except Exception as e:
+            except (OSError, RuntimeError, AttributeError) as e:
                 logging.error("Exception in data_fallback_handler: %s", e)
                 if self.debug:
                     logging.debug("Fallback traceback: %s", traceback.format_exc())
+            except Exception as e:
+                logging.error("Unexpected exception in data_fallback_handler: %s", e)
+                if self.debug:
+                    logging.debug("Fallback traceback: %s", traceback.format_exc())
+                raise
 
     def _wait_for_simulation_start(self, timeout: float) -> bool:
         timeout_time = time.time() + timeout

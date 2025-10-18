@@ -105,7 +105,7 @@ class FFIWorkerProcess:
 
         # Initialize thread synchronization objects (can't pickle these)
         self._shutdown_event = threading.Event()
-        self._relay_shutdown_event = threading.Event()  # Separate event for relay thread
+        self._relay_shutdown_event = threading.Event()
         self._progress_lock = threading.Lock()
         self._command_queue = queue.Queue()
         self._response_queue = queue.Queue()
@@ -114,7 +114,7 @@ class FFIWorkerProcess:
         msg = self.conn.recv()
         if msg["type"] == "init":
             try:
-                self.backend = NgspiceFFI(debug=False)  # Disable debug for worker process by default
+                self.backend = NgspiceFFI(debug=msg["debug"])
                 self.conn.send({"type": "init_success"})
             except Exception as e:
                 self.conn.send(
@@ -253,21 +253,16 @@ class FFIWorkerProcess:
                         )
 
                 elif cmd == "stop_async_simulation":
-                    # Handle explicit async simulation cleanup
                     try:
                         if self._relay_thread and self._relay_thread.is_alive():
-                            # Signal the relay thread to shut down
                             self._relay_shutdown_event.set()
-                            # Wait for the thread to finish
                             self._relay_thread.join(timeout=2.0)
                             if self._relay_thread.is_alive():
-                                # This would be an error condition, log it if debugging
                                 if self.debug:
                                     print("[ngspice-mp] WARNING: Relay thread did not terminate in time.")
 
-                        # Reset for the next run
                         self._relay_thread = None
-                        self._relay_shutdown_event.clear()  # Prepare the event for the next simulation
+                        self._relay_shutdown_event.clear()
 
                         self._response_queue.put({"type": "result", "data": pickle.dumps(True)})
                     except Exception as e:
@@ -310,7 +305,6 @@ class FFIWorkerProcess:
 
     def _start_relay_thread(self, ffi_queue):
         """Start a relay thread with proper synchronization"""
-        # Ensure the event is in a non-signaled state for the new thread
         self._relay_shutdown_event.clear()
 
         def relay_data():
@@ -463,7 +457,6 @@ class NgspiceIsolatedFFI(NgspiceBase):
 
     def close(self):
         try:
-            # Clean up async simulation if one is running
             if self._async_simulation_running:
                 try:
                     self.stop_async_simulation()
@@ -479,19 +472,17 @@ class NgspiceIsolatedFFI(NgspiceBase):
             if not self.conn.closed:
                 self.conn.close()
 
-    def _call_worker(self, msg_type, *args, **kwargs):
+    def _call_worker(self, msg_type, *args, timeout=30.0, **kwargs):
         if self.conn.closed:
             raise RuntimeError("Connection to FFI worker process is closed.")
 
-        # Extract timeout from kwargs if present, otherwise use default
-        timeout_seconds = kwargs.pop('timeout', 30.0)
+        timeout_seconds = timeout
 
         # Use a lock to ensure atomic send/receive operations
         if not hasattr(self, "_comm_lock"):
             self._comm_lock = threading.Lock()
 
         with self._comm_lock:
-            # Send command with retry logic
             max_retries = 3
             for attempt in range(max_retries):
                 try:
@@ -504,9 +495,7 @@ class NgspiceIsolatedFFI(NgspiceBase):
                         raise RuntimeError(
                             f"Failed to send command to worker process after {max_retries} attempts: {e}"
                         )
-                    time.sleep(0.01)  # Brief delay before retry
-
-            # Wait for response with proper timeout handling
+                    time.sleep(0.01)
             response = None
             poll_interval = 0.1
             elapsed = 0
@@ -522,7 +511,6 @@ class NgspiceIsolatedFFI(NgspiceBase):
                         )
                     except Exception as e:
                         if "invalid load key" in str(e) or "unpickling" in str(e):
-                            # Pickle corruption - likely a race condition
                             raise RuntimeError(
                                 f"Data corruption in worker communication: {e}"
                             )
@@ -530,8 +518,6 @@ class NgspiceIsolatedFFI(NgspiceBase):
                             f"Worker process communication error: {e}"
                         )
                 elapsed += poll_interval
-
-                # Check if worker process is still alive (but allow some time for error handling)
                 if not self.process.is_alive() and elapsed > 5:
                     raise RuntimeError("Worker process died during communication")
 
@@ -551,10 +537,8 @@ class NgspiceIsolatedFFI(NgspiceBase):
             elif response["type"] == "error":
                 try:
                     exc = pickle.loads(response["data"])
-                    # Re-raise the original exception type
                     raise exc
                 except (pickle.PickleError, TypeError, ImportError):
-                    # If deserialization fails, create a generic RuntimeError
                     traceback_info = response.get(
                         "traceback", "No traceback available"
                     )
@@ -574,9 +558,8 @@ class NgspiceIsolatedFFI(NgspiceBase):
         try:
             while True:
                 try:
-                    # Use timeout to prevent hanging forever
                     item = self.async_queue.get(timeout=0.5)
-                    timeout_count = 0  # Reset timeout counter on successful get
+                    timeout_count = 0
 
                     if item == _ASYNC_SIM_SENTINEL:
                         self._async_simulation_running = False
@@ -585,7 +568,6 @@ class NgspiceIsolatedFFI(NgspiceBase):
                 except queue.Empty:
                     timeout_count += 1
                     if timeout_count > max_timeouts:
-                        # Been waiting too long, check if worker is still alive
                         if not self.process.is_alive():
                             self._async_simulation_running = False
                             break
@@ -596,19 +578,14 @@ class NgspiceIsolatedFFI(NgspiceBase):
                     self._async_simulation_running = False
                     break
                 except Exception as e:
-                    # Log unexpected errors but continue
                     if hasattr(self, "_debug") and self._debug:
                         print(f"[ngspice-mp] Async generator error: {e}")
                     break
         finally:
-            # This code will run when the generator is closed/exhausted.
             self._async_simulation_running = False
             try:
-                # Send the explicit cleanup command to the worker
                 self._call_worker("stop_async_simulation", timeout=5.0)
             except RuntimeError as e:
-                # Log if the cleanup fails, but don't raise an exception
-                # as it might hide the original exception that caused the exit.
                 if hasattr(self, "debug") and self.debug:
                     print(f"[ngspice-mp] Error during async cleanup: {e}")
 
@@ -631,7 +608,6 @@ class NgspiceIsolatedFFI(NgspiceBase):
         try:
             return self._call_worker("is_running")
         except RuntimeError:
-            # If worker communication fails, assume not running
             return False
 
     def stop_simulation(self):

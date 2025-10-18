@@ -82,17 +82,15 @@ class NgspiceSubprocess(NgspiceBase):
         self.p: Popen[bytes] = p
         self.debug = debug
         self.cwd = cwd
-
-        # Async simulation support
         self._async_queue: Optional[queue.Queue] = None
         self._async_thread: Optional[threading.Thread] = None
         self._async_lock = threading.Lock()
         self._async_halt_requested = False
-        self._async_resume_event = threading.Event()  # Event to signal resume
+        self._async_resume_event = threading.Event()
         self._async_current_time = 0.0
         self._data_points_sent = 0
-        self._last_vector_length = 0  # Track vector length for slicing
-        self._is_running = False  # Track if simulation is actively running
+        self._last_vector_length = 0
+        self._is_running = False
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -346,45 +344,23 @@ class NgspiceSubprocess(NgspiceBase):
         fallback_sampling_ratio: int = 100,
     ) -> "queue.Queue[dict]":
         """Run async transient simulation using chunked approach with stop after and step commands."""
-        # Parse tstep and tstop
-        def parse_time(val):
-            if val is None:
-                return None
-            if isinstance(val, (int, float)):
-                return float(val)
-            if isinstance(val, R):
-                return float(val)
-            # Parse string like "1u", "1n", etc.
-            s = str(val).strip()
-            multipliers = {
-                "f": 1e-15,
-                "p": 1e-12,
-                "n": 1e-9,
-                "u": 1e-6,
-                "m": 1e-3,
-                "k": 1e3,
-                "meg": 1e6,
-            }
-            for suffix, mult in multipliers.items():
-                if s.endswith(suffix):
-                    return float(s[: -len(suffix)]) * mult
-            return float(s)
 
-        tstep_val = parse_time(tstep)
-        tstop_val = parse_time(tstop) if tstop is not None else None
-        tstep_str = str(tstep)
+        tstep_r = R(tstep)
+        tstop_r = R(tstop) if tstop is not None else None
 
-        # Initialize async state
+        tstep_val = float(tstep_r)
+        tstop_val = float(tstop_r) if tstop_r is not None else None
+        tstep_str = str(tstep_r)
+
         self._async_queue = queue.Queue()
         self._async_halt_requested = False
         self._async_resume_event = threading.Event()
-        self._async_resume_event.set()  # Start in resumed state
+        self._async_resume_event.set()
         self._async_current_time = 0.0
         self._data_points_sent = 0
-        self._last_vector_length = 0  # Reset for new simulation
+        self._last_vector_length = 0
         self._is_running = False
 
-        # Start the chunked simulation in a thread
         self._async_thread = threading.Thread(
             target=self._run_chunked_simulation,
             args=(tstep_val, tstop_val, tstep_str, throttle_interval),
@@ -404,10 +380,9 @@ class NgspiceSubprocess(NgspiceBase):
         """Halt simulation by setting halt flag and clearing resume event."""
         with self._async_lock:
             self._async_halt_requested = True
-            self._async_resume_event.clear()  # Clear resume event
+            self._async_resume_event.clear()
             self._is_running = False
 
-        # Wait a bit to ensure the simulation loop sees the halt request
         time.sleep(wait_time)
         return True
 
@@ -438,15 +413,11 @@ class NgspiceSubprocess(NgspiceBase):
         """Check if a line looks like a header line."""
         if not line.strip():
             return False
-
-        # Check if line contains column names from the expected headers
         line_lower = line.lower()
         header_matches = 0
         for header in expected_headers:
             if header.lower() in line_lower:
                 header_matches += 1
-
-        # If most headers are found in this line, it's likely a header
         return header_matches >= len(expected_headers) * 0.6
 
     def _print_new_vectors_only(self) -> Iterator[str]:
@@ -455,21 +426,17 @@ class NgspiceSubprocess(NgspiceBase):
         This avoids the need to parse and filter duplicate data points.
         """
         try:
-            # Get current vector length
             len_result = self.command("let current_len = length(time)")
             len_print = self.command("print current_len")
 
-            # Extract the length value from output like "current_len = 1.000000e+01"
-            import re
+
             match = re.search(r'current_len\s*=\s*([\d.e+-]+)', len_print)
 
-            # Delete the temporary variable to avoid polluting the namespace
             self.command("unlet current_len")
 
             if not match:
                 if self.debug:
                     print(f"DEBUG: Could not extract vector length from: {len_print}")
-                # Fallback to print all
                 yield from self.print_all()
                 return
 
@@ -478,9 +445,7 @@ class NgspiceSubprocess(NgspiceBase):
             if self.debug:
                 print(f"DEBUG: Vector length: old={self._last_vector_length}, current={current_len}")
 
-            # If this is the first call or no new data, print all or nothing
             if self._last_vector_length == 0:
-                # First chunk - print everything
                 if self.debug:
                     print(f"DEBUG: First chunk, printing all {current_len} points")
                 yield from self.print_all()
@@ -502,7 +467,6 @@ class NgspiceSubprocess(NgspiceBase):
                 )
                 if vector_match:
                     vector_name = vector_match.group(1).strip()
-                    # Skip temporary variables we created (if cleanup failed)
                     if vector_name not in ["current_len", "old_len", "new_len", "start_idx", "end_idx"]:
                         vectors_to_print.append(vector_name)
 
@@ -513,8 +477,6 @@ class NgspiceSubprocess(NgspiceBase):
                 self._last_vector_length = current_len
                 return
 
-            # Check if any vector names contain brackets (which cause formatting issues with slicing)
-            # For now, always use print all with index filtering to avoid formatting issues
             has_brackets = True  # TODO: Re-enable vector slicing after fixing parser
             if has_brackets:
                 if self.debug:
