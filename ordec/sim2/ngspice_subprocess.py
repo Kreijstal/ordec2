@@ -477,9 +477,12 @@ class NgspiceSubprocess(NgspiceBase):
                 self._last_vector_length = current_len
                 return
 
-            # Check if any vector names contain brackets that aren't at the end
-            # Vectors like @r1[i] are fine (bracket at end), but complex names aren't
-            has_brackets = any('[' in vec and not vec.endswith(']') for vec in vectors_to_print)
+            # Vector slicing is disabled because the parser cannot reliably handle the output
+            # format from ngspice when using sliced vectors. The sliced output has a complex
+            # structure where sliced columns appear compressed in the first N rows, making
+            # it difficult to parse correctly. For now, use print_all with filtering.
+            # TODO: Implement a proper parser that can handle ngspice vector slicing output
+            has_brackets = True
             if has_brackets:
                 if self.debug:
                     print(f"DEBUG: Detected vectors with brackets in names, using print all with filtering")
