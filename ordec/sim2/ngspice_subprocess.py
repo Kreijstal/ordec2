@@ -477,11 +477,10 @@ class NgspiceSubprocess(NgspiceBase):
                 self._last_vector_length = current_len
                 return
 
-            # Vector slicing is disabled because the parser cannot reliably handle the output
-            # format from ngspice when using sliced vectors. The sliced output has a complex
-            # structure where sliced columns appear compressed in the first N rows, making
-            # it difficult to parse correctly. For now, use print_all with filtering.
-            # TODO: Implement a proper parser that can handle ngspice vector slicing output
+            # Use print_all with filtering for now
+            # Vector slicing can cause issues in complex circuits with multiple tables
+            # where not all tables have a sliced time column
+            # TODO: Improve vector slicing to handle all cases reliably
             has_brackets = True
             if has_brackets:
                 if self.debug:
@@ -518,7 +517,11 @@ class NgspiceSubprocess(NgspiceBase):
                 print(f"DEBUG: Printing slice [{start_idx}, {end_idx}] of {len(vectors_to_print)} vectors")
 
             # Create sliced vector expressions with actual numeric indices
-            sliced_vectors = [f"{vec}[{start_idx},{end_idx}]" for vec in vectors_to_print]
+            # Ensure 'time' is first so it appears in the first table
+            time_vectors = [f"{vec}[{start_idx},{end_idx}]" for vec in vectors_to_print if vec.lower() == 'time']
+            other_vectors = [f"{vec}[{start_idx},{end_idx}]" for vec in vectors_to_print if vec.lower() != 'time']
+            sliced_vectors = time_vectors + other_vectors
+            
             print_cmd = f"print col {' '.join(sliced_vectors)}"
 
             result = self.command(print_cmd)
@@ -553,8 +556,10 @@ class NgspiceSubprocess(NgspiceBase):
         signal_data = {}
         signal_kinds = {}
         current_headers = None
-        using_sliced_vectors = False
+        current_sliced_columns = None  # List of (col_index, clean_name) for sliced vectors
         time_column_index = None
+        last_time_values = []  # Store time values from the table that has time column
+        current_table_row_index = 0  # Track which row we're on in the current table
 
         if self.debug:
             print(f"DEBUG: Parsing {len(lines)} lines")
@@ -570,10 +575,10 @@ class NgspiceSubprocess(NgspiceBase):
 
             # Check for header line (contains "Index" and "time")
             if "Index" in line and "time" in line:
-                # Reset slicing flag for each new table
-                using_sliced_vectors = False
-
-                # Parse headers and remove slice notation like [5,9]
+                # Reset row counter for new table
+                current_table_row_index = 0
+                
+                # Parse headers
                 import re
                 raw_headers = line.split()
 
@@ -581,67 +586,119 @@ class NgspiceSubprocess(NgspiceBase):
                     print(f"DEBUG: Raw header line: {repr(line)}")
                     print(f"DEBUG: Raw headers: {raw_headers}")
 
-                cleaned_headers = []
-                has_sliced_time = False
-                for header in raw_headers:
-                    # Check if this is a sliced vector (contains [N,M] at the END)
+                # Find sliced columns (those with [N,M] notation at the end)
+                sliced_columns = []
+                for i, header in enumerate(raw_headers):
                     if re.search(r'\[\d+,\d+\]$', header):
-                        using_sliced_vectors = True
-                        # Check if this is sliced time
-                        if header.startswith("time["):
-                            has_sliced_time = True
-                    # Remove slice notation: e.g., "a[5,9]" -> "a", "time[5,9]" -> "time"
-                    cleaned = re.sub(r'\[\d+,\d+\]$', '', header)
-                    cleaned_headers.append(cleaned)
+                        # Remove slice notation to get clean name
+                        clean_name = re.sub(r'\[\d+,\d+\]$', '', header)
+                        sliced_columns.append((i, clean_name))
 
-                # When using sliced vectors, ngspice creates duplicate columns:
-                # "Index time a[5,9] time[5,9] ..." where the second "time" is wrong
-                # We need to skip the first "time" column (at index 1) when slicing
-                if using_sliced_vectors and has_sliced_time and len(cleaned_headers) > 2:
-                    # Remove the second column (first "time") which is just row numbers
-                    cleaned_headers = [cleaned_headers[0]] + cleaned_headers[2:]
-
-                current_headers = tuple(cleaned_headers)
-
-                # Find which column contains "time" - prefer the LAST occurrence
-                # because when we have sliced vectors, the last "time" is the correct one
-                time_column_index = None
-                for i in range(len(current_headers) - 1, -1, -1):
-                    if current_headers[i].lower() == "time":
-                        time_column_index = i
-                        break
-
-                if self.debug:
-                    print(f"DEBUG: Headers: {current_headers}, time_idx={time_column_index}, sliced={using_sliced_vectors}")
+                if sliced_columns:
+                    # Using sliced vector output
+                    current_sliced_columns = sliced_columns
+                    current_headers = tuple([name for _, name in sliced_columns])
+                    
+                    # Find time column in sliced columns
+                    time_column_index = None
+                    for i, name in enumerate(current_headers):
+                        if name.lower() == "time":
+                            time_column_index = i
+                            break
+                    
+                    if self.debug:
+                        if time_column_index is not None:
+                            print(f"DEBUG: Sliced vectors with time. Columns: {current_headers}, time_idx={time_column_index}")
+                        else:
+                            print(f"DEBUG: Sliced vectors without time. Columns: {current_headers}. Will use row matching.")
+                else:
+                    # Regular output (no slicing)
+                    current_sliced_columns = None
+                    last_time_values = []  # Reset when switching to regular output
+                    # Remove any slice notation from headers (shouldn't be any, but just in case)
+                    current_headers = tuple([re.sub(r'\[\d+,\d+\]$', '', h) for h in raw_headers])
+                    
+                    # Find time column - prefer last occurrence
+                    time_column_index = None
+                    for i in range(len(current_headers) - 1, -1, -1):
+                        if current_headers[i].lower() == "time":
+                            time_column_index = i
+                            break
+                    
+                    if self.debug:
+                        print(f"DEBUG: Regular output. Headers: {current_headers}, time_idx={time_column_index}")
 
                 continue
 
-            if not current_headers or time_column_index is None:
+            if not current_headers:
                 continue
 
-            values = line.split()
-
-            # Adjust values array when using sliced vectors (skip column 1)
-            if using_sliced_vectors and len(values) > 1:
-                values = [values[0]] + values[2:]
-
-            if len(values) < len(current_headers):
-                continue
-
-            try:
-                time_val = float(values[time_column_index])
-            except (ValueError, IndexError):
-                continue
+            # Parse data line
+            if current_sliced_columns:
+                # For sliced vectors, use tab separator and extract only sliced columns
+                values_raw = line.split('\t')
+                
+                # Extract values from sliced columns only
+                values = []
+                has_data = False
+                for col_idx, col_name in current_sliced_columns:
+                    if col_idx < len(values_raw):
+                        val = values_raw[col_idx].strip()
+                        if val:
+                            has_data = True
+                        values.append(val)
+                    else:
+                        values.append("")
+                
+                # Skip rows where all sliced columns are empty
+                if not has_data:
+                    continue
+                
+                # Determine time value
+                if time_column_index is not None:
+                    # This table has a time column
+                    try:
+                        time_val = float(values[time_column_index])
+                        # Cache this time for tables without time column
+                        if len(last_time_values) <= current_table_row_index:
+                            last_time_values.append(time_val)
+                    except (ValueError, IndexError):
+                        continue
+                else:
+                    # This table doesn't have time column, use cached time from same row index
+                    if current_table_row_index < len(last_time_values):
+                        time_val = last_time_values[current_table_row_index]
+                    else:
+                        # No cached time for this row, skip
+                        continue
+                
+                current_table_row_index += 1
+            else:
+                # For regular output, use whitespace splitting
+                values = line.split()
+                
+                if len(values) < len(current_headers):
+                    continue
+                
+                # Extract time value
+                if time_column_index is None:
+                    continue
+                    
+                try:
+                    time_val = float(values[time_column_index])
+                except (ValueError, IndexError):
+                    continue
 
             if time_val not in signal_data:
                 signal_data[time_val] = {}
 
+            # Extract signal values
             for i, header in enumerate(current_headers):
                 if i == 0 or header.lower() == "index":
                     continue  # Skip Index column
                 if header.lower() == "time":
                     continue  # Skip time column (already extracted)
-                if i < len(values):
+                if i < len(values) and values[i]:
                     try:
                         signal_val = float(values[i])
                         signal_data[time_val][header] = signal_val
