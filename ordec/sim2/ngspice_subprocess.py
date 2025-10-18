@@ -477,10 +477,10 @@ class NgspiceSubprocess(NgspiceBase):
                 self._last_vector_length = current_len
                 return
 
-            # Check if any vector names contain brackets (like device currents)
-            # These can't be used in slicing syntax, so fall back to print_all with filtering
-            has_brackets_in_names = any('[' in vec and not vec.endswith(']') for vec in vectors_to_print)
-            if has_brackets_in_names:
+            # Check if any vector names contain brackets that aren't at the end
+            # Vectors like @r1[i] are fine (bracket at end), but complex names aren't
+            has_brackets = any('[' in vec and not vec.endswith(']') for vec in vectors_to_print)
+            if has_brackets:
                 if self.debug:
                     print(f"DEBUG: Detected vectors with brackets in names, using print all with filtering")
                 # Fallback to print all and filter by index
@@ -552,7 +552,6 @@ class NgspiceSubprocess(NgspiceBase):
         current_headers = None
         using_sliced_vectors = False
         time_column_index = None
-        sliced_columns = []  # List of (index, cleaned_name) for sliced columns
 
         if self.debug:
             print(f"DEBUG: Parsing {len(lines)} lines")
@@ -579,51 +578,38 @@ class NgspiceSubprocess(NgspiceBase):
                     print(f"DEBUG: Raw header line: {repr(line)}")
                     print(f"DEBUG: Raw headers: {raw_headers}")
 
-                # Identify which columns are sliced vs full vectors
-                sliced_columns = []  # List of (index, cleaned_name) for sliced columns
                 cleaned_headers = []
                 has_sliced_time = False
-                
-                for i, header in enumerate(raw_headers):
+                for header in raw_headers:
                     # Check if this is a sliced vector (contains [N,M] at the END)
                     if re.search(r'\[\d+,\d+\]$', header):
                         using_sliced_vectors = True
-                        # Remove slice notation: e.g., "time[5,9]" -> "time"
-                        cleaned = re.sub(r'\[\d+,\d+\]$', '', header)
-                        sliced_columns.append((i, cleaned))
-                        if cleaned == "time":
+                        # Check if this is sliced time
+                        if header.startswith("time["):
                             has_sliced_time = True
+                    # Remove slice notation: e.g., "a[5,9]" -> "a", "time[5,9]" -> "time"
                     cleaned = re.sub(r'\[\d+,\d+\]$', '', header)
                     cleaned_headers.append(cleaned)
 
-                if self.debug and using_sliced_vectors:
-                    print(f"DEBUG: Sliced columns: {sliced_columns}")
+                # When using sliced vectors, ngspice creates duplicate columns:
+                # "Index time a[5,9] time[5,9] ..." where the second "time" is wrong
+                # We need to skip the first "time" column (at index 1) when slicing
+                if using_sliced_vectors and has_sliced_time and len(cleaned_headers) > 2:
+                    # Remove the second column (first "time") which is just row numbers
+                    cleaned_headers = [cleaned_headers[0]] + cleaned_headers[2:]
 
-                # When using sliced vectors, we ONLY want data from the sliced columns
-                # Ignore Index and full vector columns (they contain irrelevant data)
-                if using_sliced_vectors:
-                    # Build header list from only sliced columns
-                    current_headers = tuple([name for _, name in sliced_columns])
-                    # Find time index in the sliced headers
-                    time_column_index = None
-                    for i, name in enumerate(current_headers):
-                        if name.lower() == "time":
-                            time_column_index = i
-                            break
-                else:
-                    # No slicing, use all columns as before
-                    current_headers = tuple(cleaned_headers)
-                    # Find time column index
-                    time_column_index = None
-                    for i in range(len(current_headers) - 1, -1, -1):
-                        if current_headers[i].lower() == "time":
-                            time_column_index = i
-                            break
+                current_headers = tuple(cleaned_headers)
+
+                # Find which column contains "time" - prefer the LAST occurrence
+                # because when we have sliced vectors, the last "time" is the correct one
+                time_column_index = None
+                for i in range(len(current_headers) - 1, -1, -1):
+                    if current_headers[i].lower() == "time":
+                        time_column_index = i
+                        break
 
                 if self.debug:
                     print(f"DEBUG: Headers: {current_headers}, time_idx={time_column_index}, sliced={using_sliced_vectors}")
-                    if using_sliced_vectors:
-                        print(f"DEBUG: Will extract columns at indices: {[idx for idx, _ in sliced_columns]}")
 
                 continue
 
@@ -632,21 +618,9 @@ class NgspiceSubprocess(NgspiceBase):
 
             values = line.split()
 
-            # When using sliced vectors, extract only values from sliced columns
-            if using_sliced_vectors:
-                # Extract values at the positions of sliced columns
-                sliced_values = []
-                for col_idx, _ in sliced_columns:
-                    if col_idx < len(values):
-                        sliced_values.append(values[col_idx])
-                    else:
-                        sliced_values.append("")
-                values = sliced_values
-                
-                # Skip rows where sliced columns are empty
-                # (these are rows outside the sliced range)
-                if not values[0] or all(v == "" for v in values):
-                    continue
+            # Adjust values array when using sliced vectors (skip column 1)
+            if using_sliced_vectors and len(values) > 1:
+                values = [values[0]] + values[2:]
 
             if len(values) < len(current_headers):
                 continue
