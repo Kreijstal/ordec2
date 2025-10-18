@@ -479,43 +479,11 @@ class NgspiceSubprocess(NgspiceBase):
                 self._last_vector_length = current_len
                 return
 
-            # Check if any vector names contain brackets that make slicing complex
-            # Device current vectors like @ri2[i] can cause ngspice instability when sliced repeatedly
-            # Fall back to print_all with filtering for any vectors with brackets
-            def has_brackets(vec):
-                return '[' in vec
+            # Ngspice CAN slice vectors with brackets like @r1[i] using syntax @r1[i][5,9]
+            # The parser correctly handles this sliced output format
+            # No need to fall back to print_all for bracketed vectors
             
-            has_any_brackets = any(has_brackets(vec) for vec in vectors_to_print)
-            if has_any_brackets:
-                if self.debug:
-                    print(f"DEBUG: Detected vectors with complex hierarchical brackets, using print all with filtering")
-                # Fallback to print all and filter by index
-                all_output = list(self.print_all())
-                filtered_output = []
-                in_data = False
-                start_idx = self._last_vector_length
-                for line in all_output:
-                    if "Index" in line and "time" in line:
-                        filtered_output.append(line)
-                        in_data = True
-                        continue
-                    if in_data and line.strip():
-                        parts = line.split()
-                        if len(parts) > 0:
-                            try:
-                                idx = int(parts[0])
-                                if idx >= start_idx:
-                                    filtered_output.append(line)
-                            except (ValueError, IndexError):
-                                # Not a data line, include it anyway
-                                filtered_output.append(line)
-                self._last_vector_length = current_len
-                yield from filtered_output
-                return
-
             # Build print command with slicing for only new values
-            # For circuits with device currents ending in [i], use simple single-batch approach
-            # Batching (splitting into multiple print commands) appears to cause ngspice instability
             start_idx = self._last_vector_length
             end_idx = current_len - 1
 
