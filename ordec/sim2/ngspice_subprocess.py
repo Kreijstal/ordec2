@@ -417,7 +417,6 @@ class NgspiceSubprocess(NgspiceBase):
         self._last_vector_length = 0
         self._is_running = False
         self._print_commands_count = 0  # Reset for new simulation
-        self._simulation_count += 1  # Increment simulation counter
         
         # Try to reset ngspice state before starting new simulation
         try:
