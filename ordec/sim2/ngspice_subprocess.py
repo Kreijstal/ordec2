@@ -492,49 +492,58 @@ class NgspiceSubprocess(NgspiceBase):
 
             # Check if total header length would exceed ngspice limit
             # If so, fall back to print_all with filtering
+            # Separate time from other vectors
+            time_vectors = [vec for vec in vectors_to_print if vec.lower() == 'time']
+            other_vectors = [vec for vec in vectors_to_print if vec.lower() != 'time']
+            
+            # Split vectors into batches to avoid header truncation
+            # Target: keep header line under 60 characters to be very safe
+            # ngspice truncates at ~80 chars but we need margin for spacing
+            max_header_len = 60
+            base_len = len("Index   time            ")  # ~24 chars
+            
+            batches = []
+            current_batch = []
+            current_header_len = base_len
+            
+            # Account for time vector with slice notation
             time_slice_str = f"[{start_idx},{end_idx}]"
-            header_parts = ["Index", "time" + time_slice_str]
-            for vec in vectors_to_print:
-                if vec.lower() != 'time':
-                    header_parts.append(vec + time_slice_str)
+            time_with_slice_len = len("time") + len(time_slice_str) + 2  # +2 for spacing
+            current_header_len += time_with_slice_len
             
-            estimated_header_len = sum(len(p) + 2 for p in header_parts)  # +2 for spacing
+            for vec in other_vectors:
+                vec_with_slice_len = len(vec) + len(time_slice_str) + 2
+                if current_header_len + vec_with_slice_len > max_header_len and current_batch:
+                    # Batch is full, save it and start new one
+                    batches.append(current_batch)
+                    current_batch = [vec]
+                    current_header_len = base_len + time_with_slice_len + vec_with_slice_len
+                else:
+                    current_batch.append(vec)
+                    current_header_len += vec_with_slice_len
             
-            if estimated_header_len > 75:  # ngspice truncates around 80 chars
-                if self.debug:
-                    print(f"DEBUG: Header too long ({estimated_header_len} chars), using print all with filtering")
-                # Fallback to print all and filter by index
-                all_output = list(self.print_all())
-                filtered_output = []
-                in_data = False
-                for line in all_output:
-                    if "Index" in line and "time" in line:
-                        filtered_output.append(line)
-                        in_data = True
-                        continue
-                    if in_data and line.strip():
-                        parts = line.split()
-                        if len(parts) > 0:
-                            try:
-                                idx = int(parts[0])
-                                if idx >= start_idx:
-                                    filtered_output.append(line)
-                            except (ValueError, IndexError):
-                                # Not a data line, include it anyway
-                                filtered_output.append(line)
-                self._last_vector_length = current_len
-                yield from filtered_output
-                return
+            # Add remaining batch
+            if current_batch:
+                batches.append(current_batch)
             
-            # Simple single print command (no batching)
-            sliced_vectors = [f"{vec}[{start_idx},{end_idx}]" for vec in vectors_to_print]
-            print_cmd = f"print col {' '.join(sliced_vectors)}"
+            if self.debug and len(batches) > 1:
+                print(f"DEBUG: Split into {len(batches)} batches to avoid header truncation")
             
-            if self.debug:
-                print(f"DEBUG: Single print command: {print_cmd[:100]}")
+            # Execute print command for each batch and collect all output
+            all_output_lines = []
+            for batch_idx, batch in enumerate(batches):
+                # Always include time in each batch
+                vectors_in_batch = time_vectors + batch
+                sliced_vectors = [f"{vec}[{start_idx},{end_idx}]" for vec in vectors_in_batch]
+                print_cmd = f"print col {' '.join(sliced_vectors)}"
+                
+                if self.debug and len(batches) > 1:
+                    print(f"DEBUG: Batch {batch_idx+1}/{len(batches)}: {len(batch)} vectors")
+                
+                result = self.command(print_cmd)
+                all_output_lines.extend(result.split("\n"))
             
-            result = self.command(print_cmd)
-            yield from result.split("\n")
+            yield from all_output_lines
 
             # Update the last vector length
             self._last_vector_length = current_len
