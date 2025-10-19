@@ -371,7 +371,7 @@ class NgspiceSubprocess(NgspiceBase):
             self.command("destroy all")
             # Reset simulation state
             self.command("reset")
-        except Exception as e:
+        except (NgspiceError, NgspiceFatalError) as e:
             if self.debug:
                 print(f"DEBUG: Could not reset ngspice state: {e}")
 
@@ -909,14 +909,9 @@ class NgspiceSubprocess(NgspiceBase):
                         # Step succeeded, simulation continues
                         if self.debug:
                             print(f"DEBUG: Step command succeeded")
-                    except NgspiceError as e:
+                    except (NgspiceError, NgspiceFatalError) as e:
                         if self.debug:
                             print(f"DEBUG: Step command failed: {e}")
-                        simulation_complete = True
-                        break
-                    except Exception as e:
-                        if self.debug:
-                            print(f"DEBUG: Unexpected error in step: {e}")
                         simulation_complete = True
                         break
 
