@@ -410,8 +410,9 @@ class NgspiceSubprocess(NgspiceBase):
         """Run async transient simulation using chunked approach with stop after and step commands."""
 
         # Check if we need to restart the ngspice process
-        # This prevents state accumulation after many simulations
+        # This prevents state accumulation after many simulations  
         if self._simulation_count >= self.RESTART_AFTER_N_SIMULATIONS:
+            print(f"[RESTART] Restarting ngspice after {self._simulation_count} simulations (threshold={self.RESTART_AFTER_N_SIMULATIONS})")
             if self.debug:
                 print(f"[debug] Restarting ngspice after {self._simulation_count} simulations")
             try:
@@ -438,6 +439,8 @@ class NgspiceSubprocess(NgspiceBase):
         self._is_running = False
         self._print_commands_count = 0  # Reset for new simulation
         self._simulation_count += 1  # Increment simulation counter
+        
+        print(f"[TRAN_ASYNC] Starting simulation #{self._simulation_count}, PID={self.p.pid if hasattr(self, 'p') and self.p else 'none'}")
         
         # Try to reset ngspice state before starting new simulation
         try:
