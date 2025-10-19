@@ -364,6 +364,16 @@ class NgspiceSubprocess(NgspiceBase):
         self._last_vector_length = 0
         self._is_running = False
         self._print_commands_count = 0  # Reset for new simulation
+        
+        # Try to reset ngspice state before starting new simulation
+        try:
+            # Destroy any existing plots to free memory
+            self.command("destroy all")
+            # Reset simulation state
+            self.command("reset")
+        except Exception as e:
+            if self.debug:
+                print(f"DEBUG: Could not reset ngspice state: {e}")
 
         self._async_thread = threading.Thread(
             target=self._run_chunked_simulation,
@@ -888,14 +898,25 @@ class NgspiceSubprocess(NgspiceBase):
                 # Continue simulation with step command (only if not halted)
                 if not self._async_halt_requested:
                     try:
+                        # Check if process is still alive before issuing step command
+                        if self.p.poll() is not None:
+                            if self.debug:
+                                print(f"DEBUG: ngspice process terminated unexpectedly")
+                            simulation_complete = True
+                            break
+                        
                         step_output = self.command(f"step {chunk_steps}")
                         # Step succeeded, simulation continues
-                        # We'll check for completion based on current_time below
                         if self.debug:
                             print(f"DEBUG: Step command succeeded")
                     except NgspiceError as e:
                         if self.debug:
                             print(f"DEBUG: Step command failed: {e}")
+                        simulation_complete = True
+                        break
+                    except Exception as e:
+                        if self.debug:
+                            print(f"DEBUG: Unexpected error in step: {e}")
                         simulation_complete = True
                         break
 
