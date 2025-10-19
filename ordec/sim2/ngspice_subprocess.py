@@ -412,9 +412,8 @@ class NgspiceSubprocess(NgspiceBase):
         # Check if we need to restart the ngspice process
         # This prevents state accumulation after many simulations  
         if self._simulation_count >= self.RESTART_AFTER_N_SIMULATIONS:
-            print(f"[RESTART] Restarting ngspice after {self._simulation_count} simulations (threshold={self.RESTART_AFTER_N_SIMULATIONS})")
             if self.debug:
-                print(f"[debug] Restarting ngspice after {self._simulation_count} simulations")
+                print(f"[debug] Restarting ngspice after {self._simulation_count} simulations (threshold={self.RESTART_AFTER_N_SIMULATIONS})")
             try:
                 self._restart_ngspice_process()
             except Exception as e:
@@ -440,7 +439,8 @@ class NgspiceSubprocess(NgspiceBase):
         self._print_commands_count = 0  # Reset for new simulation
         self._simulation_count += 1  # Increment simulation counter
         
-        print(f"[TRAN_ASYNC] Starting simulation #{self._simulation_count}, PID={self.p.pid if hasattr(self, 'p') and self.p else 'none'}")
+        if self.debug:
+            print(f"[debug] Starting simulation #{self._simulation_count}, PID={self.p.pid if hasattr(self, 'p') and self.p else 'none'}")
         
         # Try to reset ngspice state before starting new simulation
         try:
