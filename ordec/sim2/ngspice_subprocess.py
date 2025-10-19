@@ -42,7 +42,7 @@ class NgspiceSubprocess(NgspiceBase):
     # Restart ngspice after this many simulations to prevent state accumulation
     # Set conservatively to 5 to ensure restart happens before issues occur
     # This is especially important for tests that run many simulations with batching
-    RESTART_AFTER_N_SIMULATIONS = 5
+    RESTART_AFTER_N_SIMULATIONS = 1
     
     @classmethod
     @contextmanager
