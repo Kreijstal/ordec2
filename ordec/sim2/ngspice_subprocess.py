@@ -38,11 +38,6 @@ NgspiceVector = namedtuple(
 
 
 class NgspiceSubprocess(NgspiceBase):
-    # Class-level setting for restart threshold
-    # Restart ngspice after this many simulations to prevent state accumulation
-    # Set conservatively to 5 to ensure restart happens before issues occur
-    # This is especially important for tests that run many simulations with batching
-    RESTART_AFTER_N_SIMULATIONS = 2
     
     @classmethod
     @contextmanager
@@ -100,9 +95,6 @@ class NgspiceSubprocess(NgspiceBase):
         self._last_vector_length = 0
         self._is_running = False
         self._print_commands_count = 0  # Track number of print commands executed
-        self._simulation_count = 0  # Track number of simulations run
-        self._netlist_content = None  # Cache netlist for restart
-        self._no_auto_gnd = True  # Cache netlist settings
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -408,18 +400,6 @@ class NgspiceSubprocess(NgspiceBase):
         fallback_sampling_ratio: int = 100,
     ) -> "queue.Queue[dict]":
         """Run async transient simulation using chunked approach with stop after and step commands."""
-
-        # Check if we need to restart the ngspice process
-        # This prevents state accumulation after many simulations
-        if self._simulation_count >= self.RESTART_AFTER_N_SIMULATIONS:
-            if self.debug:
-                print(f"[debug] Restarting ngspice after {self._simulation_count} simulations")
-            try:
-                self._restart_ngspice_process()
-            except Exception as e:
-                if self.debug:
-                    print(f"[debug] Warning: Could not restart ngspice process: {e}")
-                # Continue anyway - the simulation might still work
 
         tstep_r = R(tstep)
         tstop_r = R(tstop) if tstop is not None else None
