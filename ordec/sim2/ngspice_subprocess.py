@@ -38,6 +38,12 @@ NgspiceVector = namedtuple(
 
 
 class NgspiceSubprocess(NgspiceBase):
+    # Class-level setting for restart threshold
+    # Restart ngspice after this many simulations to prevent state accumulation
+    # Set conservatively to 5 to ensure restart happens before issues occur
+    # This is especially important for tests that run many simulations with batching
+    RESTART_AFTER_N_SIMULATIONS = 5
+    
     @classmethod
     @contextmanager
     def launch(cls, debug: bool):
@@ -64,7 +70,8 @@ class NgspiceSubprocess(NgspiceBase):
                 print(f"[debug] Process started with PID: {p.pid}")
 
             try:
-                yield cls(p, debug=debug, cwd=Path(cwd_str))
+                instance = cls(p, debug=debug, cwd=Path(cwd_str), ngspice_exe=ngspice_exe)
+                yield instance
             finally:
                 if debug:
                     print(f"[debug] Cleaning up process {p.pid}")
@@ -78,10 +85,11 @@ class NgspiceSubprocess(NgspiceBase):
                 except (ProcessLookupError, BrokenPipeError, TimeoutError):
                     pass  # Process may have already terminated
 
-    def __init__(self, p: Popen, debug: bool, cwd: Path):
+    def __init__(self, p: Popen, debug: bool, cwd: Path, ngspice_exe: str = "ngspice"):
         self.p: Popen[bytes] = p
         self.debug = debug
         self.cwd = cwd
+        self.ngspice_exe = ngspice_exe
         self._async_queue: Optional[queue.Queue] = None
         self._async_thread: Optional[threading.Thread] = None
         self._async_lock = threading.Lock()
@@ -92,6 +100,9 @@ class NgspiceSubprocess(NgspiceBase):
         self._last_vector_length = 0
         self._is_running = False
         self._print_commands_count = 0  # Track number of print commands executed
+        self._simulation_count = 0  # Track number of simulations run
+        self._netlist_content = None  # Cache netlist for restart
+        self._no_auto_gnd = True  # Cache netlist settings
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -168,6 +179,10 @@ class NgspiceSubprocess(NgspiceBase):
         return out_flat
 
     def load_netlist(self, netlist: str, no_auto_gnd: bool = True):
+        # Cache netlist for potential restart
+        self._netlist_content = netlist
+        self._no_auto_gnd = no_auto_gnd
+        
         netlist_fn = self.cwd / "netlist.sp"
         netlist_fn.write_text(netlist)
         if self.debug:
@@ -177,6 +192,52 @@ class NgspiceSubprocess(NgspiceBase):
         # Set output width to avoid header wrapping in vector slicing output
         self.command("set width 200")
         check_errors(self.command(f"source {netlist_fn}"))
+
+    def _restart_ngspice_process(self):
+        """Restart the ngspice subprocess to clear accumulated state."""
+        if self.debug:
+            print(f"[debug] Restarting ngspice process (old PID: {self.p.pid})")
+        
+        # Terminate the old process
+        try:
+            self.p.send_signal(signal.SIGTERM)
+            if self.p.stdin:
+                self.p.stdin.close()
+            if self.p.stdout:
+                # Drain stdout to avoid blocking
+                try:
+                    self.p.stdout.read()
+                except:
+                    pass
+            self.p.wait(timeout=1.0)
+        except (ProcessLookupError, BrokenPipeError, TimeoutError):
+            # Process may have already terminated
+            pass
+        
+        # Start a new process
+        new_p: Popen[bytes] = Popen(
+            [self.ngspice_exe, "-p"], 
+            stdin=PIPE, 
+            stdout=PIPE, 
+            stderr=STDOUT, 
+            cwd=str(self.cwd)
+        )
+        
+        if self.debug:
+            print(f"[debug] New ngspice process started with PID: {new_p.pid}")
+        
+        # Update the process handle
+        self.p = new_p
+        
+        # Reset counters
+        self._print_commands_count = 0
+        self._simulation_count = 0
+        
+        # Reload the netlist if we have one cached
+        if self._netlist_content:
+            if self.debug:
+                print(f"[debug] Reloading netlist after restart")
+            self.load_netlist(self._netlist_content, self._no_auto_gnd)
 
     def print_all(self) -> Iterator[str]:
         """
@@ -348,6 +409,18 @@ class NgspiceSubprocess(NgspiceBase):
     ) -> "queue.Queue[dict]":
         """Run async transient simulation using chunked approach with stop after and step commands."""
 
+        # Check if we need to restart the ngspice process
+        # This prevents state accumulation after many simulations
+        if self._simulation_count >= self.RESTART_AFTER_N_SIMULATIONS:
+            if self.debug:
+                print(f"[debug] Restarting ngspice after {self._simulation_count} simulations")
+            try:
+                self._restart_ngspice_process()
+            except Exception as e:
+                if self.debug:
+                    print(f"[debug] Warning: Could not restart ngspice process: {e}")
+                # Continue anyway - the simulation might still work
+
         tstep_r = R(tstep)
         tstop_r = R(tstop) if tstop is not None else None
 
@@ -364,6 +437,7 @@ class NgspiceSubprocess(NgspiceBase):
         self._last_vector_length = 0
         self._is_running = False
         self._print_commands_count = 0  # Reset for new simulation
+        self._simulation_count += 1  # Increment simulation counter
         
         # Try to reset ngspice state before starting new simulation
         try:
