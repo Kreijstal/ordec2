@@ -674,11 +674,12 @@ class NgspiceSubprocess(NgspiceBase):
         current_headers = None
         current_sliced_columns = None  # List of (col_index, clean_name) for sliced vectors
         time_column_index = None
-        last_time_values = []  # Store time values from the table that has time column
+        last_time_values = {}  # Map from row_index to time_value - used for cross-table row matching
         current_table_row_index = 0  # Track which row we're on in the current table
+        global_row_index = 0  # Track absolute row index across all tables for cache key
 
         if self.debug:
-            print(f"DEBUG: Parsing {len(lines)} lines")
+            print(f"DEBUG: Parsing {len(lines)} lines, last_time_values cache starts empty")
 
         for line in lines:
             line = line.strip()
@@ -698,9 +699,9 @@ class NgspiceSubprocess(NgspiceBase):
                 import re
                 raw_headers = line.split()
 
-                if self.debug and len(raw_headers) > 0 and '[' in raw_headers[-1]:
-                    print(f"DEBUG: Raw header line: {repr(line)}")
-                    print(f"DEBUG: Raw headers: {raw_headers}")
+                if self.debug:
+                    print(f"DEBUG: New table at global_row={global_row_index}. Headers: {raw_headers[:5]}..."  # Just first 5
+                          + (f" (total {len(raw_headers)} headers)" if len(raw_headers) > 5 else ""))
 
                 # Find sliced columns (those with [N,M] notation at the end)
                 # Also detect incomplete slicing (headers ending with [N or [N,) and skip them
@@ -737,7 +738,6 @@ class NgspiceSubprocess(NgspiceBase):
                 else:
                     # Regular output (no slicing)
                     current_sliced_columns = None
-                    last_time_values = []  # Reset when switching to regular output
                     # Remove any slice notation from headers (shouldn't be any, but just in case)
                     current_headers = tuple([re.sub(r'\[\d+,\d+\]$', '', h) for h in raw_headers])
                     
@@ -782,20 +782,26 @@ class NgspiceSubprocess(NgspiceBase):
                     # This table has a time column
                     try:
                         time_val = float(values[time_column_index])
-                        # Cache this time for tables without time column
-                        if len(last_time_values) <= current_table_row_index:
-                            last_time_values.append(time_val)
+                        # Cache this time using global row index for tables without time column
+                        last_time_values[global_row_index] = time_val
+                        if self.debug and global_row_index < 3:
+                            print(f"DEBUG: Global row {global_row_index}: time={time_val}, caching")
                     except (ValueError, IndexError):
                         continue
                 else:
-                    # This table doesn't have time column, use cached time from same row index
-                    if current_table_row_index < len(last_time_values):
-                        time_val = last_time_values[current_table_row_index]
+                    # This table doesn't have time column, use cached time from same global row index
+                    if global_row_index in last_time_values:
+                        time_val = last_time_values[global_row_index]
+                        if self.debug and global_row_index < 3:
+                            print(f"DEBUG: Global row {global_row_index}: using cached time={time_val}")
                     else:
                         # No cached time for this row, skip
+                        if self.debug and global_row_index < 3:
+                            print(f"DEBUG: Global row {global_row_index}: NO cached time, skipping")
                         continue
                 
                 current_table_row_index += 1
+                global_row_index += 1
             else:
                 # For regular output, use whitespace splitting
                 values = line.split()
@@ -832,7 +838,7 @@ class NgspiceSubprocess(NgspiceBase):
                         continue
 
         if self.debug:
-            print(f"DEBUG: Parsed {len(signal_data)} unique time points")
+            print(f"DEBUG: Parsed {len(signal_data)} unique time points, last_time_values has {len(last_time_values)} entries")
 
         # Enqueue data points - no need to filter duplicates when using vector slicing
         for time_val, time_signals in sorted(signal_data.items()):
