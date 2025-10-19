@@ -94,7 +94,7 @@ class NgspiceSubprocess(NgspiceBase):
         self._data_points_sent = 0
         self._last_vector_length = 0
         self._is_running = False
-        self._print_commands_count = 0  # Track number of print commands executed
+
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -171,10 +171,6 @@ class NgspiceSubprocess(NgspiceBase):
         return out_flat
 
     def load_netlist(self, netlist: str, no_auto_gnd: bool = True):
-        # Cache netlist for potential restart
-        self._netlist_content = netlist
-        self._no_auto_gnd = no_auto_gnd
-        
         netlist_fn = self.cwd / "netlist.sp"
         netlist_fn.write_text(netlist)
         if self.debug:
@@ -185,51 +181,7 @@ class NgspiceSubprocess(NgspiceBase):
         self.command("set width 200")
         check_errors(self.command(f"source {netlist_fn}"))
 
-    def _restart_ngspice_process(self):
-        """Restart the ngspice subprocess to clear accumulated state."""
-        if self.debug:
-            print(f"[debug] Restarting ngspice process (old PID: {self.p.pid})")
-        
-        # Terminate the old process
-        try:
-            self.p.send_signal(signal.SIGTERM)
-            if self.p.stdin:
-                self.p.stdin.close()
-            if self.p.stdout:
-                # Drain stdout to avoid blocking
-                try:
-                    self.p.stdout.read()
-                except:
-                    pass
-            self.p.wait(timeout=1.0)
-        except (ProcessLookupError, BrokenPipeError, TimeoutError):
-            # Process may have already terminated
-            pass
-        
-        # Start a new process
-        new_p: Popen[bytes] = Popen(
-            [self.ngspice_exe, "-p"], 
-            stdin=PIPE, 
-            stdout=PIPE, 
-            stderr=STDOUT, 
-            cwd=str(self.cwd)
-        )
-        
-        if self.debug:
-            print(f"[debug] New ngspice process started with PID: {new_p.pid}")
-        
-        # Update the process handle
-        self.p = new_p
-        
-        # Reset counters
-        self._print_commands_count = 0
-        self._simulation_count = 0
-        
-        # Reload the netlist if we have one cached
-        if self._netlist_content:
-            if self.debug:
-                print(f"[debug] Reloading netlist after restart")
-            self.load_netlist(self._netlist_content, self._no_auto_gnd)
+
 
     def print_all(self) -> Iterator[str]:
         """
