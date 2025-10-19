@@ -38,6 +38,12 @@ NgspiceVector = namedtuple(
 
 
 class NgspiceSubprocess(NgspiceBase):
+    # Class-level setting for restart threshold
+    # Restart ngspice after this many simulations to prevent state accumulation
+    # Set conservatively to 5 to ensure restart happens before issues occur
+    # This is especially important for tests that run many simulations with batching
+    RESTART_AFTER_N_SIMULATIONS = 2
+    
     @classmethod
     @contextmanager
     def launch(cls, debug: bool):
@@ -64,7 +70,8 @@ class NgspiceSubprocess(NgspiceBase):
                 print(f"[debug] Process started with PID: {p.pid}")
 
             try:
-                yield cls(p, debug=debug, cwd=Path(cwd_str))
+                instance = cls(p, debug=debug, cwd=Path(cwd_str), ngspice_exe=ngspice_exe)
+                yield instance
             finally:
                 if debug:
                     print(f"[debug] Cleaning up process {p.pid}")
@@ -78,10 +85,11 @@ class NgspiceSubprocess(NgspiceBase):
                 except (ProcessLookupError, BrokenPipeError, TimeoutError):
                     pass  # Process may have already terminated
 
-    def __init__(self, p: Popen, debug: bool, cwd: Path):
+    def __init__(self, p: Popen, debug: bool, cwd: Path, ngspice_exe: str = "ngspice"):
         self.p: Popen[bytes] = p
         self.debug = debug
         self.cwd = cwd
+        self.ngspice_exe = ngspice_exe
         self._async_queue: Optional[queue.Queue] = None
         self._async_thread: Optional[threading.Thread] = None
         self._async_lock = threading.Lock()
@@ -92,6 +100,9 @@ class NgspiceSubprocess(NgspiceBase):
         self._last_vector_length = 0
         self._is_running = False
         self._print_commands_count = 0  # Track number of print commands executed
+        self._simulation_count = 0  # Track number of simulations run
+        self._netlist_content = None  # Cache netlist for restart
+        self._no_auto_gnd = True  # Cache netlist settings
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -168,6 +179,10 @@ class NgspiceSubprocess(NgspiceBase):
         return out_flat
 
     def load_netlist(self, netlist: str, no_auto_gnd: bool = True):
+        # Cache netlist for potential restart
+        self._netlist_content = netlist
+        self._no_auto_gnd = no_auto_gnd
+        
         netlist_fn = self.cwd / "netlist.sp"
         netlist_fn.write_text(netlist)
         if self.debug:
@@ -177,6 +192,52 @@ class NgspiceSubprocess(NgspiceBase):
         # Set output width to avoid header wrapping in vector slicing output
         self.command("set width 200")
         check_errors(self.command(f"source {netlist_fn}"))
+
+    def _restart_ngspice_process(self):
+        """Restart the ngspice subprocess to clear accumulated state."""
+        if self.debug:
+            print(f"[debug] Restarting ngspice process (old PID: {self.p.pid})")
+        
+        # Terminate the old process
+        try:
+            self.p.send_signal(signal.SIGTERM)
+            if self.p.stdin:
+                self.p.stdin.close()
+            if self.p.stdout:
+                # Drain stdout to avoid blocking
+                try:
+                    self.p.stdout.read()
+                except:
+                    pass
+            self.p.wait(timeout=1.0)
+        except (ProcessLookupError, BrokenPipeError, TimeoutError):
+            # Process may have already terminated
+            pass
+        
+        # Start a new process
+        new_p: Popen[bytes] = Popen(
+            [self.ngspice_exe, "-p"], 
+            stdin=PIPE, 
+            stdout=PIPE, 
+            stderr=STDOUT, 
+            cwd=str(self.cwd)
+        )
+        
+        if self.debug:
+            print(f"[debug] New ngspice process started with PID: {new_p.pid}")
+        
+        # Update the process handle
+        self.p = new_p
+        
+        # Reset counters
+        self._print_commands_count = 0
+        self._simulation_count = 0
+        
+        # Reload the netlist if we have one cached
+        if self._netlist_content:
+            if self.debug:
+                print(f"[debug] Reloading netlist after restart")
+            self.load_netlist(self._netlist_content, self._no_auto_gnd)
 
     def print_all(self) -> Iterator[str]:
         """
@@ -348,6 +409,18 @@ class NgspiceSubprocess(NgspiceBase):
     ) -> "queue.Queue[dict]":
         """Run async transient simulation using chunked approach with stop after and step commands."""
 
+        # Check if we need to restart the ngspice process
+        # This prevents state accumulation after many simulations
+        if self._simulation_count >= self.RESTART_AFTER_N_SIMULATIONS:
+            if self.debug:
+                print(f"[debug] Restarting ngspice after {self._simulation_count} simulations")
+            try:
+                self._restart_ngspice_process()
+            except Exception as e:
+                if self.debug:
+                    print(f"[debug] Warning: Could not restart ngspice process: {e}")
+                # Continue anyway - the simulation might still work
+
         tstep_r = R(tstep)
         tstop_r = R(tstop) if tstop is not None else None
 
@@ -364,9 +437,7 @@ class NgspiceSubprocess(NgspiceBase):
         self._last_vector_length = 0
         self._is_running = False
         self._print_commands_count = 0  # Reset for new simulation
-        
-        if self.debug:
-            print(f"[debug] Starting simulation, PID={self.p.pid if hasattr(self, 'p') and self.p else 'none'}")
+        self._simulation_count += 1  # Increment simulation counter
         
         # Try to reset ngspice state before starting new simulation
         try:
@@ -603,12 +674,11 @@ class NgspiceSubprocess(NgspiceBase):
         current_headers = None
         current_sliced_columns = None  # List of (col_index, clean_name) for sliced vectors
         time_column_index = None
-        last_time_values = {}  # Map from row_index to time_value - used for cross-table row matching
+        last_time_values = []  # Store time values from the table that has time column
         current_table_row_index = 0  # Track which row we're on in the current table
-        global_row_index = 0  # Track absolute row index across all tables for cache key
 
         if self.debug:
-            print(f"DEBUG: Parsing {len(lines)} lines, last_time_values cache starts empty")
+            print(f"DEBUG: Parsing {len(lines)} lines")
 
         for line in lines:
             line = line.strip()
@@ -628,9 +698,9 @@ class NgspiceSubprocess(NgspiceBase):
                 import re
                 raw_headers = line.split()
 
-                if self.debug:
-                    print(f"DEBUG: New table at global_row={global_row_index}. Headers: {raw_headers[:5]}..."  # Just first 5
-                          + (f" (total {len(raw_headers)} headers)" if len(raw_headers) > 5 else ""))
+                if self.debug and len(raw_headers) > 0 and '[' in raw_headers[-1]:
+                    print(f"DEBUG: Raw header line: {repr(line)}")
+                    print(f"DEBUG: Raw headers: {raw_headers}")
 
                 # Find sliced columns (those with [N,M] notation at the end)
                 # Also detect incomplete slicing (headers ending with [N or [N,) and skip them
@@ -667,6 +737,7 @@ class NgspiceSubprocess(NgspiceBase):
                 else:
                     # Regular output (no slicing)
                     current_sliced_columns = None
+                    last_time_values = []  # Reset when switching to regular output
                     # Remove any slice notation from headers (shouldn't be any, but just in case)
                     current_headers = tuple([re.sub(r'\[\d+,\d+\]$', '', h) for h in raw_headers])
                     
@@ -711,26 +782,20 @@ class NgspiceSubprocess(NgspiceBase):
                     # This table has a time column
                     try:
                         time_val = float(values[time_column_index])
-                        # Cache this time using global row index for tables without time column
-                        last_time_values[global_row_index] = time_val
-                        if self.debug and global_row_index < 3:
-                            print(f"DEBUG: Global row {global_row_index}: time={time_val}, caching")
+                        # Cache this time for tables without time column
+                        if len(last_time_values) <= current_table_row_index:
+                            last_time_values.append(time_val)
                     except (ValueError, IndexError):
                         continue
                 else:
-                    # This table doesn't have time column, use cached time from same global row index
-                    if global_row_index in last_time_values:
-                        time_val = last_time_values[global_row_index]
-                        if self.debug and global_row_index < 3:
-                            print(f"DEBUG: Global row {global_row_index}: using cached time={time_val}")
+                    # This table doesn't have time column, use cached time from same row index
+                    if current_table_row_index < len(last_time_values):
+                        time_val = last_time_values[current_table_row_index]
                     else:
                         # No cached time for this row, skip
-                        if self.debug and global_row_index < 3:
-                            print(f"DEBUG: Global row {global_row_index}: NO cached time, skipping")
                         continue
                 
                 current_table_row_index += 1
-                global_row_index += 1
             else:
                 # For regular output, use whitespace splitting
                 values = line.split()
@@ -767,7 +832,7 @@ class NgspiceSubprocess(NgspiceBase):
                         continue
 
         if self.debug:
-            print(f"DEBUG: Parsed {len(signal_data)} unique time points, last_time_values has {len(last_time_values)} entries")
+            print(f"DEBUG: Parsed {len(signal_data)} unique time points")
 
         # Enqueue data points - no need to filter duplicates when using vector slicing
         for time_val, time_signals in sorted(signal_data.items()):
