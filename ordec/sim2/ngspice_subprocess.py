@@ -91,6 +91,7 @@ class NgspiceSubprocess(NgspiceBase):
         self._data_points_sent = 0
         self._last_vector_length = 0
         self._is_running = False
+        self._print_commands_count = 0  # Track number of print commands executed
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
@@ -362,6 +363,7 @@ class NgspiceSubprocess(NgspiceBase):
         self._data_points_sent = 0
         self._last_vector_length = 0
         self._is_running = False
+        self._print_commands_count = 0  # Reset for new simulation
 
         self._async_thread = threading.Thread(
             target=self._run_chunked_simulation,
@@ -497,9 +499,10 @@ class NgspiceSubprocess(NgspiceBase):
             other_vectors = [vec for vec in vectors_to_print if vec.lower() != 'time']
             
             # Split vectors into batches to avoid header truncation
-            # Target: keep header line under 60 characters to be very safe
+            # Target: keep header line under 50 characters to be very safe
             # ngspice truncates at ~80 chars but we need margin for spacing
-            max_header_len = 60
+            # Be more conservative after empirical testing shows issues at 60
+            max_header_len = 50
             base_len = len("Index   time            ")  # ~24 chars
             
             batches = []
@@ -537,11 +540,22 @@ class NgspiceSubprocess(NgspiceBase):
                 sliced_vectors = [f"{vec}[{start_idx},{end_idx}]" for vec in vectors_in_batch]
                 print_cmd = f"print col {' '.join(sliced_vectors)}"
                 
-                if self.debug and len(batches) > 1:
-                    print(f"DEBUG: Batch {batch_idx+1}/{len(batches)}: {len(batch)} vectors")
+                if self.debug:
+                    print(f"DEBUG: Batch {batch_idx+1}/{len(batches)}: {len(batch)} vectors, header_len~{len(print_cmd)}")
+                    print(f"DEBUG: Command: {print_cmd[:100]}...")
                 
                 result = self.command(print_cmd)
+                self._print_commands_count += 1
+                
+                if self.debug:
+                    lines_in_batch = len(result.split("\n"))
+                    print(f"DEBUG: Batch {batch_idx+1} returned {lines_in_batch} lines of output")
+                
                 all_output_lines.extend(result.split("\n"))
+            
+            if self.debug:
+                print(f"DEBUG: Total batches={len(batches)}, total output lines={len(all_output_lines)}")
+                print(f"DEBUG: Total print commands this session: {self._print_commands_count}")
             
             yield from all_output_lines
 
