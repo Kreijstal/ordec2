@@ -655,7 +655,6 @@ class NgspiceSubprocess(NgspiceBase):
         time_column_index = None
         last_time_values = {}  # Dict mapping row index to time value - shared across all tables in this chunk
         current_table_row_index = 0  # Track which row we're on in the current table
-        global_row_offset = 0  # Track the starting row index for the current table
 
         if self.debug:
             print(f"DEBUG: Parsing {len(lines)} lines")
@@ -671,13 +670,13 @@ class NgspiceSubprocess(NgspiceBase):
 
             # Check for header line (contains "Index" and "time")
             if "Index" in line and "time" in line:
-                # When starting a new table (batch), update the global row offset
-                # so that tables without time columns read from the correct cached time values
-                if current_table_row_index > 0:
-                    global_row_offset += current_table_row_index
-                
-                # Reset table-specific row counter for new table
+                # When starting a new table (batch), reset the row counter
+                # All batches in a single chunk represent the SAME simulation time points
+                # so they should all use the same row indices (0, 1, 2, ...)
                 current_table_row_index = 0
+                
+                if self.debug:
+                    print(f"DEBUG: New table (batch) starting")
                 
                 # Parse headers
                 import re
@@ -762,22 +761,25 @@ class NgspiceSubprocess(NgspiceBase):
                 if not has_data:
                     continue
                 
-                # Determine time value using global row index
-                global_row_index = global_row_offset + current_table_row_index
+                # Determine time value using row index
+                # All batches in a single chunk use the same row indices
+                row_index = current_table_row_index
                 if time_column_index is not None:
-                    # This table has a time column
+                    # This table (batch) has a time column
                     try:
                         time_val = float(values[time_column_index])
-                        # Cache this time for tables without time column, using global row index
-                        last_time_values[global_row_index] = time_val
+                        # Cache this time for tables without time column
+                        last_time_values[row_index] = time_val
                     except (ValueError, IndexError):
                         continue
                 else:
-                    # This table doesn't have time column, use cached time from same global row index
-                    if global_row_index in last_time_values:
-                        time_val = last_time_values[global_row_index]
+                    # This table (batch) doesn't have time column, use cached time from same row index
+                    if row_index in last_time_values:
+                        time_val = last_time_values[row_index]
                     else:
                         # No cached time for this row, skip
+                        if self.debug:
+                            print(f"DEBUG: No cached time for row {row_index}, skipping")
                         continue
                 
                 current_table_row_index += 1
