@@ -1,9 +1,7 @@
-import os
-from pathlib import Path
 import ordec.layout
 from ordec.core import *
 
-ihp_path = Path(os.getenv("ORDEC_PDK_IHP_SG13G2"))
+ihp_path = ordec.layout.get_ihp_pdk_path()
 
 @generate_func
 def layout_xor() -> Layout:

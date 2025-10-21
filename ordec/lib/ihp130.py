@@ -12,17 +12,27 @@ from ..ord1.implicit_processing import schematic_routing
 from ..sim2.ngspice_common import NgspiceError
 from . import generic_mos
 
-def _get_ihp_pdk_path():
-    """Helper function to determine the IHP PDK path."""
+
+@public
+def get_ihp_pdk_path() -> Path:
+    """Return the path to the bundled IHP SG13G2 PDK.
+
+    The location can be overridden by the ``ORDEC_PDK_IHP_SG13G2`` environment
+    variable. When the variable is not set, the repository copy under
+    ``ihp-sg13g2`` is used.  The returned path may be used by consumers that
+    need access to PDK assets without replicating the fallback logic.
+    """
+
     env_var_path = os.getenv("ORDEC_PDK_IHP_SG13G2")
     if env_var_path:
         return Path(env_var_path)
-    else:
-        _MODULE_DIR = Path(__file__).parent
-        _PROJECT_ROOT = _MODULE_DIR.parent.parent
-        return _PROJECT_ROOT / "ihp-sg13g2"
 
-_IHP_PDK_PATH = _get_ihp_pdk_path()
+    module_dir = Path(__file__).parent
+    project_root = module_dir.parent.parent
+    return project_root / "ihp-sg13g2"
+
+
+_IHP_PDK_PATH = get_ihp_pdk_path()
 _IHP_SG13G2_RELATIVE_MODEL_PATH = "libs.tech/ngspice/models/cornerMOSlv.lib"
 _IHP_SG13G2_MODEL_FULL_PATH = (_IHP_PDK_PATH / _IHP_SG13G2_RELATIVE_MODEL_PATH).resolve()
 
