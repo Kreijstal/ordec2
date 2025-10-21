@@ -27,8 +27,7 @@ def get_ihp_pdk_path() -> Path:
     if env_var_path:
         return Path(env_var_path)
 
-    module_dir = Path(__file__).parent
-    project_root = module_dir.parent.parent
+    project_root = Path(__file__).resolve().parents[2]
     return project_root / "ihp-sg13g2"
 
 
