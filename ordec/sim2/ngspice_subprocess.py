@@ -677,7 +677,7 @@ class NgspiceSubprocess(NgspiceBase):
                 current_time = self._async_current_time
 
                 if samples:
-                    current_time = max(sample.get("time", current_time) or current_time for sample in samples)
+                    current_time = max(current_time, max(s['time'] for s in samples))
                     self._emit_samples(samples, tstop)
 
                 # Continue simulation with step command (only if not halted)
