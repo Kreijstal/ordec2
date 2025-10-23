@@ -494,7 +494,9 @@ class NgspiceSubprocess(NgspiceBase):
 
         try:
             data = np.loadtxt(self._wrdata_file)
-        except OSError:
+        except OSError as e:
+            if self.debug:
+                print(f"[ngspice-subprocess] OSError loading '{self._wrdata_file}': {e}")
             return []
 
         if data.size == 0:
