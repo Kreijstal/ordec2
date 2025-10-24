@@ -623,7 +623,6 @@ class NgspiceSubprocess(NgspiceBase):
             else:
                 chunk_steps = 10
 
-            # Start the transient analysis with "stop after" to pause after initial steps
             try:
                 self.command(f"stop after {chunk_steps}")
                 tran_cmd = f"tran {tstep_str} {tstop if tstop else tstep * 1000}"
@@ -636,10 +635,8 @@ class NgspiceSubprocess(NgspiceBase):
                     self._async_queue.put(error_data)
                 return
 
-            # Main simulation loop
             simulation_complete = False
             while not simulation_complete:
-                # Check if we should halt (wait for resume)
                 if self._async_halt_requested:
                     with self._async_lock:
                         self._is_running = False
@@ -647,26 +644,20 @@ class NgspiceSubprocess(NgspiceBase):
                     if self.debug:
                         print(f"DEBUG: Simulation halted, waiting for resume...")
 
-                    # Wait for resume signal (with timeout to check for complete halt)
                     resumed = self._async_resume_event.wait(timeout=0.5)
 
-                    # If still halted after timeout, check if we should exit
                     with self._async_lock:
                         if self._async_halt_requested and not resumed:
-                            # Still halted, continue waiting
                             continue
                         elif self._async_halt_requested:
-                            # Halt requested but no resume, exit
                             if self.debug:
                                 print(f"DEBUG: Exiting due to halt without resume")
                             break
                         else:
-                            # Resumed!
                             self._is_running = True
                             if self.debug:
                                 print(f"DEBUG: Simulation resumed")
 
-                # Get current simulation data using wrdata (only new values)
                 try:
                     samples = self._fetch_new_samples_via_wrdata()
                 except NgspiceError as exc:
@@ -680,13 +671,10 @@ class NgspiceSubprocess(NgspiceBase):
                     current_time = max(current_time, max(s['time'] for s in samples))
                     self._emit_samples(samples, tstop)
 
-                # Continue simulation with step command (only if not halted)
                 if not self._async_halt_requested:
                     try:
                         step_output = self.command(f"step {chunk_steps}")
-                        # Check if simulation ended naturally (ngspice completed the tran)
                         if "simulation interrupted" not in step_output.lower():
-                            # Simulation completed - get final data
                             if self.debug:
                                 print("DEBUG: Simulation completed, getting final data")
                             try:
@@ -704,11 +692,9 @@ class NgspiceSubprocess(NgspiceBase):
                         simulation_complete = True
                         break
 
-                # Check if we've reached the target time (as a secondary check)
                 if tstop is not None and current_time >= tstop * 0.9999:
                     if self.debug:
                         print(f"DEBUG: Reached target time {current_time} >= {tstop}")
-                    # Get any remaining data
                     try:
                         final_samples = self._fetch_new_samples_via_wrdata()
                         if final_samples:

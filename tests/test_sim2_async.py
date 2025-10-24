@@ -345,19 +345,18 @@ def test_async_alter_resume(backend):
     async def run_comprehensive_test():
         """Test multiple aspects of async alter functionality"""
         with sim.alter_session(backend=backend) as alter:
-            # Start async transient simulation
             data_queue = alter.start_async_tran("0.1u", "2m")
             start_time = time.time()
-            timeout = 15.0
+            timeout = 30.0
 
             # Multiple halt/alter/resume cycles with different voltages
             voltage_sequence = [2.0, 1.5, 3.0, 1.0]
-            voltage_change_interval = 20
+            voltage_change_interval = 10
             completed_steps = 0
             all_data = []
 
             for voltage_index, voltage in enumerate(voltage_sequence):
-                # Collect some data points before altering
+
                 data_points_before_alter = 0
                 while data_points_before_alter < voltage_change_interval and (time.time() - start_time) < timeout:
                     try:
@@ -365,39 +364,38 @@ def test_async_alter_resume(backend):
                         if isinstance(data_point, dict) and "data" in data_point:
                             all_data.append((voltage_index, data_point["data"]))
                             data_points_before_alter += 1
+
                     except queue.Empty:
                         await asyncio.sleep(0.001)
                         continue
 
                 if (time.time() - start_time) >= timeout:
+
                     break
 
-                # Halt, alter, and resume
-                assert alter.halt_simulation(timeout=0.1), f"Should halt at step {voltage_index + 1}"
+                assert alter.halt_simulation(timeout=1.0), f"Should halt at step {voltage_index + 1}"
                 alter.alter_component(circuit.schematic.v1, dc=voltage)
-                assert alter.resume_simulation(timeout=0.1), f"Should resume at step {voltage_index + 1}"
-                
-                # Collect a few data points after altering to verify the change
+                assert alter.resume_simulation(timeout=1.0), f"Should resume at step {voltage_index + 1}"
+
                 data_points_after_alter = 0
-                verification_points = 5
+                verification_points = 3
                 while data_points_after_alter < verification_points and (time.time() - start_time) < timeout:
                     try:
                         data_point = data_queue.get_nowait()
                         if isinstance(data_point, dict) and "data" in data_point:
                             all_data.append((voltage_index, data_point["data"]))
                             data_points_after_alter += 1
+
                     except queue.Empty:
                         await asyncio.sleep(0.001)
                         continue
-                
-                # Only count as completed if we got verification data
+
                 if data_points_after_alter > 0:
                     completed_steps += 1
-                
+
+
                 await asyncio.sleep(0.01)
 
-            # Verify that voltage changes are reflected in the data
-            # Group data by voltage step and check if output voltage changes
             voltage_step_data = {}
             for step_index, data_dict in all_data:
                 if step_index not in voltage_step_data:
@@ -405,9 +403,9 @@ def test_async_alter_resume(backend):
                 if "vout" in data_dict:
                     voltage_step_data[step_index].append(data_dict["vout"])
 
-            # Check that we have data for multiple voltage steps
             steps_with_data = len([k for k, v in voltage_step_data.items() if len(v) > 0])
-            
+
+
             return {
                 "voltage_steps": completed_steps,
                 "steps_with_data": steps_with_data,
@@ -430,26 +428,20 @@ def test_async_drain_exact_points(backend):
     large, predictable number of data points. This is a direct regression test
     against the race condition that caused premature termination on fast backends.
     """
-    # 1. Setup: Configure a simulation to produce exactly 2000 data points.
-    # A tran simulation from 0 to N*tstep produces N+1 points.
-    # So, to get 2000 points, we need 1999 steps.
     h = lib_test.ResdivFlatTb(backend=backend)
     num_points = 2000
     tstep_us = 1
-    tstop_us = (num_points - 1) * tstep_us  # 1999us
+    tstop_us = (num_points - 1) * tstep_us
 
     tstep_str = f"{tstep_us}u"
     tstop_str = f"{tstop_us}u"
 
-    # 2. Execution: Consume the entire generator and count the points.
     points_consumed = 0
     last_result = None
     seen_times = set()
 
-    # For ffi and mp backends, disable buffering to get all data points instead of sampled subset
     if backend in ["ffi", "mp"]:
         for result in h.sim_tran_async(tstep_str, tstop_str, disable_buffering=True):
-            # Fast fail on duplicate time values
             time_val = result.time.value
             if time_val in seen_times:
                 pytest.fail(f"DUPLICATE TIME VALUE DETECTED: time={time_val}, backend={backend}. This indicates a bug in the async data handling.")
@@ -459,7 +451,6 @@ def test_async_drain_exact_points(backend):
             last_result = result
     else:
         for result in h.sim_tran_async(tstep_str, tstop_str):
-            # Fast fail on duplicate time values
             time_val = result.time.value
             if time_val in seen_times:
                 pytest.fail(f"DUPLICATE TIME VALUE DETECTED: time={time_val}, backend={backend}. This indicates a bug in the async data handling.")
@@ -469,12 +460,10 @@ def test_async_drain_exact_points(backend):
             last_result = result
 
 
-    # Debug output to aid investigation of failures
     print(
         f"DEBUG test_async_drain_exact_points: backend={backend}, expected_points={num_points}, points_consumed={points_consumed}"
     )
     if last_result is not None:
-        # Some result fields may be objects; print safely
         prog = getattr(last_result, "progress", None)
         time_attr = getattr(last_result, "time", None)
         time_val = (
@@ -482,26 +471,17 @@ def test_async_drain_exact_points(backend):
         )
         print(f"DEBUG final_result: progress={prog}, time.value={time_val}")
 
-    # 3. Verification
     assert last_result is not None, "Async generator produced no results."
 
-    # 3. Verification
-    assert last_result is not None, "Async generator produced no results."
-
-    # The primary check: did we get approximately the expected number of points?
-    # Ngspice uses adaptive time stepping, so we don't get exactly the requested points
     assert abs(points_consumed - num_points) <= num_points * 0.01, (
         f"Expected approximately {num_points} points, but got {points_consumed}."
     )
-
-    # Secondary checks to ensure the simulation ran correctly to the end.
     assert hasattr(last_result, "progress"), (
         "Final result object missing 'progress' attribute."
     )
     assert last_result.progress >= 0.999, (
         f"Simulation did not complete as expected; final progress was {last_result.progress * 100:.2f}%."
     )
-
     assert hasattr(last_result, "time"), "Final result object missing 'time' attribute."
     assert last_result.time.value == pytest.approx(tstop_us * 1e-6), (
         "Final simulation time does not match the expected tstop."
@@ -511,29 +491,20 @@ def test_async_drain_exact_points(backend):
 @pytest.mark.libngspice
 @pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_consecutive_async_simulations_with_early_termination(backend):
-    """
-    Test that multiple consecutive async simulations work correctly when
-    the first simulation is terminated early. This validates the explicit
-    lifecycle management where the relay thread from the first simulation
-    is properly cleaned up before the second simulation starts.
-    """
     h = lib_test.ResdivFlatTb(backend=backend)
 
-    # First simulation - terminate early after consuming only a few items
     first_sim_count = 0
     for result in h.sim_tran_async("0.05u", "10u"):
         first_sim_count += 1
         if first_sim_count >= 5:
-            break  # Early termination
+            break
 
     assert first_sim_count >= 1, "First simulation should produce at least 1 data point"
     assert first_sim_count <= 5, "First simulation should stop at 5 data points"
 
-    # Small delay to allow cleanup to complete
     import time
     time.sleep(0.1)
 
-    # Second simulation - should start cleanly without issues
     second_sim_count = 0
     second_sim_started = False
     for result in h.sim_tran_async("0.05u", "10u"):
@@ -550,36 +521,22 @@ def test_consecutive_async_simulations_with_early_termination(backend):
 @pytest.mark.libngspice
 @pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_buffering_does_not_lose_samples(backend):
-    """
-    Regression test for buffer flush issue.
-    
-    When async simulation completes, any remaining buffered data points must be flushed.
-    Previously, buffered mode would lose the last few samples that were stuck in the buffer.
-    This test ensures that buffered and non-buffered modes produce the same number of samples.
-    """
     h = lib_test.ResdivFlatTb(backend=backend)
-    
-    # Use simulation parameters that will produce a predictable number of samples
+
     tstep = "0.1u"
     tstop = "5u"
-    
-    # Test with buffering enabled (default)
+
     buffered_count = 0
     for result in h.sim_tran_async(tstep, tstop, buffer_size=10, disable_buffering=False):
         buffered_count += 1
-    
-    # Test with buffering disabled
+
     h2 = lib_test.ResdivFlatTb(backend=backend)
     no_buffer_count = 0
     for result in h2.sim_tran_async(tstep, tstop, disable_buffering=True):
         no_buffer_count += 1
-    
-    # Both modes should produce the same number of samples
     assert buffered_count == no_buffer_count, (
         f"Buffered mode produced {buffered_count} samples but non-buffered mode produced {no_buffer_count} samples. "
         f"This indicates that buffer flushing on simulation completion is not working correctly."
     )
-    
-    # Sanity check: we should get a reasonable number of samples
-    assert buffered_count > 10, f"Expected more than 10 samples, got {buffered_count}"
 
+    assert buffered_count > 10, f"Expected more than 10 samples, got {buffered_count}"

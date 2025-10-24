@@ -570,7 +570,6 @@ class NgspiceFFI(NgspiceBase):
 
     def _data_fallback_handler(self):
         """Handle data retrieval when callbacks don't work (e.g.,Complex models like SKY130 with savecurrents option)"""
-        # Wait for simulation to complete
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as fallback_executor:
 
             def check_completion_status():
