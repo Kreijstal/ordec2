@@ -32,11 +32,18 @@ from .ngspice_common import (
     SignalKind,
     SignalArray,
     NgspiceBase,
+    NgspiceConfigError,
 )
 
 NgspiceVector = namedtuple(
     "NgspiceVector", ["name", "quantity", "dtype", "length", "rest"]
 )
+
+_DEBUG_PREFIX = "[ngspice-cli]"
+
+
+def _debug(message: str) -> None:
+    print(f"{_DEBUG_PREFIX} {message}")
 
 
 class NgspiceSubprocess(NgspiceBase):
@@ -51,25 +58,25 @@ class NgspiceSubprocess(NgspiceBase):
             ngspice_exe = "ngspice"
 
         if debug:
-            print(f"[debug] Using ngspice executable: {ngspice_exe}")
-            print(f"[debug] Platform: {sys.platform}")
+            _debug(f"Using ngspice executable: {ngspice_exe}")
+            _debug(f"Platform: {sys.platform}")
 
         with tempfile.TemporaryDirectory() as cwd_str:
             if debug:
-                print(f"[debug] Starting ngspice with command: {[ngspice_exe, '-p']}")
-                print(f"[debug] Working directory: {cwd_str}")
+                _debug(f"Starting ngspice with command: {[ngspice_exe, '-p']}")
+                _debug(f"Working directory: {cwd_str}")
 
             p: Popen[bytes] = Popen(
                 [ngspice_exe, "-p"], stdin=PIPE, stdout=PIPE, stderr=STDOUT, cwd=cwd_str
             )
             if debug:
-                print(f"[debug] Process started with PID: {p.pid}")
+                _debug(f"Process started with PID: {p.pid}")
 
             try:
                 yield cls(p, debug=debug, cwd=Path(cwd_str))
             finally:
                 if debug:
-                    print(f"[debug] Cleaning up process {p.pid}")
+                    _debug(f"Cleaning up process {p.pid}")
                 try:
                     p.send_signal(signal.SIGTERM)
                     if p.stdin:
@@ -97,38 +104,53 @@ class NgspiceSubprocess(NgspiceBase):
         self._wrdata_last_row = 0
         self._wrdata_vectors: list[str] = []
 
+        self._configure_precision()
+
+    def _configure_precision(self) -> None:
+        """Configure ngspice numeric precision settings."""
+
+        try:
+            if self.debug:
+                _debug("Configuring ngspice numeric precision")
+            # Increase the number of digits printed in tabular outputs.
+            self.command("set numdgt=16")
+            # Ensure computed scalar values use the same precision.
+            self.command("set csnumprec=16")
+        except NgspiceError as exc:
+            raise NgspiceConfigError("Failed to configure ngspice precision") from exc
+
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
         if self.p.poll() is not None:
             raise NgspiceFatalError("ngspice process has terminated unexpectedly.")
         if self.debug:
-            print(f"[debug] sending command to ngspice ({self.p.pid}): {command}")
+            _debug(f"Sending command to ngspice ({self.p.pid}): {command}")
 
         if self.p.stdin:
             # Send the command followed by echo marker on separate lines
             full_input = f"{command}\necho FINISHED\n"
             if self.debug:
-                print(f"[debug] Writing to stdin: {repr(full_input)}")
+                _debug(f"Writing to stdin: {repr(full_input)}")
             self.p.stdin.write(full_input.encode("ascii"))
             self.p.stdin.flush()
             if self.debug:
-                print(f"[debug] Stdin flushed")
+                _debug(f"Stdin flushed")
 
         out = []
         line_count = 0
         while True:
             if self.debug:
-                print(f"[debug] Waiting for line {line_count}...")
+                _debug(f"Waiting for line {line_count}...")
             l = self.p.stdout.readline()
             line_count += 1
             if self.debug:
-                print(f"[debug] received line {line_count} from ngspice: {repr(l)}")
+                _debug(f"Received line {line_count} from ngspice: {repr(l)}")
 
             # Check for EOF first
             if l == b"":  # readline() returns the empty byte string only on EOF.
                 out_flat = "".join(out)
                 if self.debug:
-                    print(f"[debug] EOF detected, ngspice terminated")
+                    _debug(f"EOF detected, ngspice terminated")
                 raise NgspiceFatalError(f"ngspice terminated abnormally:\n{out_flat}")
 
             # Strip ALL occurrences of "ngspice 123 -> " from the line on all platforms
@@ -138,8 +160,8 @@ class NgspiceSubprocess(NgspiceBase):
                 if not m:
                     break
                 if self.debug:
-                    print(
-                        f"[debug] Stripping prompt from line: {repr(l)} -> {repr(m.group(1))}"
+                    _debug(
+                        f"Stripping prompt from line: {repr(l)} -> {repr(m.group(1))}"
                     )
                 stripped_content = m.group(1)
                 # Preserve the newline if the original line had one
@@ -151,7 +173,7 @@ class NgspiceSubprocess(NgspiceBase):
             # Check for our finish marker
             if l.rstrip() == b"FINISHED":
                 if self.debug:
-                    print(f"[debug] Found FINISHED marker, breaking")
+                    _debug(f"Found FINISHED marker, breaking")
                 break
 
             # Skip empty lines that are just prompts
@@ -160,12 +182,12 @@ class NgspiceSubprocess(NgspiceBase):
 
             out.append(l.decode("ascii"))
             if self.debug:
-                print(f"[debug] Added to output: {repr(l.decode('ascii'))}")
+                _debug(f"Added to output: {repr(l.decode('ascii'))}")
 
         out_flat = "".join(out)
         if self.debug:
-            print(
-                f"[debug] received result from ngspice ({self.p.pid}): {repr(out_flat)}"
+            _debug(
+                f"Received result from ngspice ({self.p.pid}): {repr(out_flat)}"
             )
 
         check_errors(out_flat)
@@ -175,7 +197,7 @@ class NgspiceSubprocess(NgspiceBase):
         netlist_fn = self.cwd / "netlist.sp"
         netlist_fn.write_text(netlist)
         if self.debug:
-            print(f"Written netlist: \n {netlist}")
+            _debug(f"Written netlist: \n {netlist}")
         if no_auto_gnd:
             self.command("set no_auto_gnd")
         check_errors(self.command(f"source {netlist_fn}"))
@@ -402,7 +424,7 @@ class NgspiceSubprocess(NgspiceBase):
             self._is_running = True
 
         if self.debug:
-            print("DEBUG: Resume requested")
+            _debug("Resume requested")
 
         return True
 
@@ -496,7 +518,9 @@ class NgspiceSubprocess(NgspiceBase):
             data = np.loadtxt(self._wrdata_file)
         except OSError as e:
             if self.debug:
-                print(f"[ngspice-subprocess] OSError loading '{self._wrdata_file}': {e}")
+                _debug(
+                    f"OSError loading '{self._wrdata_file}': {e}"
+                )
             return []
 
         if data.size == 0:
@@ -565,7 +589,7 @@ class NgspiceSubprocess(NgspiceBase):
             with self._async_lock:
                 if self._async_halt_requested:
                     if self.debug:
-                        print("DEBUG: Halt requested before enqueuing samples")
+                        _debug("Halt requested before enqueuing samples")
                     break
 
             data_point = {
@@ -585,8 +609,8 @@ class NgspiceSubprocess(NgspiceBase):
 
                 if isinstance(value, complex):
                     if abs(value.imag) > 1e-18 and self.debug:
-                        print(
-                            f"DEBUG: Dropping imaginary component for {name}: {value.imag}"
+                        _debug(
+                            f"Dropping imaginary component for {name}: {value.imag}"
                         )
                     value = float(value.real)
 
@@ -642,7 +666,7 @@ class NgspiceSubprocess(NgspiceBase):
                         self._is_running = False
 
                     if self.debug:
-                        print(f"DEBUG: Simulation halted, waiting for resume...")
+                        _debug(f"Simulation halted, waiting for resume...")
 
                     resumed = self._async_resume_event.wait(timeout=0.5)
 
@@ -651,18 +675,18 @@ class NgspiceSubprocess(NgspiceBase):
                             continue
                         elif self._async_halt_requested:
                             if self.debug:
-                                print(f"DEBUG: Exiting due to halt without resume")
+                                _debug(f"Exiting due to halt without resume")
                             break
                         else:
                             self._is_running = True
                             if self.debug:
-                                print(f"DEBUG: Simulation resumed")
+                                _debug(f"Simulation resumed")
 
                 try:
                     samples = self._fetch_new_samples_via_wrdata()
                 except NgspiceError as exc:
                     if self.debug:
-                        print(f"DEBUG: wrdata command failed: {exc}")
+                        _debug(f"wrdata command failed: {exc}")
                     samples = []
 
                 current_time = self._async_current_time
@@ -676,32 +700,32 @@ class NgspiceSubprocess(NgspiceBase):
                         step_output = self.command(f"step {chunk_steps}")
                         if "simulation interrupted" not in step_output.lower():
                             if self.debug:
-                                print("DEBUG: Simulation completed, getting final data")
+                                _debug("Simulation completed, getting final data")
                             try:
                                 final_samples = self._fetch_new_samples_via_wrdata()
                                 if final_samples:
                                     self._emit_samples(final_samples, tstop)
                             except Exception as e:
                                 if self.debug:
-                                    print(f"DEBUG: Error getting final data: {e}")
+                                    _debug(f"Error getting final data: {e}")
                             simulation_complete = True
                             break
                     except NgspiceError as e:
                         if self.debug:
-                            print(f"DEBUG: Step command failed: {e}")
+                            _debug(f"Step command failed: {e}")
                         simulation_complete = True
                         break
 
                 if tstop is not None and current_time >= tstop * 0.9999:
                     if self.debug:
-                        print(f"DEBUG: Reached target time {current_time} >= {tstop}")
+                        _debug(f"Reached target time {current_time} >= {tstop}")
                     try:
                         final_samples = self._fetch_new_samples_via_wrdata()
                         if final_samples:
                             self._emit_samples(final_samples, tstop)
                     except Exception as e:
                         if self.debug:
-                            print(f"DEBUG: Error getting final data: {e}")
+                            _debug(f"Error getting final data: {e}")
                     simulation_complete = True
                     break
 
@@ -712,18 +736,18 @@ class NgspiceSubprocess(NgspiceBase):
 
             if not self._async_halt_requested:
                 if self.debug:
-                    print("DEBUG: Simulation completed normally")
+                    _debug("Simulation completed normally")
                 self._async_queue.put({"status": "completed"})
             else:
                 if self.debug:
-                    print("DEBUG: Simulation halted by request")
+                    _debug("Simulation halted by request")
                 self._async_queue.put({"status": "halted"})
 
         except Exception as e:
             with self._async_lock:
                 self._is_running = False
             if self.debug:
-                print(f"DEBUG: Exception in chunked simulation: {e}")
+                _debug(f"Exception in chunked simulation: {e}")
             error_data = {"error": f"Simulation error: {str(e)}"}
             if self._async_queue:
                 self._async_queue.put(error_data)
