@@ -106,9 +106,7 @@ class NgspiceSubprocess(NgspiceBase):
         try:
             if self.debug:
                 print("[debug] Configuring ngspice numeric precision")
-            # Increase the number of digits printed in tabular outputs.
             self.command("set numdgt=16")
-            # Ensure computed scalar values use the same precision.
             self.command("set csnumprec=16")
         except NgspiceError as exc:
             raise NgspiceConfigError("Failed to configure ngspice precision") from exc
