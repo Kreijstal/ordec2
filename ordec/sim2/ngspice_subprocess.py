@@ -32,6 +32,7 @@ from .ngspice_common import (
     SignalKind,
     SignalArray,
     NgspiceBase,
+    NgspiceConfigError,
 )
 
 NgspiceVector = namedtuple(
@@ -96,6 +97,21 @@ class NgspiceSubprocess(NgspiceBase):
         self._wrdata_file: Optional[Path] = None
         self._wrdata_last_row = 0
         self._wrdata_vectors: list[str] = []
+
+        self._configure_precision()
+
+    def _configure_precision(self) -> None:
+        """Configure ngspice numeric precision settings."""
+
+        try:
+            if self.debug:
+                print("[debug] Configuring ngspice numeric precision")
+            # Increase the number of digits printed in tabular outputs.
+            self.command("set numdgt=16")
+            # Ensure computed scalar values use the same precision.
+            self.command("set csnumprec=16")
+        except NgspiceError as exc:
+            raise NgspiceConfigError("Failed to configure ngspice precision") from exc
 
     def command(self, command: str) -> str:
         """Executes ngspice command and returns string output from ngspice process."""
