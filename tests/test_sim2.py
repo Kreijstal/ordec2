@@ -76,28 +76,18 @@ def test_ngspice_op_no_auto_gnd(backend):
     assert op['a'] == 2.0
     assert op['gnd'] == 1.0
 
-@pytest.mark.parametrize("backend,golden_a,golden_b", [
-    ('subprocess', 0.3333333, 0.6666667),
-    pytest.param('ffi', 0.33333333333333337, 0.6666666666666667, marks=pytest.mark.libngspice),
-    pytest.param('mp', 0.33333333333333337, 0.6666666666666667, marks=pytest.mark.libngspice),
-])
-def test_sim_dc_flat(backend, golden_a, golden_b):
+@pytest.mark.parametrize("backend", sim2_backends)
+def test_sim_dc_flat(backend):
     h = lib_test.ResdivFlatTb(backend=backend).sim_dc
-    # Note: FFI backend has different golden values
-    assert h.a.dc_voltage == golden_a
-    assert h.b.dc_voltage == golden_b
+    assert h.a.dc_voltage == 0.33333333333333337
+    assert h.b.dc_voltage == 0.6666666666666667
 
 
-@pytest.mark.parametrize("backend,golden_r,golden_m", [
-    ('subprocess', 0.3589744, 0.5897436),
-    pytest.param('ffi', 0.3589743589743596, 0.5897435897435901, marks=pytest.mark.libngspice),
-    pytest.param('mp', 0.3589743589743596, 0.5897435897435901, marks=pytest.mark.libngspice),
-])
-def test_sim_dc_hier(backend, golden_r, golden_m):
+@pytest.mark.parametrize("backend", sim2_backends)
+def test_sim_dc_hier(backend):
     h = lib_test.ResdivHierTb(backend=backend).sim_dc
-    # Note: FFI backend has different golden values
-    assert abs(h.r.dc_voltage - golden_r) < 1e-10
-    assert abs(h.I0.I1.m.dc_voltage - golden_m) < 1e-10
+    assert abs(h.r.dc_voltage - 0.3589743589743596) < 1e-10
+    assert abs(h.I0.I1.m.dc_voltage - 0.5897435897435901) < 1e-10
 
 def test_generic_mos_netlister():
     nl = Netlister()
@@ -107,52 +97,32 @@ def test_generic_mos_netlister():
     assert netlist.count('.model nmosgeneric NMOS level=1') == 1
     assert netlist.count('.model pmosgeneric PMOS level=1') == 1
 
-@pytest.mark.parametrize("backend,golden_2,golden_3", [
-    ('subprocess', 0.6837722, 1.683772),
-    pytest.param('ffi', 0.6837722116612965, 1.6837721784225057, marks=pytest.mark.libngspice),
-    pytest.param('mp', 0.6837722116612965, 1.6837721784225057, marks=pytest.mark.libngspice),
-])
-def test_generic_mos_nmos_sourcefollower(backend, golden_2, golden_3):
-    assert lib_test.NmosSourceFollowerTb(vin=R(2), backend=backend).sim_dc.o.dc_voltage == golden_2
-    assert lib_test.NmosSourceFollowerTb(vin=R(3), backend=backend).sim_dc.o.dc_voltage == golden_3
+@pytest.mark.parametrize("backend", sim2_backends)
+def test_generic_mos_nmos_sourcefollower(backend):
+    assert lib_test.NmosSourceFollowerTb(vin=R(2), backend=backend).sim_dc.o.dc_voltage == 0.6837722116612965
+    assert lib_test.NmosSourceFollowerTb(vin=R(3), backend=backend).sim_dc.o.dc_voltage == 1.6837721784225057
 
-@pytest.mark.parametrize("backend,golden_0,golden_2_5,golden_5", [
-    ('subprocess', 5.0, 2.5, 3.13125e-08),
-    pytest.param('ffi', 4.9999999698343345, 2.500000017115547, 3.131249965532494e-08, marks=pytest.mark.libngspice),
-    pytest.param('mp', 4.9999999698343345, 2.500000017115547, 3.131249965532494e-08, marks=pytest.mark.libngspice),
-])
-def test_generic_mos_inv(backend, golden_0, golden_2_5, golden_5):
-    assert lib_test.InvTb(vin=R(0), backend=backend).sim_dc.o.dc_voltage == golden_0
-    assert lib_test.InvTb(vin=R('2.5'), backend=backend).sim_dc.o.dc_voltage == golden_2_5
-    assert lib_test.InvTb(vin=R(5), backend=backend).sim_dc.o.dc_voltage == golden_5
+@pytest.mark.parametrize("backend", sim2_backends)
+def test_generic_mos_inv(backend):
+    assert lib_test.InvTb(vin=R(0), backend=backend).sim_dc.o.dc_voltage == 4.9999999698343345
+    assert lib_test.InvTb(vin=R('2.5'), backend=backend).sim_dc.o.dc_voltage == 2.500000017115547
+    assert lib_test.InvTb(vin=R(5), backend=backend).sim_dc.o.dc_voltage == 3.131249965532494e-08
 
-@pytest.mark.parametrize("backend,golden_0,golden_2_5,golden_5", [
-    ('subprocess', 5.0, 1.980606, 0.00012159),
-    pytest.param('ffi', 4.999999973187308, 1.9806063550640076, 0.00012158997833462999, marks=pytest.mark.libngspice),
-    pytest.param('mp', 4.999999973187308, 1.9806063550640076, 0.00012158997833462999, marks=pytest.mark.libngspice),
-])
-def test_sky_mos_inv(backend, golden_0, golden_2_5, golden_5):
-    assert abs(lib_test.InvSkyTb(vin=R(0), backend=backend).sim_dc.o.dc_voltage - golden_0) < 1e-10
-    assert abs(lib_test.InvSkyTb(vin=R('2.5'), backend=backend).sim_dc.o.dc_voltage - golden_2_5) < 1e-10
-    assert abs(lib_test.InvSkyTb(vin=R(5), backend=backend).sim_dc.o.dc_voltage - golden_5) < 1e-10
+@pytest.mark.parametrize("backend", sim2_backends)
+def test_sky_mos_inv(backend):
+    assert abs(lib_test.InvSkyTb(vin=R(0), backend=backend).sim_dc.o.dc_voltage - 4.999999973187308) < 1e-10
+    assert abs(lib_test.InvSkyTb(vin=R('2.5'), backend=backend).sim_dc.o.dc_voltage - 1.9806063550640076) < 1e-10
+    assert abs(lib_test.InvSkyTb(vin=R(5), backend=backend).sim_dc.o.dc_voltage - 0.00012158997833462999) < 1e-10
 
-@pytest.mark.parametrize("backend,golden", [
-    ('subprocess', 4.999573),
-    pytest.param('ffi', 4.9995727, marks=pytest.mark.libngspice),
-    pytest.param('mp', 4.9995727, marks=pytest.mark.libngspice),
-])
-def test_ihp_mos_inv_vin0(backend, golden):
+@pytest.mark.parametrize("backend", sim2_backends)
+def test_ihp_mos_inv_vin0(backend):
     h_0 = lib_test.InvIhpTb(vin=R(0), backend=backend).sim_dc
-    assert h_0.o.dc_voltage == pytest.approx(golden)
+    assert h_0.o.dc_voltage == pytest.approx(4.999573)
 
-@pytest.mark.parametrize("backend,golden", [
-    ('subprocess', 0.00024556),
-    pytest.param('ffi', 0.00024556, marks=pytest.mark.libngspice),
-    pytest.param('mp', 0.00024556, marks=pytest.mark.libngspice),
-])
-def test_ihp_mos_inv_vin5(backend, golden):
+@pytest.mark.parametrize("backend", sim2_backends)
+def test_ihp_mos_inv_vin5(backend):
     h_5 = lib_test.InvIhpTb(vin=R(5), backend=backend).sim_dc
-    assert h_5.o.dc_voltage == pytest.approx(golden, abs=1e-5)
+    assert h_5.o.dc_voltage == pytest.approx(0.00024556, abs=1e-5)
 
 @pytest.mark.parametrize("backend,golden_a,golden_b,atol", [
     ('subprocess', 0.3333333, 0.6666667, 1e-6),

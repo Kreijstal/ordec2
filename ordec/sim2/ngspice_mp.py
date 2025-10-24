@@ -21,6 +21,12 @@ try:
 except (RuntimeError, AttributeError):
     pass
 
+_DEBUG_PREFIX = "[ngspice-mp]"
+
+
+def _debug(message: str) -> None:
+    print(f"{_DEBUG_PREFIX} {message}")
+
 
 class FFIWorkerProcess:
     """
@@ -147,8 +153,8 @@ class FFIWorkerProcess:
                 ):
                     import traceback
 
-                    print(
-                        f"[ngspice-mp] Worker recv error: {e}\n{traceback.format_exc()}"
+                    _debug(
+                        f"Worker recv error: {e}\n{traceback.format_exc()}"
                     )
                 break
 
@@ -259,7 +265,9 @@ class FFIWorkerProcess:
                             self._relay_thread.join(timeout=2.0)
                             if self._relay_thread.is_alive():
                                 if self.debug:
-                                    print("[ngspice-mp] WARNING: Relay thread did not terminate in time.")
+                                    _debug(
+                                        "WARNING: relay thread did not terminate in time."
+                                    )
 
                         self._relay_thread = None
                         self._relay_shutdown_event.clear()
@@ -394,8 +402,8 @@ class FFIWorkerProcess:
                     and hasattr(self.backend, "debug")
                     and self.backend.debug
                 ):
-                    print(
-                        f"[ngspice-mp] Relay thread error: {e}\n{traceback.format_exc()}"
+                    _debug(
+                        f"Relay thread error: {e}\n{traceback.format_exc()}"
                     )
 
         # Initialize progress tracking
@@ -425,7 +433,7 @@ class NgspiceIsolatedFFI(NgspiceBase):
         p = Process(target=worker.run)
         p.start()
 
-        backend = cls(parent_conn, p, async_queue)
+        backend = cls(parent_conn, p, async_queue, debug=debug)
         try:
             parent_conn.send({"type": "init", "debug": debug})
             response = parent_conn.recv()
@@ -440,7 +448,7 @@ class NgspiceIsolatedFFI(NgspiceBase):
                     backend.close()
                 except Exception as e:
                     if debug:
-                        print(f"[ngspice-mp] Error during backend close: {e}")
+                        _debug(f"Error during backend close: {e}")
             if p.is_alive():
                 p.join(timeout=2)
                 if p.is_alive():
@@ -449,11 +457,12 @@ class NgspiceIsolatedFFI(NgspiceBase):
                     if p.is_alive():
                         p.kill()
 
-    def __init__(self, conn, process, async_queue):
+    def __init__(self, conn, process, async_queue, debug: bool = False):
         self.conn = conn
         self.process = process
         self.async_queue = async_queue
         self._async_simulation_running = False
+        self.debug = debug
 
     def close(self):
         try:
@@ -462,7 +471,7 @@ class NgspiceIsolatedFFI(NgspiceBase):
                     self.stop_async_simulation()
                 except Exception as e:
                     if self.debug:
-                        print(f"[ngspice-mp] Error during stop_async_simulation: {e}")
+                        _debug(f"Error during stop_async_simulation: {e}")
 
             if not self.conn.closed:
                 self.conn.send({"type": "quit"})
@@ -578,16 +587,16 @@ class NgspiceIsolatedFFI(NgspiceBase):
                     self._async_simulation_running = False
                     break
                 except Exception as e:
-                    if hasattr(self, "_debug") and self._debug:
-                        print(f"[ngspice-mp] Async generator error: {e}")
+                    if self.debug:
+                        _debug(f"Async generator error: {e}")
                     break
         finally:
             self._async_simulation_running = False
             try:
                 self._call_worker("stop_async_simulation", timeout=5.0)
             except RuntimeError as e:
-                if hasattr(self, "debug") and self.debug:
-                    print(f"[ngspice-mp] Error during async cleanup: {e}")
+                if self.debug:
+                    _debug(f"Error during async cleanup: {e}")
 
     def command(self, command: str) -> str:
         return self._call_worker("command", command)
@@ -636,7 +645,7 @@ class NgspiceIsolatedFFI(NgspiceBase):
                     try:
                         callback(item)
                     except Exception as e:
-                        print(f"Error in async callback: {e}")
+                        _debug(f"Async callback error: {e}")
                 yield item
 
         return generator_with_callback()
@@ -679,7 +688,7 @@ class NgspiceIsolatedFFI(NgspiceBase):
 
             except Exception as e:
                 if self.debug:
-                    print(f"[ngspice-mp] Error during safe_halt_simulation: {e}")
+                    _debug(f"Error during safe_halt_simulation: {e}")
 
             # Wait before retry (except on last attempt)
             if attempt < max_attempts - 1:
@@ -725,7 +734,7 @@ class NgspiceIsolatedFFI(NgspiceBase):
 
             except Exception as e:
                 if self.debug:
-                    print(f"[ngspice-mp] Error during safe_resume_simulation: {e}")
+                    _debug(f"Error during safe_resume_simulation: {e}")
 
             # Wait before retry (except on last attempt)
             if attempt < max_attempts - 1:

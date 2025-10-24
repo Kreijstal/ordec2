@@ -31,6 +31,11 @@ from .ngspice_common import (
 from ..core import R
 
 
+_DEBUG_PREFIX = "[ngspice-ffi]"
+
+
+def _debug(message: str) -> None:
+    print(f"{_DEBUG_PREFIX} {message}")
 
 
 class NgspiceFFI(NgspiceBase):
@@ -192,7 +197,7 @@ class NgspiceFFI(NgspiceBase):
             msg_str = message.decode("utf-8", errors="ignore").strip()
             self._output_lines.append(msg_str)
             if self.debug:
-                print(f"[ngspice-ffi-out] {msg_str}")
+                _debug(f"Output: {msg_str}")
 
             # Exceptions in C callbacks cause undefined behavior and crashes
             if msg_str.startswith("stderr Error:"):
@@ -210,7 +215,9 @@ class NgspiceFFI(NgspiceBase):
             current_time = time.time()
             self._normal_callbacks_received += 1
             if self.debug:
-                print(f"[ngspice-ffi] Normal callback received: count={self._normal_callbacks_received}, time={current_time}")
+                _debug(
+                    f"Normal callback received: count={self._normal_callbacks_received}, time={current_time}"
+                )
 
             if self._buffer_enabled:
                 data_point = self._process_data_point(vec_data, vec_count, current_time)
@@ -232,8 +239,8 @@ class NgspiceFFI(NgspiceBase):
 
         except Exception:
             if self.debug:
-                print(
-                    f"[ngspice-ffi] Error in _send_data_handler: {traceback.format_exc()}"
+                _debug(
+                    f"Error in _send_data_handler: {traceback.format_exc()}"
                 )
 
         return 0
@@ -292,7 +299,7 @@ class NgspiceFFI(NgspiceBase):
             return
 
         if self.debug:
-            print(f"[ngspice-ffi] Flushing buffer with {len(self._data_buffer)} data points")
+            _debug(f"Flushing buffer with {len(self._data_buffer)} data points")
 
         for data_point in self._data_buffer:
             self._send_data_point(data_point)
@@ -340,15 +347,15 @@ class NgspiceFFI(NgspiceBase):
                 self._simulation_info = simulation_info
 
                 if self.debug:
-                    print(
-                        f"[ngspice-ffi] Simulation initialized: {simulation_info['name']} with {simulation_info['veccount']} vectors"
+                    _debug(
+                        f"Simulation initialized: {simulation_info['name']} with {simulation_info['veccount']} vectors"
                     )
 
         except Exception:
             # NEVER raise exceptions in C callbacks
             if self.debug:
-                print(
-                    f"[ngspice-ffi] Error in _send_init_data_handler: {traceback.format_exc()}"
+                _debug(
+                    f"Error in _send_init_data_handler: {traceback.format_exc()}"
                 )
 
         return 0
@@ -358,23 +365,23 @@ class NgspiceFFI(NgspiceBase):
             self._is_running = not bool(is_not_running)
             if self.debug:
                 status = "stopped" if is_not_running else "started"
-                print(f"[ngspice-ffi] Background thread {status}")
+                _debug(f"Background thread {status}")
 
             if is_not_running and self._buffer_enabled:
                 self._flush_buffer()
 
         except Exception:
             if self.debug:
-                print(
-                    f"[ngspice-ffi] Error in _bg_thread_running_handler: {traceback.format_exc()}"
+                _debug(
+                    f"Error in _bg_thread_running_handler: {traceback.format_exc()}"
                 )
 
         return 0
 
     def _send_stat_handler(self, status: bytes, ident: int, user_data) -> int:
         if self.debug and status:
-            print(
-                f"[ngspice-ffi-stat] {status.decode('utf-8', errors='ignore').strip()}"
+            _debug(
+                f"Status: {status.decode('utf-8', errors='ignore').strip()}"
             )
         return 0
 
@@ -382,7 +389,7 @@ class NgspiceFFI(NgspiceBase):
         self, status: int, unload: bool, quit_upon_exit: bool, ident: int, user_data
     ) -> int:
         if status != 0 and self.debug:
-            print(f"[ngspice-ffi-exit] code {status}")
+            _debug(f"Exit code {status}")
         return status
 
     def command(self, command: str) -> str:
@@ -564,7 +571,7 @@ class NgspiceFFI(NgspiceBase):
         )
         self._fallback_thread.start()
         if self.debug:
-            print(f"[ngspice-ffi] Fallback thread started")
+            _debug("Fallback thread started")
 
         return self._async_data_queue
 
@@ -591,12 +598,14 @@ class NgspiceFFI(NgspiceBase):
 
         if self._normal_callbacks_received > 0:
             if self.debug:
-                print(f"[ngspice-ffi] Fallback handler SKIPPED (normal callbacks received: {self._normal_callbacks_received})")
+                _debug(
+                    f"Fallback handler skipped (normal callbacks received: {self._normal_callbacks_received})"
+                )
             return
 
         self._fallback_executed = True
         if self.debug:
-            print(f"[ngspice-ffi] Fallback handler executing (no normal callbacks received)")
+            _debug("Fallback handler executing (no normal callbacks received)")
 
             try:
                 vector_names = self._get_all_vectors()
@@ -646,8 +655,8 @@ class NgspiceFFI(NgspiceBase):
                             )
 
                         if self.debug:
-                            print(
-                                f"[ngspice-ffi] Fallback retrieved {len(sample_indices)} data points from {num_points} total points"
+                            _debug(
+                                f"Fallback retrieved {len(sample_indices)} data points from {num_points} total points"
                             )
 
             except (OSError, RuntimeError, AttributeError) as e:
@@ -656,7 +665,9 @@ class NgspiceFFI(NgspiceBase):
                     logging.debug("Fallback traceback: %s", traceback.format_exc())
         else:
             if self.debug:
-                print(f"[ngspice-ffi] Fallback handler skipped (normal callbacks received: {self._normal_callbacks_received})")
+                _debug(
+                    f"Fallback handler skipped (normal callbacks received: {self._normal_callbacks_received})"
+                )
 
             def check_completion_status():
                 return not self._is_running
@@ -724,8 +735,8 @@ class NgspiceFFI(NgspiceBase):
                             )
 
                         if self.debug:
-                            print(
-                                f"[ngspice-ffi] Fallback retrieved {len(sample_indices)} data points from {num_points} total points"
+                            _debug(
+                                f"Fallback retrieved {len(sample_indices)} data points from {num_points} total points"
                             )
 
             except (OSError, RuntimeError, AttributeError) as e:
