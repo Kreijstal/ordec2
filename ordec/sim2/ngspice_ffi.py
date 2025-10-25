@@ -890,37 +890,48 @@ class NgspiceFFI(NgspiceBase):
         else:
             return True
 
+    def _read_running_state(self) -> Optional[bool]:
+        try:
+            return bool(self.lib.ngSpice_running())
+        except AttributeError:
+            if self.debug:
+                _debug("ngSpice_running unavailable; assuming simulation halted")
+            return None
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            if self.debug:
+                _debug(f"ngSpice_running check failed: {exc}")
+            return bool(self._is_running)
+
     def safe_halt_simulation(
         self, max_attempts: int = 3, wait_time: float = 0.2
     ) -> bool:
         if not self._is_running:
             return True
 
-        for attempt in range(max_attempts):
+        for _ in range(max_attempts):
             self.command("bg_halt")
             deadline = time.time() + wait_time
 
             while time.time() < deadline:
-                try:
-                    is_running = bool(self.lib.ngSpice_running())
-                except Exception:
-                    is_running = self._is_running
+                is_running = self._read_running_state()
 
-                if not is_running:
+                if is_running is False:
+                    self._is_running = False
+                    return True
+
+                if is_running is None:
                     self._is_running = False
                     return True
 
                 time.sleep(min(0.05, wait_time / 5))
 
-        try:
-            is_running = bool(self.lib.ngSpice_running())
-        except Exception:
-            is_running = self._is_running
+        final_state = self._read_running_state()
 
-        if not is_running:
+        if final_state is False or final_state is None:
             self._is_running = False
+            return True
 
-        return not is_running
+        return False
 
     def halt_simulation(self, timeout: float = 2.0) -> bool:
         result = self.safe_halt_simulation(
