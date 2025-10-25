@@ -898,13 +898,29 @@ class NgspiceFFI(NgspiceBase):
 
         for attempt in range(max_attempts):
             self.command("bg_halt")
+            deadline = time.time() + wait_time
+
+            while time.time() < deadline:
+                try:
+                    is_running = bool(self.lib.ngSpice_running())
+                except Exception:
+                    is_running = self._is_running
+
+                if not is_running:
+                    self._is_running = False
+                    return True
+
+                time.sleep(min(0.05, wait_time / 5))
+
+        try:
+            is_running = bool(self.lib.ngSpice_running())
+        except Exception:
+            is_running = self._is_running
+
+        if not is_running:
             self._is_running = False
 
-            time.sleep(wait_time)
-            if not self._is_running:
-                return True
-
-        return not self._is_running
+        return not is_running
 
     def halt_simulation(self, timeout: float = 2.0) -> bool:
         result = self.safe_halt_simulation(
