@@ -423,11 +423,6 @@ def test_async_alter_resume(backend):
 @pytest.mark.libngspice
 @pytest.mark.parametrize("backend", ["subprocess", "ffi", "mp"])
 def test_async_drain_exact_points(backend):
-    """
-    Tests the async generator's ability to run to completion and drain a
-    large, predictable number of data points. This is a direct regression test
-    against the race condition that caused premature termination on fast backends.
-    """
     h = lib_test.ResdivFlatTb(backend=backend)
     num_points = 2000
     tstep_us = 1
