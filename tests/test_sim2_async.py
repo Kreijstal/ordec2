@@ -460,16 +460,12 @@ def test_async_drain_exact_points(backend):
             last_result = result
 
 
-    print(
-        f"DEBUG test_async_drain_exact_points: backend={backend}, expected_points={num_points}, points_consumed={points_consumed}"
-    )
     if last_result is not None:
         prog = getattr(last_result, "progress", None)
         time_attr = getattr(last_result, "time", None)
         time_val = (
             getattr(time_attr, "value", time_attr) if time_attr is not None else None
         )
-        print(f"DEBUG final_result: progress={prog}, time.value={time_val}")
 
     assert last_result is not None, "Async generator produced no results."
 

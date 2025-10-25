@@ -535,7 +535,6 @@ class NgspiceIsolatedFFI(NgspiceBase):
                     f"Timeout waiting for worker process response ({timeout_seconds}s)"
                 )
 
-            # Process response
             if response["type"] == "result":
                 try:
                     return pickle.loads(response["data"])
@@ -580,7 +579,6 @@ class NgspiceIsolatedFFI(NgspiceBase):
                         if not self.process.is_alive():
                             self._async_simulation_running = False
                             break
-                        # Reset counter and continue waiting
                         timeout_count = 0
                     continue
                 except (EOFError, BrokenPipeError):

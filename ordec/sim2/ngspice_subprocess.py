@@ -417,12 +417,6 @@ class NgspiceSubprocess(NgspiceBase):
 
         self.command("bg_halt")
 
-        # Wait for the async thread to observe the halt flag and enter the
-        # paused state.  The worker thread sets ``_is_running`` to ``False``
-        # once it finishes any in-flight ngspice command and starts waiting on
-        # ``_async_resume_event``.  Until that happens, ngspice may still be
-        # executing a long-running "step" command, so callers must not issue
-        # additional control commands.
         deadline = time.time() + (max_attempts * wait_time)
         poll_interval = min(0.05, wait_time / 5) if wait_time else 0.05
 
@@ -440,7 +434,7 @@ class NgspiceSubprocess(NgspiceBase):
         """Resume simulation by clearing halt flag and setting resume event."""
         with self._async_lock:
             self._async_halt_requested = False
-            self._async_resume_event.set()  # Signal resume
+            self._async_resume_event.set()
             self._is_running = True
 
         if self.debug:
